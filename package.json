@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check shared/reference-data.js && node --check shared/config.js && node --check shared/validation.js && node --check shared/planning.js && node --check shared/money.js && node --check shared/io.js && node --check shared/app.js && node --test"
+    "check": "node --check shared/reference-data.js && node --check shared/config.js && node --check shared/snapshots.js && node --check shared/validation.js && node --check shared/planning.js && node --check shared/money.js && node --check shared/io.js && node --check shared/app.js && node --test"
   }
 }

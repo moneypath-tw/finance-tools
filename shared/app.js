@@ -1044,7 +1044,124 @@ const App = (() => {
     );
   };
 
+  // ================= 帳戶核對模式 =================
+  // 不逐筆記帳：定期填各帳戶餘額，依固定出入帳計畫推算每段期間用掉多少（計算在 snapshots.js）。
+  // 兩種記帳方式並存；ledgerDefaultView 決定開啟帳本時先看哪一種，切換只影響這次瀏覽。
+  let ledgerView = null;
+  let pendingSnapshotDelete = null;
+  let snapshotMessage = '';
+  const localToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const renderSnapshots = () => {
+    const box = $('#ledger-view');
+    if (!box) return;
+    if (!['snapshot', 'entries'].includes(config.ui.ledgerDefaultView)) config.ui.ledgerDefaultView = 'entries';
+    if (!ledgerView) ledgerView = config.ui.ledgerDefaultView;
+    if (!Array.isArray(ledger.snapshots)) ledger.snapshots = [];
+    $('#entries-view').style.display = ledgerView === 'entries' ? '' : 'none';
+    box.innerHTML = '';
+    const viewBtn = (view, text) => el('button', {
+      class: `btn small${ledgerView === view ? ' primary' : ''}`, text, 'aria-pressed': String(ledgerView === view),
+      onclick: () => { ledgerView = view; renderSnapshots(); }
+    });
+    box.append(el('div', { class: 'toolbar' }, [
+      viewBtn('snapshot', '帳戶核對'), viewBtn('entries', '逐筆記帳'),
+      el('div', { class: 'field' }, [el('label', { text: '開啟帳本時先顯示' }), el('select', {
+        onchange: (ev) => { config.ui.ledgerDefaultView = ev.target.value; IO.markDirty(); }
+      }, [['snapshot', '帳戶核對'], ['entries', '逐筆記帳']].map(([value, text]) =>
+        el('option', { value, text, selected: config.ui.ledgerDefaultView === value ? 'selected' : undefined })))])
+    ]));
+    if (ledgerView !== 'snapshot') return;
+
+    const accounts = config.accountProfiles;
+    const sorted = [...ledger.snapshots].sort((a, b) => a.date.localeCompare(b.date));
+    const last = sorted[sorted.length - 1];
+    const nameOf = (id) => accounts.find(a => a.id === id)?.name || id;
+    const inputs = {};
+    const dateInput = el('input', { type: 'date', value: localToday() });
+    const noteInput = el('input', { type: 'text', placeholder: '想到再寫，例如：繳了年度保險' });
+    const status = el('p', { class: 'notice', text: snapshotMessage });
+    snapshotMessage = '';
+    box.append(
+      el('h3', { text: '記下各帳戶目前的數字' }),
+      el('p', { class: 'notice', text: '不用記每一筆花費：照網銀或存摺上的餘額填，沒變的帳戶直接沿用上次的數字。' }),
+      el('div', { class: 'field' }, [el('label', { text: '核對日期' }), dateInput]),
+      el('div', { class: 'table-scroll' }, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, [el('th', { text: '帳戶' }), el('th', { text: '上次' }), el('th', { text: '這次餘額（元）' })])]),
+        el('tbody', {}, accounts.map(a => {
+          const prev = last?.balances?.[a.id];
+          inputs[a.id] = el('input', { type: 'number', step: '1', class: 'mono', value: prev !== undefined ? Money.toYuan(prev) : '' });
+          return el('tr', {}, [el('td', { text: a.name }), el('td', { class: 'mono', text: prev !== undefined ? Money.formatTWD(prev) : '—' }), el('td', {}, [inputs[a.id]])]);
+        }))
+      ])]),
+      el('div', { class: 'field' }, [el('label', { text: '備註（可空白）' }), noteInput]),
+      el('button', { class: 'btn primary', text: '儲存核對', onclick: () => {
+        const balances = {};
+        for (const [id, input] of Object.entries(inputs)) if (input.value !== '') balances[id] = Money.toCents(Number(input.value));
+        if (!dateInput.value || !Object.keys(balances).length) { status.textContent = '請填日期和至少一個帳戶的餘額。'; return; }
+        const same = ledger.snapshots.find(s => s.date === dateInput.value);
+        const next = { id: same?.id || createEntryId(), date: dateInput.value, balances, note: noteInput.value.trim() };
+        const candidate = same ? ledger.snapshots.map(s => s === same ? next : s) : [...ledger.snapshots, next];
+        const errors = Snapshots.validate(candidate);
+        if (errors.length) { status.textContent = errors[0]; return; }
+        ledger.snapshots = candidate;
+        snapshotMessage = same ? `已更新 ${next.date} 的核對。` : `已儲存 ${next.date} 的核對。`;
+        IO.markDirty();
+        renderSnapshots();
+      } }),
+      status
+    );
+
+    const periods = Snapshots.periods(ledger.snapshots, config.recurringCashFlows || []);
+    if (!periods.length) {
+      box.append(el('p', { class: 'notice', text: '再核對一次之後，就能看到這段期間用掉多少。' }));
+    } else {
+      const outflowText = (cents) => cents < 0 ? `多出 ${Money.formatTWD(-cents)}` : Money.formatTWD(cents);
+      const p = periods[0], t = p.total;
+      box.append(
+        el('h3', { text: `最近一期：${p.from} → ${p.to}（${p.days} 天）` }),
+        el('div', { class: 'health-grid' }, [
+          el('div', { class: 'summary-block highlight' }, [el('h3', { text: '推算用掉' }), el('p', { class: 'mono big', text: outflowText(t.outflowCents) }),
+            el('p', { class: 'notice', text: t.outflowPer30Cents === null ? '' : `換算每 30 天 ${outflowText(t.outflowPer30Cents)}` })]),
+          el('div', { class: 'summary-block highlight' }, [el('h3', { text: '其中固定支出（計畫）' }), el('p', { class: 'mono big', text: Money.formatTWD(t.fixedOutCents) }),
+            el('p', { class: 'notice', text: `生活花費約 ${outflowText(t.livingCents)}` })]),
+          el('div', { class: 'summary-block highlight' }, [el('h3', { text: '全部帳戶變動' }), el('p', { class: 'mono big', text: Money.formatTWD(t.changeCents) }),
+            el('p', { class: 'notice', text: `計畫存入 ${Money.formatTWD(t.inCents)}` })])
+        ]),
+        el('p', { class: 'notice', text: '「用掉」是推算值：期初＋計畫存入（固定出入帳）−期末，不是逐筆明細。帳戶之間互轉沒有記錄時，個別帳戶會一邊多花、一邊多存，但全部加總不受影響；利息、退款、計畫外收入會讓數字變成「多出」。' }),
+        el('details', {}, [el('summary', { text: '各帳戶明細（互轉未記錄時僅供參考）' }), el('div', { class: 'table-scroll' }, [el('table', {}, [
+          el('thead', {}, [el('tr', {}, ['帳戶', '期初', '計畫存入', '期末', '推算用掉'].map(h => el('th', { text: h })))]),
+          el('tbody', {}, p.accounts.map(a => el('tr', {}, [el('td', { text: nameOf(a.id) }),
+            ...[a.startCents, a.inCents, a.endCents].map(v => el('td', { class: 'mono', text: Money.formatTWD(v) })),
+            el('td', { class: 'mono', text: outflowText(a.outflowCents) })])))
+        ])])]),
+        el('h3', { text: '各期比較' }),
+        el('div', { class: 'table-scroll' }, [el('table', {}, [
+          el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '每 30 天', '備註'].map(h => el('th', { text: h })))]),
+          el('tbody', {}, periods.map(x => el('tr', {}, [el('td', { text: `${x.from} → ${x.to}` }), el('td', { class: 'mono', text: String(x.days) }),
+            el('td', { class: 'mono', text: outflowText(x.total.outflowCents) }),
+            el('td', { class: 'mono', text: x.total.outflowPer30Cents === null ? '—' : outflowText(x.total.outflowPer30Cents) }),
+            el('td', { text: x.note })])))
+        ])])
+      );
+    }
+    if (sorted.length) {
+      box.append(el('details', {}, [el('summary', { text: `核對紀錄（${sorted.length} 筆）` }),
+        ...[...sorted].reverse().map(s => el('div', { class: 'toolbar' }, [
+          el('span', { text: `${s.date}　合計 ${Money.formatTWD(Object.values(s.balances).reduce((a, b) => a + b, 0))}${s.note ? `　${s.note}` : ''}` }),
+          el('button', { class: 'btn small danger', text: pendingSnapshotDelete === s.id ? '確定刪除' : '刪除', onclick: () => {
+            if (pendingSnapshotDelete !== s.id) { pendingSnapshotDelete = s.id; renderSnapshots(); return; }
+            ledger.snapshots = ledger.snapshots.filter(x => x.id !== s.id);
+            pendingSnapshotDelete = null; IO.markDirty(); renderSnapshots();
+          } })
+        ]))]));
+    }
+  };
+
   const renderLedger = () => {
+    renderSnapshots();
     renderLedgerList();
     renderLedgerSummary();
     renderHealth();

@@ -396,6 +396,9 @@ h2 { letter-spacing: -0.01em; }
 .btn:hover { box-shadow: 0 4px 10px rgba(28, 67, 52, 0.14); }
 .btn.danger:hover { background: #842F3D; }
 .btn:focus-visible { box-shadow: var(--focus-ring), 0 2px 5px rgba(28, 67, 52, 0.08); }
+/* 二選一切換（帳本的帳戶核對／逐筆記帳）：沒選中的一顆改成外框，看得出目前在哪個模式 */
+.btn[aria-pressed="false"] { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.btn[aria-pressed="false"]:hover { background: transparent; }
 
 .summary-block { margin-bottom: 0; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 12px; background: var(--paper-card); }
 .summary-block.highlight { border-color: #CBE3D6; }
