@@ -45,6 +45,8 @@ const Validation = (() => {
       if (!currencies.has(e.currency || 'TWD')) errors.push(error(`${p}.currency`, 'INVALID_CURRENCY', '不支援此幣別'));
       if ((e.currency || 'TWD') !== 'TWD' && (!finite(e.rateToTWD) || e.rateToTWD <= 0)) errors.push(error(`${p}.rateToTWD`, 'INVALID_RATE', '外幣匯率必須大於 0'));
     });
+    // 帳戶核對紀錄（帳戶核對模式，可沒有）；規則只寫在 snapshots.js
+    if (typeof Snapshots !== 'undefined') Snapshots.validate(data.snapshots).forEach((msg) => errors.push(error('snapshots', 'INVALID_SNAPSHOT', msg)));
     return { valid: errors.length === 0, errors, warnings: [] };
   };
 

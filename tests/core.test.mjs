@@ -362,3 +362,56 @@ test("工作區拒絕不同 ID 的重複自動固定支出來源", () => {
   assert.equal(result.valid, false);
   assert.ok(result.errors.some(e => e.code === "DUPLICATE_SOURCE"));
 });
+// ---------- 帳戶核對模式（shared/snapshots.js） ----------
+vm.runInContext(fs.readFileSync(path.join(root, 'shared/snapshots.js'), 'utf8'), ctx, { filename: 'shared/snapshots.js' });
+const Snap = vm.runInContext('Snapshots', ctx);
+
+test('核對：期間內每月入帳日只算 (起, 迄] 的次數，月底較短算當月最後一天', () => {
+  assert.equal(Snap.occurrences(1, '2026-01-01', '2026-02-01'), 1);
+  assert.equal(Snap.occurrences(1, '2026-01-02', '2026-03-15'), 2);
+  assert.equal(Snap.occurrences(31, '2026-02-01', '2026-02-28'), 1);
+  assert.equal(Snap.occurrences(5, '2026-03-06', '2026-03-31'), 0);
+});
+
+test('核對：推算流出 = 期初 + 應存入 − 期末；互轉不記錄時總額仍正確', () => {
+  const flows = [
+    { type: 'income', accountId: 'main', netCents: 5000000, dayOfMonth: 1 },
+    { type: 'saving', fromAccountId: 'main', accountId: 'save', grossCents: 1000000, dayOfMonth: 1 },
+    { type: 'expense', accountId: 'main', grossCents: 800000, dayOfMonth: 5 }
+  ];
+  const snaps = [
+    { id: 'a', date: '2026-01-01', balances: { main: 100000, save: 2000000 } },
+    { id: 'b', date: '2026-02-01', balances: { main: 2900000, save: 3000000 }, note: '月初' }
+  ];
+  const [p] = Snap.periods(snaps, flows);
+  assert.equal(p.days, 31);
+  const main = p.accounts.find(a => a.id === 'main'), save = p.accounts.find(a => a.id === 'save');
+  assert.equal(main.inCents, 4000000);           // 收入 50,000 − 轉出儲蓄 10,000
+  assert.equal(main.outflowCents, 100000 + 4000000 - 2900000);
+  assert.equal(save.outflowCents, 0);
+  assert.equal(p.total.fixedOutCents, 800000);
+  assert.equal(p.total.livingCents, p.total.outflowCents - 800000);
+  // 沒記錄的互轉 5,000：main 看起來多花、save 看起來多存，加總不變
+  const moved = [snaps[0], { ...snaps[1], balances: { main: 2400000, save: 3500000 } }];
+  assert.equal(Snap.periods(moved, flows)[0].total.outflowCents, p.total.outflowCents);
+});
+
+test('核對：最新期間在前，負值代表多出，每 30 天換算', () => {
+  const snaps = [
+    { id: 'a', date: '2026-01-01', balances: { x: 0 } },
+    { id: 'b', date: '2026-01-16', balances: { x: 50000 } },
+    { id: 'c', date: '2026-01-31', balances: { x: 20000 } }
+  ];
+  const ps = Snap.periods(snaps, []);
+  assert.deepEqual([...ps.map(p => p.to)], ['2026-01-31', '2026-01-16']);
+  assert.equal(ps[1].total.outflowCents, -50000);
+  assert.equal(ps[0].total.outflowPer30Cents, 60000);
+});
+
+test('核對：只計入兩次都有填的帳戶；格式檢查擋下重複日期與非整數', () => {
+  const ps = Snap.periods([{ id: 'a', date: '2026-01-01', balances: { x: 1 } }, { id: 'b', date: '2026-01-02', balances: { x: 1, y: 5 } }], []);
+  assert.deepEqual([...ps[0].accounts.map(a => a.id)], ['x']);
+  assert.equal(Snap.validate(undefined).length, 0);
+  assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: { x: 1.5 } }]).length);
+  assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: {} }, { id: 'b', date: '2026-01-01', balances: {} }]).length);
+});
