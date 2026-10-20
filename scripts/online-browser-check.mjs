@@ -133,7 +133,9 @@ try {
   //     and a new hourly / per-case income typed like a person must derive gross = rate × hours / cases × fee
   await go(`${base}/README.md`);
   const legacyFlow = { id: 'legacy-job', name: '正職', type: 'income', kind: 'salary', amountCents: 3300000, monthlyWorkHours: 160, dayOfMonth: 5, accountId: 'probe-0', applyInsurance: true, insuredSalaryFollowsGross: true, active: true };
-  const withFlow = { ...envelope, config: { ...sampleConfig, accountProfiles: sampleConfig.accounts.map((name, i) => ({ id: `probe-${i}`, name, nature: 'checking', initialBalanceCents: 0 })), recurringCashFlows: [legacyFlow] } };
+  // summary cards saved before the 分配狀態 card existed (2026-10-21): the new built-in card must be appended on load
+  const legacyCards = [['income', 'income', '月收入'], ['fixed-expense', 'fixedExpense', '固定支出'], ['recommended-saving', 'recommendedSaving', '應儲蓄'], ['daily-living', 'dailyLiving', '每日生活費'], ['monthly-flex', 'monthlyFlex', '月度餘裕']].map(([id, source, label]) => ({ id, source, label, visible: true, builtIn: true }));
+  const withFlow = { ...envelope, config: { ...sampleConfig, accountProfiles: sampleConfig.accounts.map((name, i) => ({ id: `probe-${i}`, name, nature: 'checking', initialBalanceCents: 0 })), recurringCashFlows: [legacyFlow], dashboard: { summaryCards: legacyCards } } };
   await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify(withFlow))}); true`);
   events.length = 0;
   await go(`${base}/index.html`);
@@ -210,6 +212,16 @@ try {
     pinned: !!document.querySelector('#allocation-dashboard .savings-issues, #allocation-dashboard .savings-strengths')
   }))()`);
   check('allocation status: pay-cycle line, per-row advice, no pinned issue lists', /第 \d+／\d+ 天/.test(statusView.cycle) && statusView.statuses.length >= 3 && statusView.statuses.every(s => /^status-(ok|watch|short):/.test(s) && !s.endsWith(':足額')) && statusView.statuses.some(s => s.includes('每日可花')) && !statusView.pinned, JSON.stringify(statusView));
+  // the 分配狀態 summary card shows the worst row of the allocation table and names the rows that need action
+  const statusCard = await evaluate(`(() => {
+    const card = [...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].find(c => c.querySelector('h3').textContent === '分配狀態');
+    const rows = [...document.querySelectorAll('#allocation-dashboard .allocation-table tbody tr')].map(tr => ({ label: tr.cells[0].firstChild.textContent, level: tr.cells[4].className.split(' ').pop().replace('status-', '') }));
+    return { value: card?.querySelector('.dashboard-mini-value').textContent, note: card?.querySelector('.notice').textContent, cls: card?.className, rows };
+  })()`);
+  const rank = { ok: 0, watch: 1, short: 2 };
+  const worstRow = statusCard.rows.reduce((w, r) => (rank[r.level] > rank[w] ? r.level : w), 'ok');
+  const flaggedRows = statusCard.rows.filter((r) => r.level !== 'ok');
+  check('summary card 分配狀態 added to legacy saved cards and matches the worst table row', statusCard.value === { ok: '正常', watch: '留意', short: '不足' }[worstRow] && flaggedRows.every((r) => statusCard.note.includes(r.label)) && (worstRow !== 'short' || statusCard.cls.includes('negative-card')), JSON.stringify(statusCard));
   // every allocation purpose (incl. 一般儲蓄) gets its own account picker under 必備分配帳戶, and the choice is saved
   const pickers = await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); return d ? [...d.querySelectorAll('label')].map(l => l.firstChild.textContent.trim()) : []; })()`);
   await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '一般儲蓄').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);

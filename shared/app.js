@@ -142,6 +142,8 @@ const App = (() => {
       id: String(card.id || `custom-${index}`), source: String(card.source || 'monthlyFlex'),
       label: String(card.label || '摘要'), visible: card.visible !== false, builtIn: card.builtIn === true
     }));
+    // 改版後新增的內建卡補進舊存檔；內建卡不能刪只能隱藏，所以缺少就代表存檔早於該卡
+    for (const card of DEFAULT_CONFIG.dashboard.summaryCards) if (!config.dashboard.summaryCards.some(c => c.id === card.id)) config.dashboard.summaryCards.push(structuredClone(card));
   };
   const getAccountBalances = (includeProjected = false) => {
     ensureAccountProfiles();
@@ -647,6 +649,17 @@ const App = (() => {
         { value: `allocation:${row.key}:shortfall`, label: `分配｜${row.label}・不足額`, amountCents: row.shortfallCents, note: row.shortfallCents > 0 ? '尚未足額' : '已足額' }
       );
     });
+    // 狀態卡沿用分配表的判斷；整體狀態取最差的一列，說明列出要處理的用途
+    const levelText = { ok: '正常', watch: '留意', short: '不足' };
+    const levelRank = { ok: 0, watch: 1, short: 2 };
+    const statusRows = allocation.rows.map(row => ({ row, status: progress.statuses[row.key] }));
+    const worst = statusRows.reduce((max, s) => Math.max(max, levelRank[s.status.level] ?? 0), 0);
+    const flagged = statusRows.filter(s => (levelRank[s.status.level] ?? 0) > 0);
+    sourceDefinitions.push({
+      value: 'allocationStatus', label: '分配｜整體狀態', format: 'status', level: Object.keys(levelRank)[worst],
+      note: flagged.length ? flagged.map(s => `${s.row.label}${levelText[s.status.level]}`).join('、') : `${statusRows.length} 項分配皆正常`
+    });
+    statusRows.forEach(({ row, status }) => sourceDefinitions.push({ value: `allocation:${row.key}:status`, label: `分配｜${row.label}・狀態`, format: 'status', level: status.level, note: status.text }));
     goals.forEach(goal => sourceDefinitions.push(
       { value: `goal:${goal.key}:target`, label: `目標｜${goal.label}・總額`, amountCents: goal.targetCents, note: goal.targetMonth },
       { value: `goal:${goal.key}:saved`, label: `目標｜${goal.label}・已存`, amountCents: goal.savedCents, note: accountName(goal.accountId) },
@@ -658,15 +671,16 @@ const App = (() => {
       { value: 'loan:mortgage:normalPayment', label: '貸款｜房貸寬限後月繳', amountCents: mortgage.monthlyPaymentCents, note: '本息平均攤還' }
     );
     const sourceById = Object.fromEntries(sourceDefinitions.map(source => [source.value, source]));
-    const formatCardValue = source => source.format === 'percent'
+    const formatCardValue = source => source.format === 'status' ? levelText[source.level] : source.format === 'percent'
       ? (source.valueNumber === null || !Number.isFinite(source.valueNumber) ? '尚無資料' : `${(source.valueNumber * 100).toFixed(1)}%`)
       : Money.formatTWD(source.amountCents);
     const summaryCards = config.dashboard.summaryCards.filter(card => card.visible !== false).map(card => {
       const source = sourceById[card.source];
-      const negative = source && (source.format === 'percent' ? source.valueNumber < 0 : source.amountCents < 0);
-      return el('div', { class: `summary-block dashboard-mini-card${negative ? ' negative-card' : ''}${!source ? ' missing-card' : ''}` }, [
+      const negative = source && (source.format === 'status' ? source.level === 'short' : source.format === 'percent' ? source.valueNumber < 0 : source.amountCents < 0);
+      const watch = source?.format === 'status' && source.level === 'watch';
+      return el('div', { class: `summary-block dashboard-mini-card${negative ? ' negative-card' : ''}${watch ? ' watch-card' : ''}${!source ? ' missing-card' : ''}` }, [
         el('h3', { text: card.label }),
-        el('p', { class: `mono dashboard-mini-value${negative ? ' neg' : ''}`, text: source ? formatCardValue(source) : '來源不存在' }),
+        el('p', { class: `mono dashboard-mini-value${negative ? ' neg' : ''}${watch ? ' watch' : ''}`, text: source ? formatCardValue(source) : '來源不存在' }),
         el('p', { class: 'notice', text: source?.note || '原資料已被刪除，請重新選擇來源' })
       ]);
     });

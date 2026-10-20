@@ -27,7 +27,8 @@ const DEFAULT_CONFIG = {
       { id: 'fixed-expense', source: 'fixedExpense', label: '固定支出', visible: true, builtIn: true },
       { id: 'recommended-saving', source: 'recommendedSaving', label: '應儲蓄', visible: true, builtIn: true },
       { id: 'daily-living', source: 'dailyLiving', label: '每日生活費', visible: true, builtIn: true },
-      { id: 'monthly-flex', source: 'monthlyFlex', label: '月度餘裕', visible: true, builtIn: true }
+      { id: 'monthly-flex', source: 'monthlyFlex', label: '月度餘裕', visible: true, builtIn: true },
+      { id: 'allocation-status', source: 'allocationStatus', label: '分配狀態', visible: true, builtIn: true }
     ]
   },
   // [反推] 原表「目標上限」列
