@@ -314,38 +314,39 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .linked-note { margin: 4px 0 16px; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.86rem; }
 details > summary { cursor: pointer; padding: 5px 0; font-weight: 600; }
 
-/* 收入卡片：大字、大按鈕、單位與說明緊貼欄位，降低 50+ 使用者的閱讀與點擊負擔 */
-.income-card { font-size: 1.05rem; line-height: 1.6; }
-.income-step { margin: 14px 0 0; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 12px; }
-.income-step > legend, .income-step > summary { padding: 0 6px; font-size: 1.1rem; font-weight: 700; color: var(--ink); }
-.basis-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.basis-option { position: relative; display: flex; flex-direction: column; gap: 2px; min-height: 64px; padding: 12px 14px; border: 2px solid var(--rule); border-radius: 12px; background: #fff; cursor: pointer; }
+/* 固定項目卡片：收合時一行看懂（名稱・方式・每月金額・下次繳款），展開才編輯 */
+.flow-card { padding: 0; }
+.flow-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 14px 18px; list-style-position: inside; }
+.flow-name { font-weight: 700; }
+.flow-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.8rem; font-weight: 600; }
+.flow-amount { margin-left: auto; font-weight: 700; }
+.flow-amount.negative { color: var(--negative); }
+.flow-amount.positive { color: var(--accent-strong); }
+.flow-next { flex-basis: 100%; color: var(--ink-soft); font-size: 0.82rem; font-weight: normal; }
+.flow-body { padding: 0 18px 16px; }
+.flow-sub { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 10px; }
+.flow-result, .income-result { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 0.88rem; }
+.flow-result p, .income-result p { margin: 2px 0; }
+.basis-picker { display: inline-flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.basis-option { display: inline-flex; flex-direction: column; padding: 6px 12px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; cursor: pointer; font-size: 0.85rem; }
 .basis-option input { position: absolute; opacity: 0; pointer-events: none; }
-.basis-option strong { font-size: 1.1rem; }
-.basis-option span { color: var(--ink-soft); font-size: 0.95rem; }
-.basis-option:hover { border-color: var(--accent); }
-.basis-option.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
-.basis-option.active strong::before { content: '✓ '; color: var(--accent); }
-.basis-option:focus-within { outline: 3px solid rgba(39, 107, 82, 0.35); outline-offset: 2px; }
-.income-fields { display: flex; flex-wrap: wrap; gap: 4px 16px; }
-.income-card .field { font-size: 1rem; }
-.income-card .field label { color: var(--ink); font-weight: 600; }
-.income-card .field input, .income-card .field select { min-height: 48px; font-size: 1.1rem; }
-.income-field small { margin-top: 4px; max-width: 260px; color: var(--ink-soft); font-size: 0.9rem; }
-.input-unit { display: flex; align-items: center; gap: 8px; }
-.input-unit input { width: 150px; }
-.input-unit span { color: var(--ink-soft); white-space: nowrap; }
-.income-result { margin-top: 12px; padding: 14px 16px; border-radius: 12px; background: linear-gradient(145deg, #F5FAF7, var(--accent-soft)); }
-.income-result p { margin: 2px 0; }
-.income-formula { font-family: var(--mono); font-size: 1.05rem; overflow-wrap: anywhere; }
-.income-net { font-size: 1.15rem; }
-.income-net strong { font-size: 1.5rem; color: var(--accent-strong); }
-.income-sub { color: var(--ink-soft); font-size: 0.95rem; }
-.income-hint { margin: 8px 0 0; color: var(--ink-soft); font-size: 0.95rem; }
-.big-check { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-right: 16px; cursor: pointer; }
-.big-check input { width: 22px; height: 22px; accent-color: var(--accent); }
-.bracket-choice { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 8px; }
-.income-card > .btn.danger { margin-top: 14px; }
+.basis-option span { color: var(--ink-soft); font-size: 0.75rem; }
+.basis-option.active { border-color: var(--accent); background: var(--accent-soft); }
+.basis-option:focus-within { outline: 3px solid rgba(39, 107, 82, 0.25); }
+.income-fields { display: flex; flex-wrap: wrap; }
+.income-field small { margin-top: 2px; color: var(--ink-soft); font-size: 0.75rem; }
+.input-unit { display: flex; align-items: center; gap: 6px; }
+.input-unit input { width: 120px; }
+.input-unit span { color: var(--ink-soft); font-size: 0.8rem; white-space: nowrap; }
+.income-formula { font-family: var(--mono); overflow-wrap: anywhere; }
+.income-net strong { font-size: 1.1rem; color: var(--accent-strong); }
+.income-sub, .income-hint { color: var(--ink-soft); font-size: 0.8rem; }
+.income-hint { margin: 4px 0 0; }
+.big-check { margin-right: 12px; }
+.bracket-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.pay-schedule { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pay-chip { padding: 2px 8px; border: 1px solid var(--rule); border-radius: 7px; background: #fff; font-size: 0.8rem; }
+.fee-row { align-items: center; }
 
 footer.io-bar {
   max-width: 1224px;
@@ -377,8 +378,7 @@ footer.io-bar span { color: var(--ink-soft); font-size: 0.85rem; }
   .dashboard-card { width: 100%; max-width: 100%; overflow: hidden; contain: inline-size; }
   #allocation-dashboard { width: 100%; max-width: 100%; overflow: hidden; }
   .health-grid { grid-template-columns: 1fr; }
-  .basis-picker { grid-template-columns: 1fr; }
-  .income-field, .input-unit input { width: 100%; }
+  .flow-amount { margin-left: 0; }
   .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-card-setting-row { grid-template-columns: 1fr; align-items: stretch; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
   .goal-picker { grid-template-columns: 1fr; }

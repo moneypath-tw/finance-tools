@@ -186,6 +186,21 @@ const Validation = (() => {
           if (f.caseFeeMode === 'fixed' && (!integer(f.caseFeeCents) || f.caseFeeCents < 0)) errors.push(error(`${p}.caseFeeCents`, 'INVALID_MONEY', '每件報酬必須是非負整數分'));
         }
       }
+      if (f.housing !== undefined) {
+        const h = f.housing, hp = `${p}.housing`;
+        const optDate = (v) => v === undefined || v === '' || isValidDate(v);
+        const nonNeg = (v) => v === undefined || (finite(v) && v >= 0);
+        if (!h || typeof h !== 'object') errors.push(error(hp, 'INVALID_HOUSING', '租屋設定必須是物件'));
+        else {
+          if (![1, 2, 3, 6, 12].includes(h.payCycleMonths)) errors.push(error(`${hp}.payCycleMonths`, 'INVALID_CYCLE', '繳租週期只能是 1、2、3、6、12 個月'));
+          if (!integer(h.rentCents) || h.rentCents < 0) errors.push(error(`${hp}.rentCents`, 'INVALID_MONEY', '月租必須是非負整數分'));
+          if (!integer(h.occupants) || h.occupants < 1) errors.push(error(`${hp}.occupants`, 'INVALID_OCCUPANTS', '同住人數至少 1 人'));
+          if (!optDate(h.contractStart) || !optDate(h.contractEnd)) errors.push(error(hp, 'INVALID_DATE', '租約日期格式不正確'));
+          if (!Array.isArray(h.fees) || h.fees.some(x => !x || !integer(x.amountCents) || x.amountCents < 0)) errors.push(error(`${hp}.fees`, 'INVALID_MONEY', '租屋費用金額必須是非負整數分'));
+          const e = h.electricity || {};
+          if (![e.rateCentsPerKwh, e.lastReading, e.currentReading, e.fallbackMonthlyKwh].every(nonNeg) || !optDate(e.lastReadingDate) || !optDate(e.currentReadingDate)) errors.push(error(`${hp}.electricity`, 'INVALID_ELECTRICITY', '電費設定的度數、單價或日期不正確'));
+        }
+      }
       if (typeof f.accountId !== 'string' || !f.accountId) errors.push(error(`${p}.accountId`, 'MISSING_ACCOUNT', '固定項目必須指定帳戶'));
       if (f.type === 'saving' && (typeof f.fromAccountId !== 'string' || !f.fromAccountId || f.fromAccountId === f.accountId)) errors.push(error(p, 'INVALID_SAVING_TRANSFER', '固定儲蓄必須指定兩個不同帳戶'));
     });

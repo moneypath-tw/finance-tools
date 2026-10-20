@@ -139,10 +139,10 @@ try {
   await go(`${base}/index.html`);
   await evaluate(`document.querySelector('[data-tab=ledger]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); true`);
   const savedFlows = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.recurringCashFlows`);
-  const legacyText = await evaluate(`document.querySelector('#personal-settings .income-card .income-formula')?.textContent || ''`);
+  const legacyText = await evaluate(`document.querySelector('#personal-settings .flow-card .income-formula')?.textContent || ''`);
   check('legacy monthly income still shown as monthly salary', legacyText.includes('33,000') && legacyText.includes('160'), legacyText);
-  const incomeInput = (card, label) => `[...document.querySelectorAll('#personal-settings .income-card')][${card}]?.querySelector('.income-field:has(input) input[data-probe=${JSON.stringify(label)}]')`;
-  const tagInputs = `document.querySelectorAll('#personal-settings .income-field').forEach(f => { const i = f.querySelector('input'); if (i) i.dataset.probe = f.querySelector('label').textContent.trim(); })`;
+  const incomeInput = (card, label) => `[...document.querySelectorAll('#personal-settings .flow-card')][${card}]?.querySelector('.field input[data-probe=${JSON.stringify(label)}]')`;
+  const tagInputs = `document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); document.querySelectorAll('#personal-settings .field').forEach(f => { const i = f.querySelector('input'); if (i) i.dataset.probe = f.querySelector('label').textContent.trim(); })`;
   const typeIncome = async (card, label, text) => {
     const ok = await evaluate(`(() => { ${tagInputs}; const x = ${incomeInput(card, label)}; if (!x) return false; x.closest('details')?.setAttribute('open', ''); x.focus(); x.select(); return document.activeElement === x; })()`);
     if (!ok) return false;
@@ -165,6 +165,14 @@ try {
   await go(`${base}/index.html`);
   const shownAfterReload = await evaluate(`[...document.querySelectorAll('#personal-settings .income-formula')].map(p => p.textContent)`);
   check('income formulas survive reload', shownAfterReload.length === 3 && shownAfterReload[1].includes('15,680') && shownAfterReload[2].includes('12,000'), shownAfterReload.join(' | '));
+  // rent paid every 6 months: lump sum on the contract date, monthly average shown in the one-line summary
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent.startsWith('＋租屋')).click(); true`);
+  const typedRent = await typeIncome(3, '月租（元）', '8000');
+  await evaluate(`(() => { const card = [...document.querySelectorAll('#personal-settings .flow-card')][3]; const s = [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '繳租方式').querySelector('select'); s.value = '6'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await evaluate(`(() => { const card = [...document.querySelectorAll('#personal-settings .flow-card')][3]; const d = [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '簽約起租日').querySelector('input'); d.value = '2026-01-15'; d.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  flows = await savedFlows();
+  const rentSummary = await evaluate(`[...document.querySelectorAll('#personal-settings .flow-card')][3]?.querySelector('summary').textContent || ''`);
+  check('semiannual rent: monthly 8,000, next payment 48,000 on the 15th', typedRent && flows[3]?.amountCents === 800000 && flows[3]?.dayOfMonth === 15 && rentSummary.includes('每半年繳') && rentSummary.includes('48,000'), rentSummary);
   const incomeErrs = events.filter((e) => e.method === 'Runtime.exceptionThrown').map((e) => e.params.exceptionDetails.exception?.description?.split('\n')[0]);
   check('no page exceptions or dialogs while editing income cards', incomeErrs.length === 0 && dialogs.length === 0, [...incomeErrs, ...dialogs].join(' | '));
   if (process.env.SHOT_DIR) {

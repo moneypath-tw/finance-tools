@@ -133,9 +133,10 @@ const Money = (() => {
         const payroll = { ...fees, gross: amount, hourlyRateCents: income.hourlyRateCents, insuredSalaryCents: insured };
         return { ...f, grossCents: amount, netCents: payroll.net, payroll, income };
       }
-      const amount = Math.abs(Number(f.amountCents) || 0);
+      const housingCalc = f.type === 'expense' && f.housing ? calcHousing(f.housing) : null;
+      const amount = housingCalc ? housingCalc.monthlyCents : Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'saving') return { ...f, grossCents: amount, netCents: 0, payroll: null };
-      return { ...f, grossCents: amount, netCents: -amount, payroll: null };
+      return { ...f, grossCents: amount, netCents: -amount, payroll: null, housingCalc };
     });
     const incomeCents = items.filter(f => f.type === 'income').reduce((s, f) => s + f.netCents, 0);
     const essentialExpenseCents = items.filter(f => f.type === 'expense' && f.essential !== false).reduce((s, f) => s + f.grossCents, 0);
@@ -158,6 +159,89 @@ const Money = (() => {
     };
   };
 
+
+  // 租屋：房租可每月／每兩月／每季／半年／一年繳，額外費用可按人數計，電費依電表度數推估
+  const RENT_CYCLES = [1, 2, 3, 6, 12];
+  const parseYmd = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? { y: +m[1], m: +m[2], d: +m[3] } : null; };
+  const ymIndex = (y, m) => y * 12 + (m - 1);
+  const dateInMonth = (index, day) => {
+    const y = Math.floor(index / 12), m = index % 12 + 1;
+    const d = Math.min(day, new Date(y, m, 0).getDate());
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  };
+  const daysBetween = (a, b) => Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
+  const calcHousing = (housing) => {
+    const h = housing || {};
+    const cycle = RENT_CYCLES.includes(Number(h.payCycleMonths)) ? Number(h.payCycleMonths) : 1;
+    const occupants = Number(h.occupants) >= 1 ? Math.trunc(Number(h.occupants)) : 1;
+    const rentCents = Math.max(0, Math.round(Number(h.rentCents) || 0));
+    const fees = (Array.isArray(h.fees) ? h.fees : []).map((f) => {
+      const monthlyCents = Math.max(0, Math.round(Number(f.amountCents) || 0)) * (f.perPerson ? occupants : 1);
+      return { ...f, monthlyCents };
+    });
+    const feesWithRentCents = fees.filter(f => !f.separate).reduce((s, f) => s + f.monthlyCents, 0);
+    const feesSeparateCents = fees.filter(f => f.separate).reduce((s, f) => s + f.monthlyCents, 0);
+    const e = h.electricity || {};
+    const rate = Math.max(0, Number(e.rateCentsPerKwh) || 0);
+    const settleMonths = Number(e.settleMonths) === 2 ? 2 : 1;
+    const last = parseYmd(e.lastReadingDate), cur = parseYmd(e.currentReadingDate);
+    const usedKwh = Number(e.currentReading) - Number(e.lastReading);
+    const days = last && cur ? daysBetween(last, cur) : 0;
+    const measured = days > 0 && usedKwh >= 0 && Number.isFinite(usedKwh);
+    const dailyKwh = measured ? usedKwh / days : (Math.max(0, Number(e.fallbackMonthlyKwh) || 0) * 12) / 365;
+    const monthlyKwh = dailyKwh * 365 / 12;
+    const nextSettleDate = last ? dateInMonth(ymIndex(last.y, last.m) + settleMonths, last.d) : null;
+    const cycleDays = last ? daysBetween(last, parseYmd(nextSettleDate)) : Math.round(settleMonths * 365 / 12);
+    const projectedKwh = dailyKwh * cycleDays;
+    const electricity = {
+      enabled: !!e.enabled, measured, usedKwh: measured ? usedKwh : 0, days, dailyKwh, monthlyKwh,
+      usedSoFarCents: measured ? Math.round(usedKwh * rate) : 0,
+      nextSettleDate, projectedKwh, projectedBillCents: Math.round(projectedKwh * rate),
+      monthlyCents: e.enabled ? Math.round(monthlyKwh * rate) : 0, settleMonths
+    };
+    const monthlyCents = rentCents + feesWithRentCents + feesSeparateCents + electricity.monthlyCents;
+    return { cycle, occupants, rentCents, fees, feesWithRentCents, feesSeparateCents, electricity, monthlyCents, perPaymentCents: (rentCents + feesWithRentCents) * cycle };
+  };
+  // 某月實際要付的錢（現金流）：繳租月付房租＋隨租費用×週期；另繳費用每月；電費在結算月
+  const housingDueInMonth = (housing, ym) => {
+    const start = parseYmd(housing?.contractStart);
+    const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    if (!start || !m) return { totalCents: 0, parts: [] };
+    const r = calcHousing(housing);
+    const idx = ymIndex(+m[1], +m[2]);
+    const diff = idx - ymIndex(start.y, start.m);
+    if (diff < 0) return { totalCents: 0, parts: [] };
+    const end = parseYmd(housing.contractEnd);
+    const beforeEnd = !end || dateInMonth(idx, start.d) < housing.contractEnd;
+    const parts = [];
+    if (beforeEnd && diff % r.cycle === 0 && r.perPaymentCents > 0) parts.push({ label: r.cycle === 1 ? '房租' : `房租（${r.cycle} 個月）`, cents: r.perPaymentCents });
+    if (beforeEnd && r.feesSeparateCents > 0) parts.push({ label: '另繳費用', cents: r.feesSeparateCents });
+    const last = parseYmd(housing.electricity?.lastReadingDate);
+    if (r.electricity.enabled && last && beforeEnd) {
+      const eDiff = idx - ymIndex(last.y, last.m);
+      if (eDiff !== 0 && eDiff % r.electricity.settleMonths === 0) {
+        const cents = eDiff === r.electricity.settleMonths && r.electricity.measured ? r.electricity.projectedBillCents : r.electricity.monthlyCents * r.electricity.settleMonths;
+        if (cents > 0) parts.push({ label: '電費（預估）', cents });
+      }
+    }
+    return { totalCents: parts.reduce((s, p) => s + p.cents, 0), parts };
+  };
+  // 從 fromDate（YYYY-MM-DD）起列出接下來 count 次繳房租的日期與金額
+  const housingPaymentSchedule = (housing, fromDate, count = 6) => {
+    const start = parseYmd(housing?.contractStart);
+    const from = parseYmd(fromDate);
+    if (!start || !from) return [];
+    const r = calcHousing(housing);
+    const out = [];
+    let k = Math.max(0, Math.ceil((ymIndex(from.y, from.m) - ymIndex(start.y, start.m)) / r.cycle) - 1);
+    while (out.length < count && k < 1200) {
+      const date = dateInMonth(ymIndex(start.y, start.m) + k * r.cycle, start.d);
+      k += 1;
+      if (housing.contractEnd && date >= housing.contractEnd) break;
+      if (date >= fromDate) out.push({ date, cents: r.perPaymentCents });
+    }
+    return out;
+  };
 
   // 一次性情境（買房／買地自建／旅費／喪葬）
   const calcOneTimeScenario = (scenario, config) => {
@@ -495,6 +579,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, calcHousing, housingDueInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
