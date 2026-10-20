@@ -141,6 +141,9 @@ const App = (() => {
   };
   const scenarioSummary = (scenario) => {
     try {
+      // 不合法的情境（可保存、待修正）不能把錯誤金額帶進首頁分配與健檢目標
+      const issues = Validation.validateScenario(scenario).errors;
+      if (issues.length) throw new RangeError(issues.map(e => e.message).join('；'));
       const result = Money.calcScenario(scenario, config);
       return Money.toScenarioSummary(scenario, result);
     } catch (err) {
@@ -429,7 +432,7 @@ const App = (() => {
     el('label', { text: label }),
     el('input', {
       type: 'number', min: '0', step: '1', value: Money.toYuan(config.quickPlan[key]),
-      onchange: (ev) => { config.quickPlan[key] = Money.toCents(ev.target.value); IO.markDirty(); renderHealth(); }
+      onchange: (ev) => { config.quickPlan[key] = Math.max(0, Money.toCents(ev.target.value)); IO.markDirty(); renderHealth(); }
     })
   ]);
 
@@ -707,7 +710,7 @@ const App = (() => {
       el('option', { value: 'transfer', text: '帳戶轉帳' }),
       el('option', { value: 'wishlist', text: '願望清單' })
     ]);
-    const dateInput = el('input', { type: 'date', id: 'f-date', value: new Date().toISOString().slice(0, 10) });
+    const dateInput = el('input', { type: 'date', id: 'f-date', value: localToday() });
     const catSel = el('select', { id: 'f-category' },
       config.categories.map((c) => el('option', { value: c, text: c })));
     const accSel = el('select', { id: 'f-account' },
@@ -985,8 +988,8 @@ const App = (() => {
           isIncome ? el('div', { class: 'field' }, [el('label', { text: '收入性質' }), el('select', { onchange: (ev) => { flow.kind = ev.target.value; saveFlow(); } }, Object.entries(recurringKinds).filter(([k]) => k !== 'fixed_expense').map(([value, text]) => el('option', { value, text, selected: flow.kind === value ? 'selected' : undefined })))]) : null,
           numField(isIncome ? '月總工資／收入（元）' : (isSaving ? '每月儲蓄（元）' : '每月金額（元）'), Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
           numField(isIncome ? '發薪日' : (isSaving ? '轉存日' : '扣款日'), flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
-          isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined })))]) : null,
-          el('div', { class: 'field' }, [el('label', { text: isSaving ? '儲蓄帳戶' : '入／扣款帳戶' }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.accountId === a.id ? 'selected' : undefined })))])
+          isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
+          el('div', { class: 'field' }, [el('label', { text: isSaving ? '儲蓄帳戶' : '入／扣款帳戶' }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.accountId === a.id ? 'selected' : undefined, disabled: isSaving && a.id === flow.fromAccountId ? 'disabled' : undefined })))])
         ]),
         isIncome ? el('div', { class: 'toolbar' }, [
           numField('每月工時', flow.monthlyWorkHours || 160, (v) => { if (v > 0) { flow.monthlyWorkHours = v; saveFlow(); } }),
