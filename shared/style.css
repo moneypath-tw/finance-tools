@@ -319,6 +319,7 @@ details > summary { cursor: pointer; padding: 5px 0; font-weight: 600; }
 .flow-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 14px 18px; list-style-position: inside; }
 .flow-name { font-weight: 700; }
 .flow-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.8rem; font-weight: 600; }
+.flow-tag.warn { background: #FBE9E7; color: var(--over-limit); }
 .flow-amount { margin-left: auto; font-weight: 700; }
 .flow-amount.negative { color: var(--negative); }
 .flow-amount.positive { color: var(--accent-strong); }

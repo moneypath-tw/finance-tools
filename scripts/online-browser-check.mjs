@@ -180,6 +180,15 @@ try {
   const rentFlow = stored.config.recurringCashFlows[3];
   const subsidyEntry = stored.ledger.entries.find(x => x.id.startsWith(`recurring-${rentFlow?.id}-subsidy-`));
   check('rent subsidy 3,000 lowers monthly average and posts income', typedSubsidy && rentFlow?.amountCents === 500000 && subsidyEntry?.amountCents === 300000 && subsidyEntry?.type === 'income', JSON.stringify(subsidyEntry || rentFlow?.housing?.subsidy));
+  // custom account nature + turning off 連動固定收支 drops every fixed item on that account from the totals
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋自訂性質').click(); true`);
+  const typedNature = await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const i = [...document.querySelectorAll('#personal-settings .field')].find(f => f.querySelector('label').textContent === '性質名稱')?.querySelector('input'); if (!i) return false; i.value = '旅遊基金'; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  const natureOffered = await evaluate(`[...document.querySelectorAll('#personal-settings .account-row select option')].some(o => o.textContent === '旅遊基金')`);
+  check('custom account nature appears in the nature menu', typedNature && natureOffered);
+  await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const box = [...document.querySelectorAll('#personal-settings .account-row label')].find(l => l.textContent.includes('連動固定收支')).querySelector('input'); box.click(); return true; })()`);
+  await sleep(150);
+  const unlinked = await evaluate(`({ warn: document.querySelectorAll('#personal-settings .flow-tag.warn').length, income: [...document.querySelectorAll('#personal-settings .summary-block')].find(b => b.textContent.includes('每月固定收入'))?.textContent || '' })`);
+  check('unlinked account: its fixed items marked and excluded from totals', unlinked.warn === 4 && unlinked.income.includes('0元') && !unlinked.income.includes('31,'), JSON.stringify(unlinked));
   const incomeErrs = events.filter((e) => e.method === 'Runtime.exceptionThrown').map((e) => e.params.exceptionDetails.exception?.description?.split('\n')[0]);
   check('no page exceptions or dialogs while editing income cards', incomeErrs.length === 0 && dialogs.length === 0, [...incomeErrs, ...dialogs].join(' | '));
   if (process.env.SHOT_DIR) {
