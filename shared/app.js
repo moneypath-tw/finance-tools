@@ -9,6 +9,7 @@ const App = (() => {
   let compareMode = false;
   let summaryCardSettingsOpen = false;
   let expandedDetailKeys = new Set();
+  let lastRestoreErrors = [];
   const workspaceSnapshot = () => ({ config, ledger, scenarios, wageReverseScenario });
   const restoreWorkspace = (saved) => {
     if (!saved || typeof saved !== "object") return false;
@@ -25,10 +26,14 @@ const App = (() => {
       insuranceRates: { ...structuredClone(DEFAULT_CONFIG.insuranceRates), ...(sourceConfig.insuranceRates || {}) }
     };
     if (!Object.prototype.hasOwnProperty.call(sourceConfig.personalBaseline || {}, "birthYear")) nextConfig.personalBaseline.birthYear = new Date().getFullYear() - Math.max(0, Math.min(120, Math.trunc(nextConfig.personalBaseline.currentAge || 0)));
-    if (!saved.ledger || !Validation.validateLedger(saved.ledger).valid) return false;
+    lastRestoreErrors = saved.ledger ? Validation.validateLedger(saved.ledger).errors : [{ path: 'ledger', message: '缺少帳本' }];
+    if (lastRestoreErrors.length) return false;
     const nextLedger = saved.ledger;
     const nextScenarios = (Array.isArray(saved.scenarios) ? saved.scenarios : structuredClone(DEFAULT_SCENARIOS)).map(Validation.normalizeScenario);
-    const checkedWorkspace = Validation.validateWorkspace({ config: nextConfig, ledger: nextLedger, scenarios: nextScenarios });
+    Validation.repairWorkspace({ config: nextConfig, scenarios: nextScenarios }, DEFAULT_CONFIG);
+    // 情境內容錯誤不擋載入：編輯中本來就允許暫時不合法，畫面會顯示錯誤讓使用者修正
+    const checkedWorkspace = Validation.validateWorkspace({ config: nextConfig, ledger: nextLedger, scenarios: nextScenarios }, { scenarioContentChecks: false });
+    lastRestoreErrors = checkedWorkspace.errors;
     if (!checkedWorkspace.valid) return false;
     config = nextConfig;
     ledger = nextLedger;
@@ -479,7 +484,7 @@ const App = (() => {
         return el('div', { class: 'goal-picker' }, [
           el('label', {}, [el('input', { type: 'checkbox', checked: selected ? 'checked' : undefined, onchange: e => { config.dashboard.scenarioSelections[s.scenarioId] = e.target.checked; IO.markDirty(); renderAllocationDashboard(); } }), document.createTextNode(` ${s.label}`)]),
           selected ? accountSelect(accountId, e => { config.dashboard.scenarioAccountMap[s.scenarioId] = e.target.value; IO.markDirty(); renderAllocationDashboard(); }) : null,
-          selected ? el('input', { type: 'month', value: targetMonth, onchange: e => { config.dashboard.scenarioTargetMonths[s.scenarioId] = e.target.value; IO.markDirty(); renderAllocationDashboard(); } }) : null
+          selected ? el('input', { type: 'month', value: targetMonth, onchange: e => { if (Validation.isValidMonth(e.target.value)) config.dashboard.scenarioTargetMonths[s.scenarioId] = e.target.value; else delete config.dashboard.scenarioTargetMonths[s.scenarioId]; IO.markDirty(); renderAllocationDashboard(); } }) : null
         ]);
       })
     ]);
@@ -651,7 +656,7 @@ const App = (() => {
         el('option', { value: 'age', text: '希望完成年齡', selected: q.goalDeadlineMode === 'age' ? 'selected' : undefined })
       ])]),
       q.goalDeadlineMode === 'month'
-        ? el('div', { class: 'field' }, [el('label', { text: '希望完成月份' }), el('input', { type: 'month', value: q.goalTargetMonth, onchange: (e) => { q.goalTargetMonth = e.target.value; IO.markDirty(); renderHealth(); } })])
+        ? el('div', { class: 'field' }, [el('label', { text: '希望完成月份' }), el('input', { type: 'month', value: q.goalTargetMonth, onchange: (e) => { if (Validation.isValidMonth(e.target.value)) q.goalTargetMonth = e.target.value; IO.markDirty(); renderHealth(); } })])
         : el('div', { class: 'field' }, [el('label', { text: '希望完成年齡' }), el('input', { type: 'number', min: String(Math.ceil(q.currentAge + 1)), max: '120', step: '1', value: q.goalTargetAge, onchange: e => { q.goalTargetAge = Math.min(120, Math.max(Math.ceil(q.currentAge + 1), Number(e.target.value))); IO.markDirty(); renderHealth(); } }), el('small', { class: 'notice', text: `依目前 ${q.currentAge} 歲推算，約為 ${ageTargetMonth.replace('-', ' 年 ')} 月` })]),
       el('details', {}, [
         el('summary', { text: '進階假設（可選）' }),
@@ -1290,7 +1295,7 @@ const App = (() => {
     const itemRows = scenario.items.map((item, idx) => el('tr', {}, [
       el('td', {}, [el('input', {
         type: 'text', value: item.label, class: 'mono',
-        onchange: (ev) => { item.label = ev.target.value; IO.markDirty(); }
+        onchange: (ev) => { item.label = ev.target.value.trim() || item.label; ev.target.value = item.label; IO.markDirty(); }
       })]),
       el('td', {}, [el('select', { onchange: (ev) => { item.kind = ev.target.value; IO.markDirty(); renderEstimator(); } }, [
         el('option', { value: 'cost', text: '成本', selected: (item.kind || 'cost') === 'cost' ? 'selected' : undefined }),
@@ -1570,6 +1575,9 @@ const App = (() => {
     else if (type === 'retirement_fund') renderRetirementFundScenario(scenario);
     else if (type === 'fire') renderFireScenario(scenario);
     else renderOneTimeScenario(scenario);
+    // 情境允許暫時不合法地保存（見 restoreWorkspace），所以要在這裡明確告知哪些欄位還要修正
+    const issues = Validation.validateScenario(scenario).errors;
+    if (issues.length) $('#estimator-body').prepend(el('p', { class: 'neg', text: `此情境有欄位需要修正，試算結果可能不正確：${issues.map(e => e.message).join('；')}` }));
     renderAllocationDashboard();
     if (config.quickPlan.goalScenarioId === scenario.scenarioId) renderHealth();
   };
@@ -1772,7 +1780,8 @@ const App = (() => {
         else if (data.scenarios) {
           const checked = Validation.validateScenarios(data);
           if (!checked.valid) throw new Error('情境驗證失敗：\n' + checked.errors.map(e => `${e.path} ${e.message}`).join('\n'));
-          scenarios = data.scenarios.map(Validation.normalizeScenario); currentScenarioId = scenarios[0]?.scenarioId; renderScenarioSelector(); renderEstimator(); IO.markDirty(); alert('成本試算情境已匯入並保存至瀏覽器本機資料');
+          scenarios = data.scenarios.map(Validation.normalizeScenario); currentScenarioId = scenarios[0]?.scenarioId;
+          Validation.repairWorkspace({ config, scenarios }, DEFAULT_CONFIG); renderScenarioSelector(); renderEstimator(); IO.markDirty(); alert('成本試算情境已匯入並保存至瀏覽器本機資料');
         }
         else if (data.conversionChain) {
           const checked = Validation.validateWage(data);
@@ -1799,7 +1808,12 @@ const App = (() => {
   const init = () => {
     IO.configurePersistence(workspaceSnapshot, updateStorageStatus);
     const saved = IO.loadWorkspace();
-    if (saved) restoreWorkspace(saved);
+    if (saved && !restoreWorkspace(saved)) {
+      // 不能靜默改用預設值：下一次自動保存就會覆寫使用者原本的資料
+      try { localStorage.setItem('finance-tools.workspace.rejected', JSON.stringify(saved)); } catch {}
+      const detail = lastRestoreErrors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('\n');
+      if (confirm(`本機工作區資料驗證失敗，暫以預設值開啟：\n${detail}\n\n原始資料已另存於瀏覽器（finance-tools.workspace.rejected）。是否立即下載原始資料備份？`)) IO.exportJson(saved, 'finance_tools_workspace_rejected');
+    }
     syncCurrentAgeFromBirthYear();
     IO.initializeFileBinding().then(() => renderPersonalSettings());
     IO.requestPersistentStorage();

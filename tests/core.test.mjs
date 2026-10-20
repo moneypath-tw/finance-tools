@@ -415,3 +415,27 @@ test('核對：只計入兩次都有填的帳戶；格式檢查擋下重複日�
   assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: { x: 1.5 } }]).length);
   assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: {} }, { id: 'b', date: '2026-01-01', balances: {} }]).length);
 });
+
+test('自訂情境編輯到一半仍可在重新載入時保留，不會讓整份工作區退回預設模板', () => {
+  const V = api.Validation;
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  const custom = { schemaVersion: 2, scenarioId: 'custom-1', label: '留學基金', custom: true, calcType: 'items', currentSavedCents: 0, loanAmountCents: 0, items: [{ label: '  ', kind: 'cost', amountCents: 100 }] };
+  const retire = structuredClone(api.DEFAULT_SCENARIOS.find(s => s.calcType === 'retirement_fund'));
+  Object.assign(retire, { scenarioId: 'custom-2', custom: true, retireAge: 1 });
+  config.dashboard.scenarioSelections = { 'custom-1': true, 'deleted-x': true };
+  config.dashboard.scenarioTargetMonths = { 'custom-1': '', 'deleted-x': '2030-01' };
+  config.quickPlan.goalTargetMonth = '';
+  const scenarios = [...structuredClone(api.DEFAULT_SCENARIOS), custom, retire].map(V.normalizeScenario);
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios };
+  assert.equal(V.validateWorkspace(workspace).valid, false);
+  V.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  assert.equal(V.validateWorkspace(workspace, { scenarioContentChecks: false }).valid, true);
+  assert.equal(scenarios.find(s => s.scenarioId === 'custom-1').items[0].label, '未命名項目');
+  assert.equal(scenarios.find(s => s.scenarioId === 'custom-2').retireAge, 1);
+  assert.deepEqual(Object.keys(config.dashboard.scenarioSelections), ['custom-1']);
+  assert.deepEqual(Object.keys(config.dashboard.scenarioTargetMonths), []);
+  assert.equal(config.quickPlan.goalTargetMonth, api.DEFAULT_CONFIG.quickPlan.goalTargetMonth);
+  // 結構錯誤仍要擋：ID 重複的情境不可載入
+  scenarios.push({ ...custom });
+  assert.equal(V.validateWorkspace(workspace, { scenarioContentChecks: false }).valid, false);
+});
