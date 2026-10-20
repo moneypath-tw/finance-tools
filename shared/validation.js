@@ -224,7 +224,7 @@ const Validation = (() => {
     profiles.forEach((account, index) => { if (!account || typeof account.id !== "string" || !account.id || accountIds.has(account.id)) errors.push(error(`config.accountProfiles[${index}].id`, "INVALID_ACCOUNT", "帳戶 ID 不可空白或重複")); else { accountIds.add(account.id); accountKeys.add(account.id); if (typeof account.name === "string" && account.name) accountKeys.add(account.name); } });
     data.ledger.entries.forEach((entry, index) => { ["account", "fromAccount", "toAccount"].forEach((key) => { if (entry[key] !== undefined && entry[key] !== null && !accountKeys.has(entry[key])) errors.push(error(`ledger.entries[${index}].${key}`, "MISSING_ACCOUNT", "帳本指定的帳戶不存在")); }); });
     const dashboard = data.config.dashboard || {};
-    ["livingAccountId", "fixedExpenseAccountId", "emergencyAccountId"].forEach((key) => { if (dashboard[key] !== undefined && dashboard[key] !== null && !accountIds.has(dashboard[key])) errors.push(error(`config.dashboard.${key}`, "MISSING_ACCOUNT", "首頁指定帳戶不存在")); });
+    ALLOCATION_PURPOSES.map(p => p.field).forEach((key) => { if (dashboard[key] !== undefined && dashboard[key] !== null && !accountIds.has(dashboard[key])) errors.push(error(`config.dashboard.${key}`, "MISSING_ACCOUNT", "首頁指定帳戶不存在")); });
     const flows = data.config.recurringCashFlows || [];
     errors.push(...validateRecurringFlows(flows).errors);
     flows.forEach((flow, index) => { ["accountId", "fromAccountId"].forEach((key) => { if (flow[key] !== undefined && !accountKeys.has(flow[key])) errors.push(error(`config.recurringCashFlows[${index}].${key}`, "MISSING_ACCOUNT", "固定項目指定的帳戶不存在")); }); });
@@ -267,7 +267,7 @@ const Validation = (() => {
     }
     // 首頁指定帳戶被刪除時改回第一個帳戶（與 app.js 的 ensureDashboard 相同規則）
     const accountIds = (data.config.accountProfiles || []).map(a => a?.id).filter(Boolean);
-    for (const key of ['livingAccountId', 'fixedExpenseAccountId', 'emergencyAccountId']) {
+    for (const key of ALLOCATION_PURPOSES.map(p => p.field)) {
       if (dashboard[key] === undefined || dashboard[key] === null || accountIds.includes(dashboard[key])) continue;
       dashboard[key] = accountIds[0] ?? null; repaired++;
     }

@@ -130,8 +130,12 @@ const App = (() => {
     const first = config.accountProfiles[0]?.id || null;
     config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {} });
     for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
-    for (const key of ['livingAccountId', 'fixedExpenseAccountId', 'emergencyAccountId']) {
-      if (!config.accountProfiles.some(a => a.id === config.dashboard[key])) config.dashboard[key] = first;
+    const valid = (id) => config.accountProfiles.some(a => a.id === id);
+    for (const { key, field, fallback } of ALLOCATION_PURPOSES) {
+      if (valid(config.dashboard[field])) continue;
+      // 一般儲蓄沿用改版前的預設：有固定儲蓄就用它轉入的帳戶，否則跟緊急預備金同帳戶
+      const fromFlow = key === 'saving' ? (config.recurringCashFlows || []).find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
+      config.dashboard[field] = [fromFlow, fallback && config.dashboard[fallback]].find(valid) || first;
     }
     if (!Array.isArray(config.dashboard.summaryCards)) config.dashboard.summaryCards = structuredClone(DEFAULT_CONFIG.dashboard.summaryCards);
     config.dashboard.summaryCards = config.dashboard.summaryCards.filter(card => card && typeof card === 'object').map((card, index) => ({
@@ -253,7 +257,54 @@ const App = (() => {
     const summary = scenarioSummary(s);
     return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: summary.status === 'invalid' ? 0 : summary.targetCents, invalid: summary.status === 'invalid', error: summary.error || null };
   });
-  // 每月計畫的唯一算法：摘要卡、建議分配表、本月問題點都讀這裡的結果
+  // 分配表各列的「狀態」：發薪日取金額最大的固定收入；只看已入帳（非預測）的帳目與實際餘額
+  const allocationStatuses = (health, now = new Date()) => {
+    const recurring = recurringSummary();
+    const mainIncome = recurring.items.filter(f => f.type === 'income').sort((a, b) => (b.netCents || 0) - (a.netCents || 0))[0];
+    const cycle = Planning.payCycle(now, mainIncome?.dayOfMonth || 1);
+    const balances = getAccountBalances();
+    const twd = (e) => { try { return Math.abs(Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD)); } catch { return 0; } };
+    const inCycle = (e) => e.status !== 'projected' && e.date >= cycle.start && e.date <= cycle.today;
+    // 本期（發薪日到下次發薪前）每個固定支出的應扣金額，算法與帳本預測帳目相同
+    const dueIds = new Set();
+    let dueTotalCents = 0;
+    const months = [...new Set([cycle.start.slice(0, 7), cycle.next.slice(0, 7)])];
+    for (const flow of recurring.items.filter(f => f.type === 'expense')) {
+      for (const ym of months) {
+        const [y, m] = ym.split('-').map(Number);
+        const date = `${ym}-${String(Math.min(Math.max(1, Math.trunc(flow.dayOfMonth || 1)), new Date(y, m, 0).getDate())).padStart(2, '0')}`;
+        if (date < cycle.start || date >= cycle.next) continue;
+        const cents = flow.housingCalc ? Money.housingDueInMonth(flow.housing, ym).totalCents : (Money.flowPayCycle(flow) > 1 ? Money.flowDueInMonth(flow, ym) : flow.grossCents);
+        if (!(cents > 0)) continue;
+        dueTotalCents += cents;
+        dueIds.add(`recurring-${flow.id}-${ym}`);
+      }
+    }
+    const paidCents = ledger.entries.filter(e => dueIds.has(e.id) && e.status === 'realized').reduce((s, e) => s + twd(e), 0);
+    const spentCents = ledger.entries.filter(e => e.type === 'expense' && !e.recurringFlowId && inCycle(e)).reduce((s, e) => s + twd(e), 0);
+    const incomeAccounts = new Set(recurring.items.filter(f => f.type === 'income').map(f => f.accountId));
+    // 同一帳戶搭配多個用途時，本期轉入的錢依分配順序先滿足前面的用途
+    const movedPool = {};
+    const movedInto = (accountId) => {
+      if (!(accountId in movedPool)) movedPool[accountId] = ledger.entries.filter(e => e.type === 'transfer' && inCycle(e)).reduce((s, e) => s + (e.toAccount === accountId ? twd(e) : 0) - (e.fromAccount === accountId ? twd(e) : 0), 0);
+      return movedPool[accountId];
+    };
+    const statuses = {};
+    for (const row of health.allocation.rows) {
+      const base = { accountName: accountName(row.accountId), balanceCents: balances[row.accountId] || 0 };
+      let facts = base;
+      if (row.key === 'fixed') facts = { ...base, dueTotalCents, paidCents };
+      else if (row.key === 'living') facts = { ...base, spentCents };
+      else {
+        const movedInCents = Math.max(0, Math.min(movedInto(row.accountId), row.allocatedCents));
+        movedPool[row.accountId] -= movedInCents;
+        facts = { ...base, movedInCents, sharedWithIncome: incomeAccounts.has(row.accountId) };
+      }
+      statuses[row.key] = Planning.allocationStatus(row, cycle, facts);
+    }
+    return { cycle, payday: mainIncome ? { name: mainIncome.name || recurringKinds[mainIncome.kind], day: cycle.payday } : null, statuses };
+  };
+  // 每月計畫的唯一算法：摘要卡、建議分配表都讀這裡的結果
   const currentMonthSavingsHealth = (now = new Date()) => {
     ensureAccountProfiles(); ensureDashboard();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -277,9 +328,10 @@ const App = (() => {
     const emergencyBalanceCents = Math.max(0, balances[emergencyAccountId] || 0);
     const emergencyGapCents = Math.max(0, emergencyTargetCents - emergencyBalanceCents);
     const rawEmergencyMonthly = Math.ceil(emergencyGapCents / 12);
+    // 固定儲蓄轉入緊急預備金帳戶時算進緊急預備金；一般儲蓄的搭配帳戶在「必備分配帳戶」自選
     const savingsFlow = recurring.items.find(f => f.type === 'saving');
-    const savingsAccountId = savingsFlow?.accountId || emergencyAccountId;
-    const sameAccount = savingsAccountId === emergencyAccountId;
+    const sameAccount = (savingsFlow?.accountId || emergencyAccountId) === emergencyAccountId;
+    const savingsAccountId = config.dashboard.savingAccountId || emergencyAccountId;
     const emergencyMonthlyCents = sameAccount ? Math.max(rawEmergencyMonthly, recurring.fixedSavingCents) : rawEmergencyMonthly;
     const goals = Planning.poolGoalSavings(selectedGoals(now), balances, { [emergencyAccountId]: emergencyTargetCents });
     const goalMonthlyCents = goals.reduce((s, g) => s + g.monthlyRequiredCents, 0);
@@ -531,13 +583,14 @@ const App = (() => {
     const emergencyBalance = savingsHealth.emergencyBalanceCents;
     const emergencyGap = savingsHealth.emergencyGapCents;
     const monthlyFlex = savingsHealth.monthlyFlexCents;
+    const progress = allocationStatuses(savingsHealth);
     const accountSelect = (value, onchange) => el('select', { onchange }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: value === a.id ? 'selected' : undefined })));
     const requiredSettings = el('details', { class: 'compact-settings' }, [
       el('summary', { text: '必備分配帳戶' }),
       el('div', { class: 'toolbar' }, [
-        el('label', {}, [document.createTextNode('基本生活　'), accountSelect(config.dashboard.livingAccountId, e => { config.dashboard.livingAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]),
-        el('label', {}, [document.createTextNode('固定支出　'), accountSelect(config.dashboard.fixedExpenseAccountId, e => { config.dashboard.fixedExpenseAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]),
-        el('label', {}, [document.createTextNode('緊急預備金　'), accountSelect(config.dashboard.emergencyAccountId, e => { config.dashboard.emergencyAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])
+        // 每個分配用途（含之後新增的）都列出來；已選的成本目標也在這裡，跟「選擇成本目標」存同一個設定
+        ...ALLOCATION_PURPOSES.map(p => el('label', {}, [document.createTextNode(`${p.label}　`), accountSelect(config.dashboard[p.field], e => { config.dashboard[p.field] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])),
+        ...goals.map(g => el('label', {}, [document.createTextNode(`${g.label}（成本目標）　`), accountSelect(g.accountId, e => { config.dashboard.scenarioAccountMap[g.key] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]))
       ])
     ]);
     const optionalGoals = el('details', { class: 'compact-settings' }, [
@@ -660,18 +713,17 @@ const App = (() => {
       el('div', { class: 'dashboard-summary' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可切換至編輯模式重新勾選。' })]),
       renderSummaryCardSettings(),
       loanOverview,
+      el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${progress.cycle.next.slice(5).replace('-', '/')} 前（${progress.payday ? `依「${progress.payday.name}」每月 ${progress.payday.day} 日發薪` : '尚未設定固定收入，以每月 1 日起算'}）・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天（${Math.round(progress.cycle.ratio * 100)}%）；狀態只看已入帳的帳目與實際餘額` }),
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'allocation-table' }, [
         el('thead', {}, [el('tr', {}, [el('th', { text: '用途' }), el('th', { text: '搭配帳戶' }), el('th', { text: '每月需要' }), el('th', { text: '建議分配' }), el('th', { text: '狀態' })])]),
         el('tbody', {}, allocation.rows.map(r => el('tr', { class: r.shortfallCents > 0 ? 'allocation-short' : '' }, [
           el('td', {}, [document.createTextNode(r.label), r.required ? el('span', { class: 'badge', text: '必備' }) : null, !r.required ? el('div', { class: 'notice', text: `目標 ${Money.formatTWD(r.targetCents)}・帳戶已有 ${Money.formatTWD(r.savedCents)}・${r.targetMonth}` }) : null]),
           el('td', { text: accountName(r.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(r.requestedCents) }),
           el('td', { class: 'mono', text: Money.formatTWD(r.allocatedCents) }),
-          el('td', { class: r.shortfallCents > 0 ? 'neg' : '', text: r.shortfallCents > 0 ? `不足 ${Money.formatTWD(r.shortfallCents)}` : '足額' })
+          el('td', { class: `allocation-status status-${progress.statuses[r.key].level}`, text: progress.statuses[r.key].text })
         ])))
       ])]),
       selectedGoalLists,
-      savingsHealth.issues.length ? el('div', { class: 'savings-issues' }, [el('strong', { text: '本月問題點' }), el('ul', {}, savingsHealth.issues.map(issue => el('li', { text: issue })))]) : empty(),
-      savingsHealth.strengths.length ? el('div', { class: 'savings-strengths' }, [el('strong', { text: '本月做得好' }), el('ul', {}, savingsHealth.strengths.map(strength => el('li', { text: strength })))]) : empty(),
       requiredSettings, optionalGoals,
       el('p', { class: 'notice editor-only', text: '此表會自動重算建議用途；不會連線或操作真實銀行帳戶。所選目標的已存金額取自指定帳戶目前餘額。' })
     );
