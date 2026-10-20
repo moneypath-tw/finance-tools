@@ -6,14 +6,24 @@
 
 | 使用方式 | 立即前往 |
 | --- | --- |
-| 不使用 Git，直接下載 | [下載最新版 ZIP](https://github.com/si-kui-a/finance-tools/archive/refs/heads/main.zip) |
+| 免下載，直接用線上版 | [開啟錢路線上版](https://moneypath-tw.github.io/finance-tools/) |
+| 不使用 Git，直接下載 | [下載最新版 ZIP](https://github.com/moneypath-tw/finance-tools/archive/refs/heads/main.zip) |
 | Windows 電腦 | [Windows 下載、安裝與瀏覽器載入](#安裝到-windows-電腦) |
 | Mac 電腦 | [Mac 下載、安裝與瀏覽器載入](#安裝到-mac) |
 | 使用 Git 安裝與更新 | [Windows Git 指令](#windows使用-git方便更新)・[Mac Git 指令](#mac使用-git方便更新) |
 | 已經下載完成 | [第一次開啟與設定](#第一次使用) |
-| 查看原始碼與版本 | [GitHub 公開倉庫](https://github.com/si-kui-a/finance-tools) |
+| 查看原始碼與版本 | [GitHub 公開倉庫](https://github.com/moneypath-tw/finance-tools) |
 
-目前採本機版使用：下載後開啟資料夾內的 `index.html`。尚未提供正式的 GitHub Pages 線上版，因此不需要登入，也不會把輸入資料送到網站伺服器。
+線上版與下載版是同一份程式，兩種都不需要登入，也都不會把輸入資料送到任何伺服器：
+
+| 比較 | 線上版 | 下載版 |
+| --- | --- | --- |
+| 開始使用 | 開網址即可，第一次開過後斷網也能用 | 下載 ZIP 或 git clone，開啟 `index.html` |
+| 資料存在哪裡 | 這台裝置、這個瀏覽器的本機資料；可另外綁定本機 JSON 檔 | 同左 |
+| 程式更新 | 每次開啟自動取得最新版 | 自己重新下載或 `git pull` |
+| 適合 | 想立刻試用、手機或平板 | 想固定版本、完全不依賴網站 |
+
+> 線上版與下載版的資料互不相通（瀏覽器把兩者視為不同網站）。要轉移時，在原本那邊按「匯出」存成 JSON，再到另一邊「匯入」。
 
 錢路是一套免費、純本機的繁體中文個人理財工具，整合記帳、多帳戶管理、每月資金分配、儲蓄率分析，以及房貸、學貸、買房、旅行與退休試算。資料只需輸入一次，各項結果便會自動連動；不需註冊、不依賴 AI，也不會把財務資料傳到伺服器。
 
@@ -80,7 +90,7 @@
 ```powershell
 $moneyPathDocuments = [Environment]::GetFolderPath('MyDocuments')
 Set-Location $moneyPathDocuments
-git clone https://github.com/si-kui-a/finance-tools.git MoneyPath
+git clone https://github.com/moneypath-tw/finance-tools.git MoneyPath
 Set-Location .\MoneyPath
 Start-Process .\index.html
 ```
@@ -134,7 +144,7 @@ macOS 同樣不需要安裝程式或 Node.js。下載後以 Safari、Chrome 或 
 
 ```bash
 cd ~/Documents
-git clone https://github.com/si-kui-a/finance-tools.git MoneyPath
+git clone https://github.com/moneypath-tw/finance-tools.git MoneyPath
 cd MoneyPath
 open index.html
 ```
@@ -185,7 +195,9 @@ git pull
 - 修改、切換背景、關閉分頁或離開頁面時，系統會嘗試自動保存；右下角顯示最後成功保存時間。
 - 可在首頁選擇或建立 JSON 工作區檔案。授權有效時，修改內容會同步寫入該檔案。
 - 匯入的原始檔不會被移動或改寫；匯出的 JSON 會進入瀏覽器設定的下載位置。
-- 清除網站資料、更換瀏覽器設定檔或重灌瀏覽器可能移除本機資料，請定期匯出 JSON 備份。
+- 清除網站資料、更換瀏覽器設定檔或重灌瀏覽器可能移除本機資料，請定期匯出 JSON 備份。Safari（含 iPhone、iPad）長時間未開啟網站時可能自動清除網站資料，線上版在 Safari 上更要定期匯出。
+- 綁定工作區檔案需要 Edge 或 Chrome；Firefox、Safari 只會保存在瀏覽器本機，請用匯出備份。
+- 線上版的離線快取（`sw.js`）只存放程式檔，不存放財務資料；有網路時一律先取最新程式。
 - 公開倉庫只應存放程式碼與範例假資料；真實財務資料請留在本機或私密倉庫。
 
 ## 計算方式與重要界線
@@ -209,6 +221,13 @@ git config core.hooksPath hooks
 
 本機 hook 與 GitHub Actions 都會執行 `scripts/check-no-real-data.sh`，發現疑似真實財務資料時阻止提交或標記檢查失敗。
 
+線上版的防護與限制：
+
+- 網址放在專用的 `moneypath-tw.github.io`，不與其他專案共用網域，其他網站讀不到錢路存在瀏覽器裡的資料。
+- `index.html` 的 CSP 設定 `connect-src 'none'`，頁面無法對外發出連線；`shared/frame-guard.js` 阻止其他網站用 iframe 嵌入錢路誘導點擊。
+- 線上版每次開啟都載入倉庫最新的程式，安全性取決於本倉庫與發布帳號沒有被入侵；想完全排除這個風險，請改用下載版並固定版本。
+- 發現資安問題請見 [SECURITY.md](SECURITY.md)。
+
 ## 開發與測試
 
 本專案無第三方執行期套件，使用 Node.js 內建測試器：
@@ -218,7 +237,13 @@ npm test
 npm run check
 ```
 
-測試涵蓋通膨、實質報酬、財務健檢、壓力情境、帳本驗證、外幣匯率、FIRE、目標推算及多項邊界條件。GitHub Actions 會同步執行程式檢查、測試與隱私掃描。
+測試涵蓋通膨、實質報酬、財務健檢、壓力情境、帳本驗證、外幣匯率、FIRE、目標推算及多項邊界條件，以及線上版的攻擊面回歸測試（惡意匯入、HTML 注入點、CSP、多分頁互相覆蓋、離線快取範圍）。
+
+改動到保存、離線快取或頁面載入時，另跑瀏覽器實測（需本機有 Chrome，不需網路）：
+
+```powershell
+npm run browser-check
+```GitHub Actions 會同步執行程式檢查、測試與隱私掃描。
 
 每次 GitHub Actions 執行都會跑 `npm run check`，並將完整輸出保存為 `finance-ci-logs-<run_id>` artifact（保留 14 天）。若檢查失敗，請先下載該 artifact，再依日誌中的語法錯誤、測試名稱與堆疊位置進行修正。
 

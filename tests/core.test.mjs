@@ -461,3 +461,96 @@ test('趨勢圖 SVG 會跳脫月份字串', () => {
   assert.ok(!svg.includes('<img>'));
   assert.ok(svg.includes('&lt;img&gt;'));
 });
+
+test('線上版離線快取清單與 index.html 載入的檔案一致', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  const loaded = [...html.matchAll(/(?:src|href)="(shared\/[^"]+)"/g)].map((m) => `./${m[1]}`).sort();
+  const precached = [...sw.matchAll(/'(\.\/shared\/[^']+)'/g)].map((m) => m[1]).sort();
+  assert.deepEqual(precached, loaded);
+  for (const rel of loaded) assert.ok(fs.existsSync(path.join(root, rel)), rel);
+});
+
+test('防嵌入保護是 <head> 第一支腳本，CSP 禁止對外連線', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const head = html.slice(0, html.indexOf('</head>'));
+  assert.equal([...head.matchAll(/<script src="([^"]+)"/g)][0]?.[1], 'shared/frame-guard.js');
+  assert.match(head, /connect-src 'none'/);
+});
+
+// ---- 攻擊者視角的回歸測試（線上版上線前逐項檢討後機械化；新增攻擊面時在這裡補） ----
+
+const loadIoWithStubs = () => {
+  const listeners = {};
+  const store = new Map();
+  const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const doc = { visibilityState: 'visible', addEventListener: (t, f) => { (listeners[t] ||= []).push(f); } };
+  const win = { addEventListener: (t, f) => { (listeners[t] ||= []).push(f); } };
+  const reloads = [];
+  const ioCtx = { console, structuredClone, setTimeout: () => 0, clearTimeout: () => {}, localStorage, document: doc, window: win, location: { reload: () => reloads.push(1) }, Blob, URL };
+  vm.createContext(ioCtx);
+  vm.runInContext(fs.readFileSync(path.join(root, 'shared/io.js'), 'utf8') + '\n;globalThis.IO = IO;', ioCtx, { filename: 'shared/io.js' });
+  const fire = (t, e = {}) => (listeners[t] || []).forEach((f) => f({ preventDefault() {}, ...e }));
+  return { IO: ioCtx.IO, store, doc, fire, reloads, localStorage };
+};
+
+test('其他分頁更新資料後，這個分頁不再保存，避免舊資料覆蓋新資料', () => {
+  const { IO, store, fire, localStorage } = loadIoWithStubs();
+  IO.configurePersistence(() => ({ ledger: { entries: ['this-tab'] } }));
+  IO.markDirty();
+  store.set('finance-tools.workspace.v1', '{"ledger":{"entries":["other-tab"]}}');
+  fire('storage', { key: 'finance-tools.workspace.v1', newValue: 'x', storageArea: localStorage });
+  IO.markDirty();
+  fire('pagehide');
+  assert.match(store.get('finance-tools.workspace.v1'), /other-tab/);
+});
+
+test('背景分頁收到其他分頁的更新會直接重新載入；切換分頁本身不寫入（不觸發對方失效）', () => {
+  const { IO, store, doc, fire, reloads, localStorage } = loadIoWithStubs();
+  IO.configurePersistence(() => ({ ledger: { entries: [] } }));
+  IO.markDirty();
+  const before = store.get('finance-tools.workspace.v1');
+  doc.visibilityState = 'hidden';
+  fire('visibilitychange');
+  assert.equal(store.get('finance-tools.workspace.v1'), before);
+  fire('storage', { key: 'finance-tools.workspace.v1', newValue: 'x', storageArea: localStorage });
+  assert.equal(reloads.length, 1);
+});
+
+test('超過大小上限的匯入檔被拒絕，且不讀取內容', async () => {
+  const { IO } = loadIoWithStubs();
+  await assert.rejects(IO.importJsonFile({ size: 6 * 1024 * 1024 }), /未匯入/);
+});
+
+test('惡意匯入資料：所有字串欄位塞入 HTML 仍不會產生標籤', () => {
+  const payload = '"><img src=x onerror=alert(1)><svg onload=alert(1)>';
+  const ledger = { schemaVersion: 2, entries: [{ id: payload, date: `2026-${payload}`, type: 'expense', category: payload, account: payload, amountCents: -100, note: payload }] };
+  const svg = api.Money.buildTrendChartSVG(api.Money.groupSum(ledger.entries, (e) => e.date.slice(0, 7), (e) => e.type === 'expense'), {});
+  assert.ok(!/<img|<svg[^>]*onload|onerror=/i.test(svg.replace(/^<svg viewBox="[^"]*"[^>]*>/, '')));
+  const bad = { ...ledger, entries: [{ ...ledger.entries[0], amountCents: '1" onload="alert(1)' }] };
+  assert.ok(api.Validation.validateLedger(bad).errors.some((e) => e.code === 'INVALID_MONEY' || /amountCents/.test(e.path)));
+});
+
+test('innerHTML 只能清空或放入已跳脫的趨勢圖，其餘一律用 textContent／createElement', () => {
+  for (const rel of ['shared/app.js', 'shared/io.js', 'shared/money.js', 'shared/planning.js', 'shared/validation.js', 'shared/snapshots.js', 'shared/config.js']) {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8');
+    for (const m of src.matchAll(/\.(innerHTML|outerHTML)\s*=\s*([^;]+);/g)) assert.ok(["''", 'trendSVG'].includes(m[2].trim()), `${rel}: ${m[0]}`);
+    assert.ok(!/insertAdjacentHTML|document\.write|\beval\(|new Function\(/.test(src), `${rel} 含危險 API`);
+  }
+});
+
+test('CSP 封住資料外流管道；新分頁連結都帶 noopener', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)[1];
+  for (const d of ["default-src 'self'", "script-src 'self'", "connect-src 'none'", "object-src 'none'", "base-uri 'none'", "form-action 'none'"]) assert.ok(csp.includes(d), d);
+  assert.ok(!/script-src[^;]*unsafe/.test(csp));
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  for (const m of app.matchAll(/target: '_blank'[^}]*/g)) assert.match(m[0], /rel: 'noopener/);
+});
+
+test('離線快取只處理本站 GET，不快取跨站或錯誤回應', () => {
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  assert.match(sw, /request\.method !== 'GET' \|\| new URL\(request\.url\)\.origin !== self\.location\.origin/);
+  assert.match(sw, /response\.ok && response\.type === 'basic'/);
+  assert.ok(!/localStorage|indexedDB/.test(sw.replace(/^\/\/.*$/gm, '')));
+});

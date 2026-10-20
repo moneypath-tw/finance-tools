@@ -54,7 +54,7 @@ const App = (() => {
     const locationButton = document.querySelector('#choose-storage-location');
     if (indicator) indicator.classList.toggle('failed', !ok);
     if (indicatorText) indicatorText.textContent = lastSavedAt
-      ? `上次保存 ${new Date(lastSavedAt).toLocaleString('zh-Hant-TW')}${bindingName ? `・已綁定 ${bindingName}` : '・Edge 本機'}`
+      ? `上次保存 ${new Date(lastSavedAt).toLocaleString('zh-Hant-TW')}${bindingName ? `・已綁定 ${bindingName}` : '・瀏覽器本機'}`
       : message;
     if (locationButton) locationButton.textContent = bindingName ? `更改保存位置・${bindingName}` : '選擇本機保存位置';
   };
@@ -1014,7 +1014,7 @@ const App = (() => {
         binding.name ? el('button', { class: 'btn small', text: '立即同步', onclick: async () => { await IO.saveBoundFile({ requestPermission: true }); } }) : null,
         binding.name ? el('button', { class: 'btn small danger', text: '解除綁定', onclick: async () => { await IO.unbindWorkspaceFile(); renderPersonalSettings(); } }) : null
       ]),
-      el('p', { class: 'notice', text: binding.supported ? '每次修改會立即保存到 Edge 本機並同步綁定 JSON；切到背景、關閉分頁或離開頁面前會再強制刷新。重新開啟後若權限失效，按「立即同步」重新授權即可。' : '目前瀏覽器不支援直接綁定檔案；仍會在每次修改及關閉頁面前保存到 Edge 本機。' })
+      el('p', { class: 'notice', text: binding.supported ? '每次修改會立即保存到瀏覽器本機並同步綁定 JSON；切到背景、關閉分頁或離開頁面前會再強制刷新。重新開啟後若權限失效，按「立即同步」重新授權即可。' : '目前瀏覽器不支援直接綁定檔案；仍會在每次修改及關閉頁面前保存到瀏覽器本機；請定期用 JSON 匯出備份。' })
     ]);
     const recurringManager = el('details', {}, [
       el('summary', { text: '每月固定出入帳（正職／兼職／接案／固定支出）' }),
