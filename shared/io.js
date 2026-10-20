@@ -10,6 +10,9 @@ const IO = (() => {
   let boundFileHandle = null;
   let fileWriteChain = Promise.resolve();
   let lastLifecycleFlushAt = 0;
+  // 另一個分頁寫入了較新的工作區：這個分頁手上的是舊資料，再保存就會覆蓋掉對方的修改
+  let staleFromOtherTab = false;
+  const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
   const WORKSPACE_KEY = 'finance-tools.workspace.v1';
   const DB_NAME = 'finance-tools-local';
   const HISTORY_LIMIT = 20;
@@ -21,6 +24,10 @@ const IO = (() => {
   const currentEnvelope = () => ({ schemaVersion: 1, savedAt: new Date().toISOString(), ...(stateProvider ? stateProvider() : {}) });
   const saveCurrent = () => {
     if (!stateProvider) return false;
+    if (staleFromOtherTab) {
+      notifyStatus('另一個分頁已更新資料；這個分頁已停止保存以免覆蓋，請重新整理後再編輯', false);
+      return false;
+    }
     try {
       const envelope = currentEnvelope();
       localStorage.setItem(WORKSPACE_KEY, JSON.stringify(envelope));
@@ -45,7 +52,7 @@ const IO = (() => {
     req.onerror = () => reject(req.error);
   });
   const saveHistory = async () => {
-    if (!stateProvider) return;
+    if (!stateProvider || staleFromOtherTab) return;
     try {
       const db = await openHistoryDb();
       const tx = db.transaction('history', 'readwrite');
@@ -85,7 +92,7 @@ const IO = (() => {
     } catch { boundFileHandle = null; return null; }
   };
   const writeBoundFile = async ({ requestPermission = false } = {}) => {
-    if (!boundFileHandle || !stateProvider) return false;
+    if (!boundFileHandle || !stateProvider || staleFromOtherTab) return false;
     try {
       let permission = await boundFileHandle.queryPermission({ mode: 'readwrite' });
       if (permission !== 'granted' && requestPermission) permission = await boundFileHandle.requestPermission({ mode: 'readwrite' });
@@ -122,7 +129,7 @@ const IO = (() => {
     boundFileHandle = null;
     clearTimeout(fileSaveTimer);
     await saveBindingHandle(null);
-    notifyStatus('已解除檔案綁定；仍會自動保存於 Edge 本機資料');
+    notifyStatus('已解除檔案綁定；仍會自動保存於瀏覽器本機資料');
   };
   const getBindingInfo = () => ({ supported: !!globalThis.showSaveFilePicker, name: boundFileHandle?.name || null, lastSavedAt });
   const markDirty = () => {
@@ -171,15 +178,24 @@ const IO = (() => {
     lastLifecycleFlushAt = now;
     clearTimeout(historyTimer);
     clearTimeout(fileSaveTimer);
-    saveCurrent();
+    // 每次修改已立即寫入；只有寫入失敗（dirty）才需要重寫，否則切換分頁也會觸發其他分頁的 storage 事件
+    if (dirty) saveCurrent();
     saveHistory();
     if (boundFileHandle) saveBoundFile();
   };
+  window.addEventListener('storage', (e) => {
+    if (e.key !== WORKSPACE_KEY || e.newValue === null || e.storageArea !== localStorage) return;
+    staleFromOtherTab = true;
+    clearTimeout(historyTimer);
+    clearTimeout(fileSaveTimer);
+    if (document.visibilityState === 'hidden') { location.reload(); return; }
+    notifyStatus('另一個分頁已更新資料；這個分頁已停止保存以免覆蓋，請重新整理後再編輯', false);
+  });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushBeforeLeaving(); });
   window.addEventListener('pagehide', flushBeforeLeaving);
   window.addEventListener('beforeunload', (e) => {
     flushBeforeLeaving();
-    if (!dirty) return;
+    if (!dirty || staleFromOtherTab) return;
     e.preventDefault();
     e.returnValue = '';
   });
@@ -203,6 +219,10 @@ const IO = (() => {
   // 讀取使用者選取的檔案，回傳 Promise<object>；格式錯誤或版本不符會丟出可讀訊息，不覆蓋現有資料
   const importJsonFile = (file, { expectedSchemaVersion } = {}) =>
     new Promise((resolve, reject) => {
+      if (file.size > MAX_IMPORT_BYTES) {
+        reject(new Error(`檔案超過 ${MAX_IMPORT_BYTES / 1024 / 1024} MB，未匯入，也未覆蓋現有資料。`));
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
         let parsed;
