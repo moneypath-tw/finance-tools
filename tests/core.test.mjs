@@ -750,3 +750,44 @@ test('分配用途集中登記：每個必備用途都有搭配帳戶欄位，�
   api.Validation.repairWorkspace(workspace, api.DEFAULT_CONFIG);
   assert.equal(workspace.config.dashboard.savingAccountId, config.accountProfiles[0].id);
 });
+
+test('發薪週期：從最近一次發薪日起算，跨年與小月月底都正確', () => {
+  const c = api.Planning.payCycle(new Date(2026, 9, 21), 5);
+  assert.deepEqual([c.start, c.next, c.totalDays, c.elapsedDays, c.daysLeft], ['2026-10-05', '2026-11-05', 31, 17, 15]);
+  const early = api.Planning.payCycle(new Date(2026, 0, 3), 5);
+  assert.deepEqual([early.start, early.next], ['2025-12-05', '2026-01-05']);
+  const payday = api.Planning.payCycle(new Date(2026, 9, 5), 5);
+  assert.deepEqual([payday.start, payday.elapsedDays], ['2026-10-05', 1]);
+  const eom = api.Planning.payCycle(new Date(2026, 1, 28), 31);
+  assert.deepEqual([eom.start, eom.next], ['2026-02-28', '2026-03-31']);
+});
+
+test('分配狀態：依已過天數與實際帳務判斷並給建議', () => {
+  const cycle = { elapsedDays: 15, totalDays: 30, daysLeft: 16, ratio: 0.5 };
+  const row = (key, allocated, shortfall = 0) => ({ key, allocatedCents: allocated, requestedCents: allocated + shortfall, shortfallCents: shortfall });
+  const S = (r, f, c = cycle) => api.Planning.allocationStatus(r, c, { accountName: '主要銀行', ...f });
+  // 生活費：1 萬預算過半月，花 5,000 正常、6,000 超前、1.2 萬超支
+  assert.equal(S(row('living', 1000000), { spentCents: 500000 }).level, 'ok');
+  assert.match(S(row('living', 1000000), { spentCents: 500000 }).text, /剩 16 天每日可花 312元/);
+  assert.equal(S(row('living', 1000000), { spentCents: 600000 }).level, 'watch');
+  assert.equal(S(row('living', 1000000), { spentCents: 1200000 }).level, 'short');
+  assert.equal(S(row('living', 1000000), { spentCents: 100000, balanceCents: 200000 }).level, 'watch'); // 帳戶不夠剩下的生活費
+  // 固定支出：還沒扣的要由帳戶餘額撐住
+  assert.equal(S(row('fixed', 900000), { dueTotalCents: 900000, paidCents: 300000, balanceCents: 700000 }).level, 'ok');
+  assert.match(S(row('fixed', 900000), { dueTotalCents: 900000, paidCents: 300000, balanceCents: 100000 }).text, /餘額不足 5,000元/);
+  assert.equal(S(row('fixed', 900000), { dueTotalCents: 900000, paidCents: 900000, balanceCents: 0 }).level, 'ok');
+  // 儲蓄類：發薪後 3 天內提醒先轉，過了仍未轉就不足；跟薪資同帳戶分不出來
+  assert.equal(S(row('saving', 300000), { movedInCents: 300000 }).level, 'ok');
+  assert.equal(S(row('saving', 300000), { movedInCents: 0 }, { ...cycle, elapsedDays: 2 }).level, 'watch');
+  assert.match(S(row('saving', 300000), { movedInCents: 100000 }).text, /仍差 2,000元/);
+  assert.match(S(row('emergency', 300000), { sharedWithIncome: true }).text, /薪資入帳/);
+  assert.match(S(row('saving', 100000, 200000), { movedInCents: 100000 }).text, /^收入只夠分配 1,000元/);
+});
+
+test('分配狀態文字：沒有應扣款與只因餘額不足時不出現 0 元的誤導說法', () => {
+  const cycle = { elapsedDays: 15, totalDays: 30, daysLeft: 16, ratio: 0.5 };
+  const S = (key, f) => api.Planning.allocationStatus({ key, allocatedCents: 1000000, requestedCents: 1000000, shortfallCents: 0 }, cycle, { accountName: '主要銀行', ...f }).text;
+  assert.equal(S('fixed', { dueTotalCents: 0, paidCents: 0, balanceCents: 0 }), '本期沒有要扣的固定支出');
+  const low = S('living', { spentCents: 0, balanceCents: 0 });
+  assert.ok(!low.includes('多花') && low.includes('不夠剩下的生活費'), low);
+});

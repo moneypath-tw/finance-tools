@@ -56,6 +56,53 @@ const Planning = (() => {
     });
     return { incomeCents: Math.round(incomeCents || 0), rows, unallocatedCents: remaining, totalAllocatedCents: rows.reduce((s, r) => s + r.allocatedCents, 0) };
   };
+  // 發薪週期：最近一次發薪日（含今天）到下次發薪日前一天；發薪日超過該月天數時用月底
+  const payCycle = (today, payday) => {
+    const d = Math.min(31, Math.max(1, Math.trunc(payday) || 1));
+    const at = (y, m) => new Date(y, m, Math.min(d, new Date(y, m + 1, 0).getDate()));
+    const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    let start = at(t.getFullYear(), t.getMonth());
+    if (start > t) start = at(t.getFullYear(), t.getMonth() - 1);
+    const next = at(start.getFullYear(), start.getMonth() + 1);
+    const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    const totalDays = Math.round((next - start) / 86400000);
+    const elapsedDays = Math.round((t - start) / 86400000) + 1;
+    return { payday: d, start: ymd(start), today: ymd(t), next: ymd(next), totalDays, elapsedDays, daysLeft: totalDays - elapsedDays + 1, ratio: elapsedDays / totalDays };
+  };
+  // 分配表「狀態」：依本期已過天數與實際帳務（已入帳的帳目、實際餘額）判斷每個用途是否跟上進度，並給下一步建議
+  //   fixed：{ dueTotalCents, paidCents, balanceCents, accountName }  本期還沒扣的固定支出要由帳戶餘額撐住
+  //   living：{ spentCents, balanceCents, accountName }            已花 vs 依天數比例的進度，剩餘每日可花
+  //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, sharedWithIncome, accountName }  發薪後應先轉入
+  const allocationStatus = (row, cycle, facts = {}) => {
+    const fmt = (c) => `${Math.round(c / 100).toLocaleString('en-US')}元`;
+    const out = (level, text) => ({ level, text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text });
+    const target = row.allocatedCents;
+    if (row.key === 'fixed') {
+      const remaining = Math.max(0, (facts.dueTotalCents || 0) - (facts.paidCents || 0));
+      if (!(facts.dueTotalCents > 0)) return out('ok', '本期沒有要扣的固定支出');
+      if (remaining <= 0) return out('ok', `本期固定支出 ${fmt(facts.dueTotalCents)} 已全部扣款`);
+      const lack = remaining - Math.max(0, facts.balanceCents || 0);
+      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入`);
+      return out('ok', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠`);
+    }
+    if (row.key === 'living') {
+      const spent = Math.max(0, facts.spentCents || 0);
+      const expected = Math.round(target * cycle.ratio);
+      // 每日可花取整數元並無條件捨去，不高估能花的錢
+      const perDay = Math.floor(Math.max(0, target - spent) / Math.max(1, cycle.daysLeft) / 100) * 100;
+      const progress = `第 ${cycle.elapsedDays}／${cycle.totalDays} 天，已花 ${fmt(spent)}（進度 ${fmt(expected)}）`;
+      if (spent > target) return out('short', `${progress}，已超出本期生活費 ${fmt(spent - target)}`);
+      const over = spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '';
+      const lowBalance = (facts.balanceCents ?? Infinity) < target - spent ? `；${facts.accountName}餘額只剩 ${fmt(Math.max(0, facts.balanceCents))}，不夠剩下的生活費` : '';
+      return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`);
+    }
+    if (target <= 0) return out(row.shortfallCents > 0 ? 'short' : 'ok', '本期不需提撥');
+    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出已存多少；建議改搭配獨立帳戶`);
+    const moved = Math.max(0, facts.movedInCents || 0);
+    if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
+    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`);
+    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}`);
+  };
   // 成本目標的已存金額取自指定帳戶餘額；同帳戶先保留緊急預備金目標，再依期限先後分給各目標，同一筆錢不重複計算
   const poolGoalSavings = (goals, balances, reservedByAccount = {}) => {
     const pool = {};
@@ -147,5 +194,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, allocateMonthly, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, allocateMonthly, payCycle, allocationStatus, poolGoalSavings, assessMonthlySavings, assess };
 })();

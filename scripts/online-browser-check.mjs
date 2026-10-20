@@ -203,6 +203,13 @@ try {
   const c = home.cards;
   check('health form: 必要支出 auto-filled from essential fixed expenses', home.shown === home.essential && home.essential > 0, JSON.stringify(home));
   check('summary cards: 月度餘裕 = 月收入 − 固定支出 − 生活開銷 − 應儲蓄', c['月度餘裕'] === c['月收入'] - c['固定支出'] - home.living - c['應儲蓄'], JSON.stringify(home));
+  // allocation status follows the pay cycle and real ledger instead of a static 足額; no pinned issue/strength lists
+  const statusView = await evaluate(`(() => ({
+    cycle: document.querySelector('#allocation-dashboard .allocation-cycle')?.textContent || '',
+    statuses: [...document.querySelectorAll('#allocation-dashboard .allocation-status')].map(td => td.className.split(' ').pop() + ':' + td.textContent),
+    pinned: !!document.querySelector('#allocation-dashboard .savings-issues, #allocation-dashboard .savings-strengths')
+  }))()`);
+  check('allocation status: pay-cycle line, per-row advice, no pinned issue lists', /第 \d+／\d+ 天/.test(statusView.cycle) && statusView.statuses.length >= 3 && statusView.statuses.every(s => /^status-(ok|watch|short):/.test(s) && !s.endsWith(':足額')) && statusView.statuses.some(s => s.includes('每日可花')) && !statusView.pinned, JSON.stringify(statusView));
   // every allocation purpose (incl. 一般儲蓄) gets its own account picker under 必備分配帳戶, and the choice is saved
   const pickers = await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); return d ? [...d.querySelectorAll('label')].map(l => l.firstChild.textContent.trim()) : []; })()`);
   await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '一般儲蓄').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
