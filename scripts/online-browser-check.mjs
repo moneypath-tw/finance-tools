@@ -180,6 +180,36 @@ try {
   const rentFlow = stored.config.recurringCashFlows[3];
   const subsidyEntry = stored.ledger.entries.find(x => x.id.startsWith(`recurring-${rentFlow?.id}-subsidy-`));
   check('rent subsidy 3,000 lowers monthly average and posts income', typedSubsidy && rentFlow?.amountCents === 500000 && subsidyEntry?.amountCents === 300000 && subsidyEntry?.type === 'income', JSON.stringify(subsidyEntry || rentFlow?.housing?.subsidy));
+  // any fixed expense can pick a pay cycle like rent: quarterly → 3 × monthly posted only in payment months
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋新增固定支出').click(); true`);
+  const typedFixed = await typeIncome(4, '每月金額（元）', '1000');
+  await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const s = [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '繳款方式').querySelector('select'); s.value = '3'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  const nowYm = await evaluate(`(() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })()`);
+  const afterCycle = await evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1'))`);
+  const fixedFlow = afterCycle.config.recurringCashFlows[4];
+  const fixedEntry = afterCycle.ledger.entries.find(x => x.id === `recurring-${fixedFlow?.id}-${nowYm}`);
+  await go(`${base}/index.html`);
+  const fixedSummary = await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; return { tag: card?.querySelector('summary').textContent || '', cycle: [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '繳款方式')?.querySelector('select').value }; })()`);
+  check('quarterly fixed expense: monthly 1,000, posts 3,000 this month, survives reload', typedFixed && fixedFlow?.amountCents === 100000 && fixedFlow?.payCycleMonths === 3 && fixedFlow?.payStartMonth === nowYm && fixedEntry?.amountCents === -300000 && fixedSummary.cycle === '3' && fixedSummary.tag.includes('每季扣款') && fixedSummary.tag.includes('3,000'), JSON.stringify({ fixedFlow, fixedEntry, fixedSummary }));
+  // home health form takes 必要支出 from fixed expenses marked essential; summary cards add up from one plan
+  const home = await evaluate(`(() => {
+    const f = [...document.querySelectorAll('#health-form .field')].find(x => x.querySelector('label')?.textContent === '每月必要支出');
+    const yuan = (t) => Number(t.replace(/－/g, '-').replace(/[^0-9-]/g, ''));
+    const cards = Object.fromEntries([...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].map(c => [c.querySelector('h3').textContent, yuan(c.querySelector('.dashboard-mini-value').textContent)]));
+    const ws = JSON.parse(localStorage.getItem('finance-tools.workspace.v1'));
+    const essential = ws.config.recurringCashFlows.filter(x => x.type === 'expense' && x.essential !== false && x.active !== false).reduce((s, x) => s + x.amountCents, 0) / 100;
+    return { shown: f ? yuan(f.querySelector('.readonly-value')?.textContent || '') : null, essential, living: ws.config.quickPlan.monthlyOtherExpenseCents / 100, cards };
+  })()`);
+  const c = home.cards;
+  check('health form: 必要支出 auto-filled from essential fixed expenses', home.shown === home.essential && home.essential > 0, JSON.stringify(home));
+  check('summary cards: 月度餘裕 = 月收入 − 固定支出 − 生活開銷 − 應儲蓄', c['月度餘裕'] === c['月收入'] - c['固定支出'] - home.living - c['應儲蓄'], JSON.stringify(home));
+  // turning a fixed item off mid-month removes its projected entry for this month; turning it back on restores it
+  const toggleFixed = () => evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.trim() === '啟用').querySelector('input'); box.click(); return true; })()`);
+  const hasFixedEntry = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.some(e => e.id === ${JSON.stringify(`recurring-${fixedFlow?.id}-${nowYm}`)})`);
+  await toggleFixed();
+  const goneWhenOff = !(await hasFixedEntry());
+  await toggleFixed();
+  check('disabling a fixed item drops only its projected entry this month; re-enabling restores it', goneWhenOff && (await hasFixedEntry()));
   // custom account nature + turning off 連動固定收支 drops every fixed item on that account from the totals
   await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋自訂性質').click(); true`);
   const typedNature = await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const i = [...document.querySelectorAll('#personal-settings .field')].find(f => f.querySelector('label').textContent === '性質名稱')?.querySelector('input'); if (!i) return false; i.value = '旅遊基金'; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
@@ -188,7 +218,7 @@ try {
   await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const box = [...document.querySelectorAll('#personal-settings .account-row label')].find(l => l.textContent.includes('連動固定收支')).querySelector('input'); box.click(); return true; })()`);
   await sleep(150);
   const unlinked = await evaluate(`({ warn: document.querySelectorAll('#personal-settings .flow-tag.warn').length, income: [...document.querySelectorAll('#personal-settings .summary-block')].find(b => b.textContent.includes('每月固定收入'))?.textContent || '' })`);
-  check('unlinked account: its fixed items marked and excluded from totals', unlinked.warn === 4 && unlinked.income.includes('0元') && !unlinked.income.includes('31,'), JSON.stringify(unlinked));
+  check('unlinked account: its fixed items marked and excluded from totals', unlinked.warn === 5 && unlinked.income.includes('0元') && !unlinked.income.includes('31,'), JSON.stringify(unlinked));
   const incomeErrs = events.filter((e) => e.method === 'Runtime.exceptionThrown').map((e) => e.params.exceptionDetails.exception?.description?.split('\n')[0]);
   check('no page exceptions or dialogs while editing income cards', incomeErrs.length === 0 && dialogs.length === 0, [...incomeErrs, ...dialogs].join(' | '));
   if (process.env.SHOT_DIR) {
