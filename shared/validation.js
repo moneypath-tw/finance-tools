@@ -57,7 +57,8 @@ const Validation = (() => {
       const legacyDiscount = item.kind === undefined && (Number(item.amountCents) < 0 || /折扣|減免|補助/.test(String(item.label || "")));
       const kind = item.kind === "discount" || legacyDiscount ? "discount" : (item.kind || "cost");
       const amountCents = Number.isFinite(item.amountCents) ? Math.abs(item.amountCents) : item.amountCents;
-      return { ...item, kind, amountCents };
+      const label = typeof item.label === "string" && item.label.trim() ? item.label : "未命名項目";
+      return { ...item, label, kind, amountCents };
     }) : items;
     if (Array.isArray(s.items)) s.items = normalizeItems(s.items);
     if (Array.isArray(s.itemTemplate)) s.itemTemplate = normalizeItems(s.itemTemplate);
@@ -133,13 +134,17 @@ const Validation = (() => {
     return { valid: errors.length === 0, errors, warnings: [] };
   };
 
-  const validateScenarios = (data) => {
+  // contentChecks=false 只檢查結構（物件、ID 唯一）；載入工作區時用，
+  // 因為編輯中的情境本來就可能暫時不合法（例如先改退休年齡再改目前年齡），
+  // 若連內容一起當成致命錯誤，整份工作區（含自訂情境）會在重新載入時被丟棄。
+  const validateScenarios = (data, { contentChecks = true } = {}) => {
     const errors = [];
     if (!data || !Array.isArray(data.scenarios) || data.scenarios.length === 0) return { valid: false, errors: [error('scenarios', 'INVALID_SCENARIOS', '試算情境必須是非空陣列')], warnings: [] };
     const ids = new Set();
     data.scenarios.forEach((s, i) => {
-      const checked = validateScenario(s, `scenarios[${i}]`);
-      errors.push(...checked.errors);
+      if (contentChecks) errors.push(...validateScenario(s, `scenarios[${i}]`).errors);
+      else if (!s || typeof s !== 'object') errors.push(error(`scenarios[${i}]`, 'INVALID_SCENARIO', '情境必須是物件'));
+      else if (typeof s.scenarioId !== 'string' || !s.scenarioId) errors.push(error(`scenarios[${i}].scenarioId`, 'MISSING_ID', '情境缺少 scenarioId'));
       if (s?.scenarioId && ids.has(s.scenarioId)) errors.push(error(`scenarios[${i}].scenarioId`, 'DUPLICATE_ID', `情境 ID 重複：${s.scenarioId}`));
       else if (s?.scenarioId) ids.add(s.scenarioId);
     });
@@ -175,12 +180,12 @@ const Validation = (() => {
     return { valid: errors.length === 0, errors, warnings: [] };
   };
 
-  const validateWorkspace = (data) => {
+  const validateWorkspace = (data, { scenarioContentChecks = true } = {}) => {
     const errors = [];
     if (!data || typeof data !== "object" || !data.config || !data.ledger || !Array.isArray(data.scenarios)) return { valid: false, errors: [error("", "INVALID_WORKSPACE", "工作區缺少設定、帳本或情境")], warnings: [] };
     errors.push(...validateQuickPlan(data.config.quickPlan || {}).errors);
     errors.push(...validateLedger(data.ledger).errors);
-    errors.push(...validateScenarios({ scenarios: data.scenarios }).errors);
+    errors.push(...validateScenarios({ scenarios: data.scenarios }, { contentChecks: scenarioContentChecks }).errors);
     const profiles = Array.isArray(data.config.accountProfiles) ? data.config.accountProfiles : [];
     const accountIds = new Set();
     const accountKeys = new Set();
@@ -211,6 +216,30 @@ const Validation = (() => {
     return { valid: errors.length === 0, errors, warnings: [] };
   };
 
+  // 載入前修復「可安全自動修正」的欄位，避免單一欄位讓整份工作區被拒絕：
+  // 首頁情境設定指向已不存在的情境或空白月份 → 移除該筆（畫面會回退到健檢目標月份）；
+  // 快速健檢的不合法欄位 → 換回預設值。會直接修改 data，回傳修正筆數。
+  const repairWorkspace = (data, defaults) => {
+    let repaired = 0;
+    if (!data || typeof data !== 'object' || !data.config || !Array.isArray(data.scenarios)) return repaired;
+    const scenarioIds = new Set(data.scenarios.map(s => s?.scenarioId).filter(Boolean));
+    const dashboard = data.config.dashboard || {};
+    for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) {
+      const map = dashboard[key];
+      if (!map || typeof map !== 'object') continue;
+      Object.keys(map).forEach((id) => {
+        if (scenarioIds.has(id) && (key !== 'scenarioTargetMonths' || isValidMonth(map[id]))) return;
+        delete map[id]; repaired++;
+      });
+    }
+    const repairFields = (target, fallback, errors) => errors.forEach(({ path }) => {
+      if (!target || !fallback || !Object.prototype.hasOwnProperty.call(fallback, path)) return;
+      target[path] = structuredClone(fallback[path]); repaired++;
+    });
+    if (data.config.quickPlan) repairFields(data.config.quickPlan, defaults?.quickPlan, validateQuickPlan(data.config.quickPlan).errors);
+    return repaired;
+  };
+
   const validateImported = (data, kind) => {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return { valid: false, errors: [error('', 'INVALID_ROOT', 'JSON 根節點必須是物件')], warnings: [] };
     if (!integer(data.schemaVersion)) return { valid: false, errors: [error('schemaVersion', 'MISSING_VERSION', '資料缺少整數 schemaVersion')], warnings: [] };
@@ -218,5 +247,5 @@ const Validation = (() => {
     return { valid: true, errors: [], warnings: [] };
   };
 
-  return { finite, isValidDate, isValidMonth, normalizeScenario, validateQuickPlan, validateLedger, validateScenario, validateScenarios, validateWage, validateRecurringFlows, validateWorkspace, validateImported };
+  return { finite, isValidDate, isValidMonth, normalizeScenario, validateQuickPlan, validateLedger, validateScenario, validateScenarios, validateWage, validateRecurringFlows, validateWorkspace, repairWorkspace, validateImported };
 })();
