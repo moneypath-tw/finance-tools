@@ -130,8 +130,12 @@ const App = (() => {
     const first = config.accountProfiles[0]?.id || null;
     config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {} });
     for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
-    for (const key of ['livingAccountId', 'fixedExpenseAccountId', 'emergencyAccountId']) {
-      if (!config.accountProfiles.some(a => a.id === config.dashboard[key])) config.dashboard[key] = first;
+    const valid = (id) => config.accountProfiles.some(a => a.id === id);
+    for (const { key, field, fallback } of ALLOCATION_PURPOSES) {
+      if (valid(config.dashboard[field])) continue;
+      // 一般儲蓄沿用改版前的預設：有固定儲蓄就用它轉入的帳戶，否則跟緊急預備金同帳戶
+      const fromFlow = key === 'saving' ? (config.recurringCashFlows || []).find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
+      config.dashboard[field] = [fromFlow, fallback && config.dashboard[fallback]].find(valid) || first;
     }
     if (!Array.isArray(config.dashboard.summaryCards)) config.dashboard.summaryCards = structuredClone(DEFAULT_CONFIG.dashboard.summaryCards);
     config.dashboard.summaryCards = config.dashboard.summaryCards.filter(card => card && typeof card === 'object').map((card, index) => ({
@@ -277,9 +281,10 @@ const App = (() => {
     const emergencyBalanceCents = Math.max(0, balances[emergencyAccountId] || 0);
     const emergencyGapCents = Math.max(0, emergencyTargetCents - emergencyBalanceCents);
     const rawEmergencyMonthly = Math.ceil(emergencyGapCents / 12);
+    // 固定儲蓄轉入緊急預備金帳戶時算進緊急預備金；一般儲蓄的搭配帳戶在「必備分配帳戶」自選
     const savingsFlow = recurring.items.find(f => f.type === 'saving');
-    const savingsAccountId = savingsFlow?.accountId || emergencyAccountId;
-    const sameAccount = savingsAccountId === emergencyAccountId;
+    const sameAccount = (savingsFlow?.accountId || emergencyAccountId) === emergencyAccountId;
+    const savingsAccountId = config.dashboard.savingAccountId || emergencyAccountId;
     const emergencyMonthlyCents = sameAccount ? Math.max(rawEmergencyMonthly, recurring.fixedSavingCents) : rawEmergencyMonthly;
     const goals = Planning.poolGoalSavings(selectedGoals(now), balances, { [emergencyAccountId]: emergencyTargetCents });
     const goalMonthlyCents = goals.reduce((s, g) => s + g.monthlyRequiredCents, 0);
@@ -535,9 +540,9 @@ const App = (() => {
     const requiredSettings = el('details', { class: 'compact-settings' }, [
       el('summary', { text: '必備分配帳戶' }),
       el('div', { class: 'toolbar' }, [
-        el('label', {}, [document.createTextNode('基本生活　'), accountSelect(config.dashboard.livingAccountId, e => { config.dashboard.livingAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]),
-        el('label', {}, [document.createTextNode('固定支出　'), accountSelect(config.dashboard.fixedExpenseAccountId, e => { config.dashboard.fixedExpenseAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]),
-        el('label', {}, [document.createTextNode('緊急預備金　'), accountSelect(config.dashboard.emergencyAccountId, e => { config.dashboard.emergencyAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])
+        // 每個分配用途（含之後新增的）都列出來；已選的成本目標也在這裡，跟「選擇成本目標」存同一個設定
+        ...ALLOCATION_PURPOSES.map(p => el('label', {}, [document.createTextNode(`${p.label}　`), accountSelect(config.dashboard[p.field], e => { config.dashboard[p.field] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])),
+        ...goals.map(g => el('label', {}, [document.createTextNode(`${g.label}（成本目標）　`), accountSelect(g.accountId, e => { config.dashboard.scenarioAccountMap[g.key] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]))
       ])
     ]);
     const optionalGoals = el('details', { class: 'compact-settings' }, [

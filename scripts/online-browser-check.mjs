@@ -203,6 +203,11 @@ try {
   const c = home.cards;
   check('health form: 必要支出 auto-filled from essential fixed expenses', home.shown === home.essential && home.essential > 0, JSON.stringify(home));
   check('summary cards: 月度餘裕 = 月收入 − 固定支出 − 生活開銷 − 應儲蓄', c['月度餘裕'] === c['月收入'] - c['固定支出'] - home.living - c['應儲蓄'], JSON.stringify(home));
+  // every allocation purpose (incl. 一般儲蓄) gets its own account picker under 必備分配帳戶, and the choice is saved
+  const pickers = await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); return d ? [...d.querySelectorAll('label')].map(l => l.firstChild.textContent.trim()) : []; })()`);
+  await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '一般儲蓄').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  const savingPick = await evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.dashboard.savingAccountId`);
+  check('必備分配帳戶 lists every purpose incl. 一般儲蓄, and the pick is saved', ['固定支出', '基本生活需求', '緊急預備金', '一般儲蓄'].every(x => pickers.includes(x)) && savingPick === 'probe-1', JSON.stringify({ pickers, savingPick }));
   // turning a fixed item off mid-month removes its projected entry for this month; turning it back on restores it
   const toggleFixed = () => evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.trim() === '啟用').querySelector('input'); box.click(); return true; })()`);
   const hasFixedEntry = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.some(e => e.id === ${JSON.stringify(`recurring-${fixedFlow?.id}-${nowYm}`)})`);

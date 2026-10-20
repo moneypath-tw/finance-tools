@@ -69,6 +69,15 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_LEDGER = { schemaVersion: 2, entries: [] };
 
+// 首頁分配用途（依分配先後）：新增用途只要加在這裡，「必備分配帳戶」選單、帳戶檢查與修復都會自動帶到
+// field＝dashboard 上存搭配帳戶的欄位；尚未選過時用 fallback 欄位的帳戶，沒有 fallback 就用第一個帳戶
+const ALLOCATION_PURPOSES = [
+  { key: 'fixed', label: '固定支出', field: 'fixedExpenseAccountId' },
+  { key: 'living', label: '基本生活需求', field: 'livingAccountId' },
+  { key: 'emergency', label: '緊急預備金', field: 'emergencyAccountId' },
+  { key: 'saving', label: '一般儲蓄', field: 'savingAccountId', fallback: 'emergencyAccountId' }
+];
+
 // [反推] 買房費用情境：數字取自原表「買房費用（估計）」欄，公式已用「通膨後總額」「貸後金額」交叉驗證
 const SCENARIO_BUY_HOUSE = {
   schemaVersion: 2,

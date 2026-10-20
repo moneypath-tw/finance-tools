@@ -11,7 +11,7 @@ vm.createContext(ctx);
 for (const rel of ['shared/reference-data.js','shared/config.js','shared/validation.js','shared/planning.js','shared/money.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, rel), 'utf8'), ctx, { filename: rel });
 }
-const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS})', ctx);
+const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
 
 test('官方通膨快照包含來源與日期', () => {
   assert.ok(api.REFERENCE_DATA.twInflation.sourceUrl.startsWith('https://'));
@@ -734,4 +734,19 @@ test('固定支出：可跟房租一樣選繳款週期，只在繳款月付每�
   assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payCycleMonths: 1, payStartMonth: undefined }]).valid, true);
   assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payCycleMonths: 4 }]).valid, false);
   assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payStartMonth: '' }]).valid, false);
+});
+
+test('分配用途集中登記：每個必備用途都有搭配帳戶欄位，帳戶不存在時驗證會擋、修復會改回', () => {
+  const P = Array.from(api.ALLOCATION_PURPOSES);
+  assert.deepEqual(P.map(p => p.key), ['fixed', 'living', 'emergency', 'saving']);
+  assert.equal(new Set(P.map(p => p.field)).size, P.length);
+  const result = api.Planning.allocateMonthly({ incomeCents: 9000000, livingCents: 1, fixedExpenseCents: 1, emergencyMonthlyCents: 1, savingCents: 1, savingsAccountId: 'save' });
+  for (const row of result.rows.filter(r => r.required)) assert.equal(row.label, P.find(p => p.key === row.key).label);
+  assert.equal(result.rows.find(r => r.key === 'saving').accountId, 'save');
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.dashboard.savingAccountId = 'gone';
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) };
+  assert.ok(api.Validation.validateWorkspace(workspace).errors.some(e => e.path === 'config.dashboard.savingAccountId'));
+  api.Validation.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  assert.equal(workspace.config.dashboard.savingAccountId, config.accountProfiles[0].id);
 });

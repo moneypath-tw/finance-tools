@@ -39,11 +39,17 @@ const Planning = (() => {
       remaining -= allocated;
       rows.push({ key, label, requestedCents: requested, allocatedCents: allocated, shortfallCents: requested - allocated, accountId, required, ...extra });
     };
+    // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
+    const label = (key) => {
+      const purpose = ALLOCATION_PURPOSES.find(p => p.key === key);
+      if (!purpose) throw new Error(`分配用途 ${key} 未登記在 ALLOCATION_PURPOSES`);
+      return purpose.label;
+    };
     // 固定支出是已約定的款項（房租、保費、貸款），收入不足時要先付，再分生活費
-    assign('fixed', '固定支出', fixedExpenseCents, fixedExpenseAccountId, true);
-    assign('living', '基本生活需求', livingCents, livingAccountId, true);
-    assign('emergency', '緊急預備金', emergencyMonthlyCents ?? Math.ceil(Math.max(0, emergencyGapCents || 0) / 12), emergencyAccountId, true);
-    if (savingCents > 0) assign('saving', '一般儲蓄', savingCents, savingsAccountId, true);
+    assign('fixed', label('fixed'), fixedExpenseCents, fixedExpenseAccountId, true);
+    assign('living', label('living'), livingCents, livingAccountId, true);
+    assign('emergency', label('emergency'), emergencyMonthlyCents ?? Math.ceil(Math.max(0, emergencyGapCents || 0) / 12), emergencyAccountId, true);
+    if (savingCents > 0) assign('saving', label('saving'), savingCents, savingsAccountId, true);
     [...goals].sort((a, b) => (a.months || Infinity) - (b.months || Infinity)).forEach(g => {
       const requested = g.monthlyRequiredCents ?? Math.ceil(Math.max(0, g.gapCents || 0) / Math.max(1, g.months || 1));
       assign(g.key, g.label, requested, g.accountId, false, g);
