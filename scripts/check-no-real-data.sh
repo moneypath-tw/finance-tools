@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# check-no-real-data.sh — 擋下真實財務資料（帳本、設定、試算匯出）進入公開倉庫；sample-data/*.sample.json 除外。
+# Usage: bash scripts/check-no-real-data.sh [--staged]
+#   --staged 只查暫存區（hooks/pre-commit 用）；不帶參數查整個工作目錄（CI 用）。Exit 1 = 發現疑似真實資料。
 set -euo pipefail
 
 blocked=0

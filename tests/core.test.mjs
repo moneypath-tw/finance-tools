@@ -569,3 +569,11 @@ test('補預設值不可換掉已綁定在畫面上的物件（改用 fillDefaul
   assert.equal(bound.paymentDay, 9);
   assert.equal(bound.reserveMonths, 6);
 });
+
+test('commit 前隱私掃描確實會被 git 執行（hook 檔名必須是 pre-commit）', () => {
+  // 2026-10-20：hook 原名 check-no-real-data.sh，git 從不執行，只剩 CI 一道防線
+  const hook = path.join(root, 'hooks', 'pre-commit');
+  assert.ok(fs.existsSync(hook));
+  assert.match(fs.readFileSync(hook, 'utf8'), /bash scripts\/check-no-real-data\.sh --staged/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'hooks')), ['pre-commit']);
+});
