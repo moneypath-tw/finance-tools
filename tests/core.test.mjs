@@ -554,3 +554,26 @@ test('離線快取只處理本站 GET，不快取跨站或錯誤回應', () => {
   assert.match(sw, /response\.ok && response\.type === 'basic'/);
   assert.ok(!/localStorage|indexedDB/.test(sw.replace(/^\/\/.*$/gm, '')));
 });
+
+test('補預設值不可換掉已綁定在畫面上的物件（改用 fillDefaults 就地補值）', () => {
+  // 2026-10-20：ensureMortgageSettings 等每次呼叫都用 { ...預設, ...(舊 || {}) } 換成新物件，
+  // 輸入框仍綁著舊物件，修改寫進沒人讀的物件，房貸／學貸欄位改了立刻跳回預設值
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const offenders = [...src.matchAll(/^\s*((?:scenario|config|settings|s)\.[\w.]+)\s*=\s*\{[\s\S]{0,400}?\.\.\.\(\1 \|\| \{\}\)/gm)].map((m) => m[1]);
+  assert.deepEqual(offenders, []);
+  const ctx2 = { console };
+  vm.createContext(ctx2);
+  const fill = vm.runInContext(`(${src.match(/const fillDefaults = (\(target, defaults\) => \{[\s\S]*?\n  \});/)[1]})`, ctx2);
+  const bound = { paymentDay: 9 };
+  assert.equal(fill(bound, { paymentDay: 5, reserveMonths: 6 }), bound);
+  assert.equal(bound.paymentDay, 9);
+  assert.equal(bound.reserveMonths, 6);
+});
+
+test('commit 前隱私掃描確實會被 git 執行（hook 檔名必須是 pre-commit）', () => {
+  // 2026-10-20：hook 原名 check-no-real-data.sh，git 從不執行，只剩 CI 一道防線
+  const hook = path.join(root, 'hooks', 'pre-commit');
+  assert.ok(fs.existsSync(hook));
+  assert.match(fs.readFileSync(hook, 'utf8'), /bash scripts\/check-no-real-data\.sh --staged/);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'hooks')), ['pre-commit']);
+});

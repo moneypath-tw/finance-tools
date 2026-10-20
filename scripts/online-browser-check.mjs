@@ -72,7 +72,62 @@ try {
   check('offline reload renders the app', offlineOk);
   await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 
-  // 4. framing: a page that embeds the app gets replaced by the app itself
+  // 4. estimator: type into every number field like a person (real key events), press Enter, reload.
+  //    2026-10-20: mortgage / student-loan fields snapped back to defaults because a helper replaced
+  //    the settings object the inputs were bound to; a JS-only value change would not have caught it.
+  // fields are found by their label: an edit can add or remove other fields and shift positions
+  const labelOf = `(x) => (x.closest('.field')?.querySelector('label')?.textContent || x.closest('tr')?.querySelector('input[type=text]')?.value || '?').trim()`;
+  const fields = `(() => { const seen = {}; return [...document.querySelectorAll('#estimator-body input[type=number]')].map(x => { const l = (${labelOf})(x); seen[l] = (seen[l] || 0) + 1; x.dataset.probeKey = l + '#' + seen[l]; return x; }); })()`;
+  const byKey = (k) => `(${fields}).find(x => x.dataset.probeKey === ${JSON.stringify(k)})`;
+  const pickScenario = (id) => evaluate(`(() => { const s = document.querySelector('#scenario-select'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  const typeInto = async (index, text, { enter = true } = {}) => {
+    const ok = await evaluate(`(() => { const x = ${typeof index === 'string' ? byKey(index) : `${fields}[${index}]`}; if (!x || x.disabled || x.offsetParent === null) return false; x.closest('details')?.setAttribute('open', ''); x.focus(); x.select(); return document.activeElement === x; })()`);
+    if (!ok) return false;
+    await send('Input.insertText', { text });
+    if (enter) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    }
+    await sleep(60);
+    return true;
+  };
+  // a plausible new value next to the current one, so validation keeps the scenario usable
+  const nudge = (v) => { const n = Number(v); if (!Number.isFinite(n)) return '1'; if (n > 0 && n < 1) return String(Math.round((n + 0.001) * 100000) / 100000); return String(Math.trunc(n) + 1); };
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=estimator]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); true`);
+  const scenarioIds = await evaluate(`[...document.querySelector('#scenario-select').options].map(o => o.value)`);
+  const expected = [];
+  for (const id of scenarioIds) {
+    await pickScenario(id); await sleep(80);
+    const keys = await evaluate(`${fields}.map(x => x.dataset.probeKey)`);
+    for (const i of keys) {
+      const before = await evaluate(`${byKey(i)}?.value`);
+      const want = nudge(before);
+      if (!(await typeInto(i, want))) continue;
+      const shown = await evaluate(`${byKey(i)}?.value`);
+      expected.push({ id, i, want, shown });
+    }
+  }
+  // the last edit is typed but never confirmed: leaving the page must still keep it
+  await pickScenario(scenarioIds[0]); await sleep(80);
+  const lastKey = await evaluate(`${fields}[0]?.dataset.probeKey`);
+  const lastBefore = await evaluate(`${byKey(lastKey)}?.value`);
+  const lastWant = String(Number(lastBefore) + 2);
+  await typeInto(lastKey, lastWant, { enter: false });
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=estimator]').click(); true`);
+  const lost = [];
+  for (const id of scenarioIds) {
+    await pickScenario(id); await sleep(80);
+    const values = await evaluate(`Object.fromEntries(${fields}.map(x => [x.dataset.probeKey, x.value]))`);
+    for (const e of expected.filter((x) => x.id === id && !(x.id === scenarioIds[0] && x.i === lastKey))) {
+      if (e.shown !== e.want || values[e.i] !== e.want) lost.push(`${id}#${e.i} want ${e.want} shown ${e.shown} reload ${values[e.i]}`);
+    }
+    if (id === scenarioIds[0] && values[lastKey] !== lastWant) lost.push(`${id} ${lastKey} unconfirmed edit: want ${lastWant} reload ${values[lastKey]}`);
+  }
+  check(`estimator: ${expected.length} typed fields kept after Enter and reload`, expected.length > 20 && lost.length === 0, lost.slice(0, 6).join(' | '));
+
+  // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);
   await sleep(2500);

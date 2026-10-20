@@ -85,6 +85,13 @@ const App = (() => {
     ]);
   };
   const accountNatures = { checking: '活存／收支', savings: '儲蓄', cash: '現金', investment: '投資', credit: '信用／負債', earmarked: '專款' };
+  // 補上缺少的預設值，但保留同一個物件：畫面上的輸入框綁的是這個物件，若換成新物件，
+  // 之後的修改會寫進沒人再讀的舊物件（2026-10-20：房貸、學貸欄位改了立刻跳回預設值）
+  const fillDefaults = (target, defaults) => {
+    const obj = target && typeof target === 'object' && !Array.isArray(target) ? target : {};
+    for (const [k, v] of Object.entries(defaults)) if (obj[k] === undefined) obj[k] = v;
+    return obj;
+  };
   const ensureAccountProfiles = () => {
     if (!Array.isArray(config.accountProfiles) || !config.accountProfiles.length) {
       const legacy = Array.isArray(config.accounts) ? config.accounts : [];
@@ -114,7 +121,7 @@ const App = (() => {
   const recurringKinds = { salary: '正職薪資', part_time: '兼職薪資', freelance: '接案收入', other_income: '其他收入', fixed_expense: '固定支出' };
   const ensureDashboard = () => {
     const first = config.accountProfiles[0]?.id || null;
-    config.dashboard = { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {}, ...(config.dashboard || {}) };
+    config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {} });
     for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
     for (const key of ['livingAccountId', 'fixedExpenseAccountId', 'emergencyAccountId']) {
       if (!config.accountProfiles.some(a => a.id === config.dashboard[key])) config.dashboard[key] = first;
@@ -154,12 +161,11 @@ const App = (() => {
 
   const ensureStudentLoanRepayment = (scenario) => {
     const ref = REFERENCE_DATA.twStudentLoan;
-    scenario.repayment = {
+    scenario.repayment = fillDefaults(scenario.repayment, {
       graduationAge: 22, graceYears: ref.standardGraceYears, annualRate: ref.borrowerAnnualRate,
       termPlan: 'standard', includeAsFixedExpense: false, paymentDay: 5, accountId: '',
-      principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
-      ...(scenario.repayment || {})
-    };
+      principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3
+    });
     ensureAccountProfiles(); ensureDashboard();
     if (!config.accountProfiles.some(a => a.id === scenario.repayment.accountId)) scenario.repayment.accountId = config.dashboard.fixedExpenseAccountId || config.accountProfiles[0]?.id || '';
     return scenario.repayment;
@@ -191,11 +197,11 @@ const App = (() => {
   };
   const ensureMortgageSettings = (scenario) => {
     const ref = REFERENCE_DATA.twMortgage;
-    scenario.mortgage = {
+    scenario.mortgage = fillDefaults(scenario.mortgage, {
       purchaseAge: 30, annualRate: ref.referenceAnnualRate, termYears: ref.referenceTermYears, graceYears: 0,
       principalMode: 'estimated', manualPrincipalCents: 0, includeAsFixedExpense: false,
-      paymentDay: 5, accountId: '', reserveMonths: 6, loanPosition: 'first_home', ...(scenario.mortgage || {})
-    };
+      paymentDay: 5, accountId: '', reserveMonths: 6, loanPosition: 'first_home'
+    });
     ensureAccountProfiles(); ensureDashboard();
     if (!config.accountProfiles.some(a => a.id === scenario.mortgage.accountId)) scenario.mortgage.accountId = config.dashboard.fixedExpenseAccountId || config.accountProfiles[0]?.id || '';
     return scenario.mortgage;
@@ -331,6 +337,11 @@ const App = (() => {
     return node;
   };
   const empty = () => document.createDocumentFragment();
+  // 數字輸入欄位的唯一建構處；className 只決定排版（個人設定 'field'、成本試算 'field estimator-field'）
+  const numberField = (label, value, onchange, className) => el('div', { class: className }, [
+    el('label', { text: label }),
+    el('input', { type: 'number', class: 'mono', value, onchange: (ev) => onchange(Number(ev.target.value)) })
+  ]);
 
   // ---------- 全站檢視模式 ----------
   const normalizeViewMode = () => {
@@ -955,10 +966,7 @@ const App = (() => {
     if (!box) return;
     ensureAccountProfiles();
     box.innerHTML = '';
-    const numField = (label, value, onchange) => el('div', { class: 'field' }, [
-      el('label', { text: label }),
-      el('input', { type: 'number', class: 'mono', value, onchange: (ev) => onchange(Number(ev.target.value)) })
-    ]);
+    const numField = (label, value, onchange) => numberField(label, value, onchange, 'field');
     const accountRows = config.accountProfiles.map((account) => {
       const used = ledger.entries.some(e => e.account === account.id || e.account === account.name || e.fromAccount === account.id || e.toAccount === account.id) || (config.recurringCashFlows || []).some(f => f.accountId === account.id || f.fromAccountId === account.id);
       return el('div', { class: 'toolbar account-row' }, [
@@ -1439,10 +1447,7 @@ const App = (() => {
     );
   };
 
-  const numField = (label, value, onchange) => el('div', { class: 'field estimator-field' }, [
-    el('label', { text: label }),
-    el('input', { type: 'number', class: 'mono', value, onchange: (ev) => onchange(Number(ev.target.value)) })
-  ]);
+  const numField = (label, value, onchange) => numberField(label, value, onchange, 'field estimator-field');
 
   const renderRetirementFundScenario = (scenario) => {
     const root = $('#estimator-body');
@@ -1808,8 +1813,21 @@ const App = (() => {
     });
   };
 
+  // 輸入框按 Enter 就確認並保存：移開焦點會觸發瀏覽器原生的 change（只觸發一次，各瀏覽器一致）。
+  // 中文輸入法選字時的 Enter（isComposing）不能攔，否則選不了字。
+  const initEnterToCommit = () => {
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+      const t = ev.target;
+      if (!(t instanceof HTMLInputElement) || ['button', 'submit', 'checkbox', 'radio', 'file'].includes(t.type)) return;
+      ev.preventDefault();
+      t.blur();
+    });
+  };
+
   const init = () => {
     IO.configurePersistence(workspaceSnapshot, updateStorageStatus);
+    initEnterToCommit();
     const saved = IO.loadWorkspace();
     if (saved && !restoreWorkspace(saved)) {
       // 不能靜默改用預設值：下一次自動保存就會覆寫使用者原本的資料

@@ -176,6 +176,8 @@ const IO = (() => {
     const now = Date.now();
     if (now - lastLifecycleFlushAt < 500) return;
     lastLifecycleFlushAt = now;
+    // 正在輸入但還沒移開焦點的欄位不會觸發 change；先移開焦點，讓它的修改先寫入再保存
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur?.();
     clearTimeout(historyTimer);
     clearTimeout(fileSaveTimer);
     // 每次修改已立即寫入；只有寫入失敗（dirty）才需要重寫，否則切換分頁也會觸發其他分頁的 storage 事件

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-no-real-data.sh — commit 前防護：阻擋真實財務資料誤入公開倉庫
+# pre-commit — commit 前防護（git 只執行這個檔名；2026-08 起原名 check-no-real-data.sh 從未被執行）：阻擋真實財務資料誤入公開倉庫
 # 啟用方式（只需執行一次）：git config core.hooksPath hooks
 
 set -e
