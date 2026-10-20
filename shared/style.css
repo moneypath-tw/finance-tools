@@ -314,6 +314,40 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .linked-note { margin: 4px 0 16px; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.86rem; }
 details > summary { cursor: pointer; padding: 5px 0; font-weight: 600; }
 
+/* 固定項目卡片：收合時一行看懂（名稱・方式・每月金額・下次繳款），展開才編輯 */
+.flow-card { padding: 0; }
+.flow-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 14px 18px; list-style-position: inside; }
+.flow-name { font-weight: 700; }
+.flow-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.8rem; font-weight: 600; }
+.flow-amount { margin-left: auto; font-weight: 700; }
+.flow-amount.negative { color: var(--negative); }
+.flow-amount.positive { color: var(--accent-strong); }
+.flow-next { flex-basis: 100%; color: var(--ink-soft); font-size: 0.82rem; font-weight: normal; }
+.flow-body { padding: 0 18px 16px; }
+.flow-sub { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 10px; }
+.flow-result, .income-result { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 0.88rem; }
+.flow-result p, .income-result p { margin: 2px 0; }
+.basis-picker { display: inline-flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.basis-option { display: inline-flex; flex-direction: column; padding: 6px 12px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; cursor: pointer; font-size: 0.85rem; }
+.basis-option input { position: absolute; opacity: 0; pointer-events: none; }
+.basis-option span { color: var(--ink-soft); font-size: 0.75rem; }
+.basis-option.active { border-color: var(--accent); background: var(--accent-soft); }
+.basis-option:focus-within { outline: 3px solid rgba(39, 107, 82, 0.25); }
+.income-fields { display: flex; flex-wrap: wrap; }
+.income-field small { margin-top: 2px; color: var(--ink-soft); font-size: 0.75rem; }
+.input-unit { display: flex; align-items: center; gap: 6px; }
+.input-unit input { width: 120px; }
+.input-unit span { color: var(--ink-soft); font-size: 0.8rem; white-space: nowrap; }
+.income-formula { font-family: var(--mono); overflow-wrap: anywhere; }
+.income-net strong { font-size: 1.1rem; color: var(--accent-strong); }
+.income-sub, .income-hint { color: var(--ink-soft); font-size: 0.8rem; }
+.income-hint { margin: 4px 0 0; }
+.big-check { margin-right: 12px; }
+.bracket-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.pay-schedule { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.pay-chip { padding: 2px 8px; border: 1px solid var(--rule); border-radius: 7px; background: #fff; font-size: 0.8rem; }
+.fee-row { align-items: center; }
+
 footer.io-bar {
   max-width: 1224px;
   margin: 24px auto 0;
@@ -344,6 +378,7 @@ footer.io-bar span { color: var(--ink-soft); font-size: 0.85rem; }
   .dashboard-card { width: 100%; max-width: 100%; overflow: hidden; contain: inline-size; }
   #allocation-dashboard { width: 100%; max-width: 100%; overflow: hidden; }
   .health-grid { grid-template-columns: 1fr; }
+  .flow-amount { margin-left: 0; }
   .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-card-setting-row { grid-template-columns: 1fr; align-items: stretch; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
   .goal-picker { grid-template-columns: 1fr; }

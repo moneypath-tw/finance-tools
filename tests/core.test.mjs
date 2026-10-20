@@ -159,6 +159,90 @@ test('工時反推可直接沿用固定收入的工資、工時與保險設定',
   assert.equal(linked.insuredSalaryCents, 4800000);
 });
 
+test('時薪兼職：月總收入 = 時薪 × 工時，勞健保依固定投保級距', () => {
+  const rates = api.DEFAULT_CONFIG.insuranceRates;
+  const flow = { id: 'pt', type: 'income', payBasis: 'hourly', hourlyRateCents: 19600, monthlyWorkHours: 80, amountCents: 1568000, applyInsurance: true, insuredSalaryFollowsGross: false, insuredSalaryCents: 1110000, dayOfMonth: 5, accountId: 'bank' };
+  const income = api.Money.deriveIncome(flow);
+  assert.equal(income.grossCents, 1568000);
+  assert.equal(income.hourlyRateCents, 19600);
+  const item = api.Money.calcRecurringMonthly([flow], rates).items[0];
+  const fees = api.Money.grossToNet(1568000, 1110000, rates);
+  assert.equal(item.netCents, fees.net);
+  // 工時加倍，保費不變（級距固定）
+  const doubled = api.Money.calcRecurringMonthly([{ ...flow, monthlyWorkHours: 160 }], rates).items[0];
+  assert.equal(doubled.payroll.laborFee, item.payroll.laborFee);
+  assert.equal(doubled.grossCents, 3136000);
+  assert.equal(api.Validation.validateRecurringFlows([flow]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, monthlyWorkHours: 0 }]).valid, true);
+});
+
+test('接案：月總收入 = 案件數 × 每件報酬，可按案件時薪或固定每件價', () => {
+  const byHour = { id: 'fl', type: 'income', payBasis: 'per_case', caseCount: 4, hoursPerCase: 3, caseFeeMode: 'hourly', hourlyRateCents: 100000, monthlyWorkHours: 0, amountCents: 0, applyInsurance: false, dayOfMonth: 15, accountId: 'bank' };
+  const a = api.Money.deriveIncome(byHour);
+  assert.equal(a.caseFeeCents, 300000);
+  assert.equal(a.grossCents, 1200000);
+  assert.equal(a.monthlyWorkHours, 12);
+  const fixed = { ...byHour, caseFeeMode: 'fixed', caseFeeCents: 500000, hourlyRateCents: undefined };
+  const b = api.Money.deriveIncome(fixed);
+  assert.equal(b.grossCents, 2000000);
+  assert.equal(b.hourlyRateCents, 166667);
+  assert.equal(api.Money.calcRecurringMonthly([fixed], api.DEFAULT_CONFIG.insuranceRates).incomeCents, 2000000);
+  assert.equal(api.Validation.validateRecurringFlows([byHour]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([fixed]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...byHour, hoursPerCase: 0 }]).valid, false);
+  // 當月沒接案時工時反推仍有正工時與時薪
+  const wage = api.Money.wageSettingsFromIncome({ ...byHour, caseCount: 0 });
+  assert.equal(wage.baseRateCentsPerHour, 100000);
+  assert.ok(wage.monthlyWorkHours > 0 && wage.grossMonthlySalaryCents > 0);
+});
+
+test('未設定計薪方式的舊資料仍視為固定月薪', () => {
+  const legacy = { type: 'income', amountCents: 4800000, monthlyWorkHours: 120 };
+  assert.deepEqual({ ...api.Money.deriveIncome(legacy) }, { payBasis: 'monthly', grossCents: 4800000, monthlyWorkHours: 120, hourlyRateCents: 40000 });
+  assert.equal(api.Validation.validateRecurringFlows([{ ...legacy, id: 'x', dayOfMonth: 5, accountId: 'bank', monthlyWorkHours: 0 }]).valid, false);
+});
+
+const sampleHousing = () => ({
+  rentCents: 800000, payCycleMonths: 6, contractStart: '2026-01-31', contractEnd: '2027-08-01', occupants: 2,
+  fees: [{ name: '管理費', amountCents: 50000, perPerson: false }, { name: '網路費', amountCents: 20000, perPerson: true }],
+  electricity: { enabled: true, rateCentsPerKwh: 500, lastReading: 1000, lastReadingDate: '2026-09-01', currentReading: 1150, currentReadingDate: '2026-10-01' }
+});
+const PER_PAYMENT = (800000 + 50000 + 40000) * 6; // 網路費每人一份 × 2 人
+const BILL_TO_JAN = 5 * 152 * 500; // 每天 5 度，2026-09-01 → 2027-01-31 共 152 天
+
+test('租屋：半年繳房租、按人數費用與電表推估合成每月平均', () => {
+  const r = api.Money.calcHousing(sampleHousing());
+  assert.equal(r.feesCents, 90000);
+  assert.equal(r.perPaymentCents, PER_PAYMENT);
+  assert.equal(r.electricity.days, 30);
+  assert.equal(r.electricity.usedKwh, 150);
+  assert.equal(r.electricity.usedSoFarCents, 75000);
+  // 電費跟房租同一天結清：上次抄表後的第一個繳租日
+  assert.equal(r.electricity.nextSettleDate, '2027-01-31');
+  assert.equal(r.electricity.projectedBillCents, BILL_TO_JAN);
+  assert.equal(r.electricity.monthlyCents, Math.round(5 * 365 / 12 * 500));
+  assert.equal(r.monthlyCents, 800000 + 90000 + r.electricity.monthlyCents);
+});
+
+test('租屋：房租、費用、電費同一天繳；簽約日推出繳款日（月底夾日、到期日後停止）', () => {
+  const h = sampleHousing();
+  const elecMonthly = api.Money.calcHousing(h).electricity.monthlyCents;
+  const schedule = api.Money.housingPaymentSchedule(h, '2026-02-01', 6);
+  assert.deepEqual(Array.from(schedule, p => p.date), ['2026-07-31', '2027-01-31', '2027-07-31']);
+  assert.deepEqual(Array.from(schedule, p => p.cents), [PER_PAYMENT + elecMonthly * 6, PER_PAYMENT + BILL_TO_JAN, PER_PAYMENT + elecMonthly * 6]);
+  assert.deepEqual(Array.from(api.Money.housingPaymentSchedule({ ...h, payCycleMonths: 1 }, '2026-02-01', 2), p => p.date), ['2026-02-28', '2026-03-31']);
+  const due = (ym) => api.Money.housingDueInMonth(h, ym).totalCents;
+  assert.equal(due('2025-12'), 0);
+  assert.equal(due('2026-07'), PER_PAYMENT + elecMonthly * 6);
+  assert.equal(due('2026-08'), 0); // 非繳款月什麼都不用付
+  assert.equal(due('2027-01'), PER_PAYMENT + BILL_TO_JAN);
+  assert.equal(due('2028-01'), 0); // 租約到期
+  const flows = [{ id: 'home', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 31, accountId: 'bank', housing: h }];
+  assert.equal(api.Validation.validateRecurringFlows(flows).valid, true);
+  assert.equal(api.Money.calcRecurringMonthly(flows, api.DEFAULT_CONFIG.insuranceRates).essentialExpenseCents, api.Money.calcHousing(h).monthlyCents);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flows[0], housing: { ...h, payCycleMonths: 4 } }]).valid, false);
+});
+
 test('多帳戶分配先滿足生活、固定支出與緊急預備金', () => {
   const result = api.Planning.allocateMonthly({
     incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyGapCents: 1200000,

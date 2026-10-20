@@ -173,7 +173,34 @@ const Validation = (() => {
       if (!['income', 'expense', 'saving'].includes(f.type)) errors.push(error(`${p}.type`, 'INVALID_TYPE', '固定項目只能是收入、支出或儲蓄'));
       if (!integer(f.amountCents) || f.amountCents < 0) errors.push(error(`${p}.amountCents`, 'INVALID_MONEY', '固定金額必須是非負整數分'));
       if (!integer(f.dayOfMonth) || f.dayOfMonth < 1 || f.dayOfMonth > 31) errors.push(error(`${p}.dayOfMonth`, 'INVALID_DAY', '固定日期須介於 1–31 日'));
-      if (f.type === 'income' && (!finite(f.monthlyWorkHours) || f.monthlyWorkHours <= 0)) errors.push(error(`${p}.monthlyWorkHours`, 'INVALID_HOURS', '收入來源的月工時必須大於 0'));
+      if (f.type === 'income') {
+        const basis = f.payBasis === undefined ? 'monthly' : f.payBasis;
+        const nonNeg = (v) => finite(v) && v >= 0;
+        if (!['monthly', 'hourly', 'per_case'].includes(basis)) errors.push(error(`${p}.payBasis`, 'INVALID_PAY_BASIS', '計薪方式只能是月薪、時薪或按件'));
+        // 時薪與按件的本月工時可以是 0（當月沒排班或沒接案）；月薪需要正工時才能換算時薪
+        if (basis === 'monthly' ? (!finite(f.monthlyWorkHours) || f.monthlyWorkHours <= 0) : !nonNeg(f.monthlyWorkHours)) errors.push(error(`${p}.monthlyWorkHours`, 'INVALID_HOURS', '收入來源的月工時不正確'));
+        if ((basis === 'hourly' || (basis === 'per_case' && f.caseFeeMode !== 'fixed')) && (!integer(f.hourlyRateCents) || f.hourlyRateCents < 0)) errors.push(error(`${p}.hourlyRateCents`, 'INVALID_RATE', '時薪必須是非負整數分'));
+        if (basis === 'per_case') {
+          if (!nonNeg(f.caseCount)) errors.push(error(`${p}.caseCount`, 'INVALID_CASE_COUNT', '案件數不可為負'));
+          if (!finite(f.hoursPerCase) || f.hoursPerCase <= 0) errors.push(error(`${p}.hoursPerCase`, 'INVALID_HOURS', '每件時數必須大於 0'));
+          if (f.caseFeeMode === 'fixed' && (!integer(f.caseFeeCents) || f.caseFeeCents < 0)) errors.push(error(`${p}.caseFeeCents`, 'INVALID_MONEY', '每件報酬必須是非負整數分'));
+        }
+      }
+      if (f.housing !== undefined) {
+        const h = f.housing, hp = `${p}.housing`;
+        const optDate = (v) => v === undefined || v === '' || isValidDate(v);
+        const nonNeg = (v) => v === undefined || (finite(v) && v >= 0);
+        if (!h || typeof h !== 'object') errors.push(error(hp, 'INVALID_HOUSING', '租屋設定必須是物件'));
+        else {
+          if (![1, 2, 3, 6, 12].includes(h.payCycleMonths)) errors.push(error(`${hp}.payCycleMonths`, 'INVALID_CYCLE', '繳租週期只能是 1、2、3、6、12 個月'));
+          if (!integer(h.rentCents) || h.rentCents < 0) errors.push(error(`${hp}.rentCents`, 'INVALID_MONEY', '月租必須是非負整數分'));
+          if (!integer(h.occupants) || h.occupants < 1) errors.push(error(`${hp}.occupants`, 'INVALID_OCCUPANTS', '同住人數至少 1 人'));
+          if (!optDate(h.contractStart) || !optDate(h.contractEnd)) errors.push(error(hp, 'INVALID_DATE', '租約日期格式不正確'));
+          if (!Array.isArray(h.fees) || h.fees.some(x => !x || !integer(x.amountCents) || x.amountCents < 0)) errors.push(error(`${hp}.fees`, 'INVALID_MONEY', '租屋費用金額必須是非負整數分'));
+          const e = h.electricity || {};
+          if (![e.rateCentsPerKwh, e.lastReading, e.currentReading, e.fallbackMonthlyKwh].every(nonNeg) || !optDate(e.lastReadingDate) || !optDate(e.currentReadingDate)) errors.push(error(`${hp}.electricity`, 'INVALID_ELECTRICITY', '電費設定的度數、單價或日期不正確'));
+        }
+      }
       if (typeof f.accountId !== 'string' || !f.accountId) errors.push(error(`${p}.accountId`, 'MISSING_ACCOUNT', '固定項目必須指定帳戶'));
       if (f.type === 'saving' && (typeof f.fromAccountId !== 'string' || !f.fromAccountId || f.fromAccountId === f.accountId)) errors.push(error(p, 'INVALID_SAVING_TRANSFER', '固定儲蓄必須指定兩個不同帳戶'));
     });

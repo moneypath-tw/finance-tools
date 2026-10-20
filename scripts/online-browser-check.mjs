@@ -28,6 +28,8 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-mp-'));
 const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws, seq = 0; const pending = new Map(); const events = [];
+// alert()/confirm() blocks every later CDP call; dismiss it and report it as a failure instead of hanging
+const dialogs = [];
 const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); ws.send(JSON.stringify({ id, method, params })); });
 const evaluate = async (expr) => { const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text); return r.result.value; };
 const results = [];
@@ -37,7 +39,7 @@ try {
   for (let i = 0; i < 50 && !target; i++) { await sleep(200); try { target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'); } catch {} }
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener('open', r));
-  ws.addEventListener('message', (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { const p = pending.get(d.id); pending.delete(d.id); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); } else if (d.method) events.push(d); });
+  ws.addEventListener('message', (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { const p = pending.get(d.id); pending.delete(d.id); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); } else if (d.method) { events.push(d); if (d.method === 'Page.javascriptDialogOpening') { dialogs.push(d.params.message); send('Page.handleJavaScriptDialog', { accept: true }); } } });
   await send('Runtime.enable'); await send('Page.enable'); await send('Network.enable');
   const go = async (url) => { await send('Page.navigate', { url }); await sleep(2500); };
 
@@ -126,6 +128,60 @@ try {
     if (id === scenarioIds[0] && values[lastKey] !== lastWant) lost.push(`${id} ${lastKey} unconfirmed edit: want ${lastWant} reload ${values[lastKey]}`);
   }
   check(`estimator: ${expected.length} typed fields kept after Enter and reload`, expected.length > 20 && lost.length === 0, lost.slice(0, 6).join(' | '));
+
+  // 4b. income cards: a saved monthly flow without payBasis (pre-2026-10-20 data) must keep its amount,
+  //     and a new hourly / per-case income typed like a person must derive gross = rate × hours / cases × fee
+  await go(`${base}/README.md`);
+  const legacyFlow = { id: 'legacy-job', name: '正職', type: 'income', kind: 'salary', amountCents: 3300000, monthlyWorkHours: 160, dayOfMonth: 5, accountId: 'probe-0', applyInsurance: true, insuredSalaryFollowsGross: true, active: true };
+  const withFlow = { ...envelope, config: { ...sampleConfig, accountProfiles: sampleConfig.accounts.map((name, i) => ({ id: `probe-${i}`, name, nature: 'checking', initialBalanceCents: 0 })), recurringCashFlows: [legacyFlow] } };
+  await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify(withFlow))}); true`);
+  events.length = 0;
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=ledger]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); true`);
+  const savedFlows = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.recurringCashFlows`);
+  const legacyText = await evaluate(`document.querySelector('#personal-settings .flow-card .income-formula')?.textContent || ''`);
+  check('legacy monthly income still shown as monthly salary', legacyText.includes('33,000') && legacyText.includes('160'), legacyText);
+  const incomeInput = (card, label) => `[...document.querySelectorAll('#personal-settings .flow-card')][${card}]?.querySelector('.field input[data-probe=${JSON.stringify(label)}]')`;
+  const tagInputs = `document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); document.querySelectorAll('#personal-settings .field').forEach(f => { const i = f.querySelector('input'); if (i) i.dataset.probe = f.querySelector('label').textContent.trim(); })`;
+  const typeIncome = async (card, label, text) => {
+    const ok = await evaluate(`(() => { ${tagInputs}; const x = ${incomeInput(card, label)}; if (!x) return false; x.closest('details')?.setAttribute('open', ''); x.focus(); x.select(); return document.activeElement === x; })()`);
+    if (!ok) return false;
+    await send('Input.insertText', { text });
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await evaluate(`document.activeElement?.blur(); true`);
+    await sleep(80);
+    return true;
+  };
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋時薪兼職').click(); true`);
+  const typedHourly = (await typeIncome(1, '時薪', '196')) && (await typeIncome(1, '這個月工作時數', '80'));
+  let flows = await savedFlows();
+  check('hourly income: 196 × 80 h = 15,680', typedHourly && flows[1]?.payBasis === 'hourly' && flows[1]?.amountCents === 1568000, JSON.stringify(flows[1]));
+  check('legacy income untouched by edits to another card', flows[0]?.amountCents === 3300000 && flows[0]?.payBasis === undefined);
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋接案收入').click(); true`);
+  const typedCase = (await typeIncome(2, '這個月接幾件', '4')) && (await typeIncome(2, '每件大約花幾小時', '3')) && (await typeIncome(2, '案件時薪', '1000'));
+  flows = await savedFlows();
+  check('per-case income: 4 cases × 3 h × 1,000 = 12,000', typedCase && flows[2]?.amountCents === 1200000 && flows[2]?.monthlyWorkHours === 12, JSON.stringify(flows[2]));
+  await go(`${base}/index.html`);
+  const shownAfterReload = await evaluate(`[...document.querySelectorAll('#personal-settings .income-formula')].map(p => p.textContent)`);
+  check('income formulas survive reload', shownAfterReload.length === 3 && shownAfterReload[1].includes('15,680') && shownAfterReload[2].includes('12,000'), shownAfterReload.join(' | '));
+  // rent paid every 6 months: lump sum on the contract date, monthly average shown in the one-line summary
+  await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent.startsWith('＋租屋')).click(); true`);
+  const typedRent = await typeIncome(3, '月租（元）', '8000');
+  await evaluate(`(() => { const card = [...document.querySelectorAll('#personal-settings .flow-card')][3]; const s = [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '繳租方式').querySelector('select'); s.value = '6'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await evaluate(`(() => { const card = [...document.querySelectorAll('#personal-settings .flow-card')][3]; const d = [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '簽約起租日').querySelector('input'); d.value = '2026-01-15'; d.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  flows = await savedFlows();
+  const rentSummary = await evaluate(`[...document.querySelectorAll('#personal-settings .flow-card')][3]?.querySelector('summary').textContent || ''`);
+  check('semiannual rent: monthly 8,000, next payment 48,000 on the 15th', typedRent && flows[3]?.amountCents === 800000 && flows[3]?.dayOfMonth === 15 && rentSummary.includes('每半年繳') && rentSummary.includes('48,000'), rentSummary);
+  const incomeErrs = events.filter((e) => e.method === 'Runtime.exceptionThrown').map((e) => e.params.exceptionDetails.exception?.description?.split('\n')[0]);
+  check('no page exceptions or dialogs while editing income cards', incomeErrs.length === 0 && dialogs.length === 0, [...incomeErrs, ...dialogs].join(' | '));
+  if (process.env.SHOT_DIR) {
+    await evaluate(`document.querySelector('[data-tab=ledger]').click(); document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); document.querySelectorAll('#personal-settings .income-card')[1]?.scrollIntoView(); true`);
+    await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 2400, deviceScaleFactor: 1, mobile: false });
+    const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+    fs.writeFileSync(path.join(process.env.SHOT_DIR, 'income-cards.png'), Buffer.from(shot.data, 'base64'));
+    await send('Emulation.clearDeviceMetricsOverride');
+  }
 
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);

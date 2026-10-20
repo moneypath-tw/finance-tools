@@ -93,17 +93,50 @@ const Money = (() => {
     const payroll = grossToNet(grossMonthlyCents, insured, rates);
     return { ...payroll, gross: grossMonthlyCents, insuredSalaryCents: insured, hourlyRateCents: Math.round(grossMonthlyCents / monthlyWorkHours) };
   };
+  // 收入計薪方式：固定的是月薪或時薪與投保級距，每月變動的是工時或案件數
+  //   monthly：月薪固定，時薪 = 月薪 ÷ 月工時
+  //   hourly：月總收入 = 時薪 × 本月工時
+  //   per_case：月總收入 = 案件數 × 每件報酬；每件報酬 = 案件時薪 × 每件時數，或固定每件價
+  const INCOME_PAY_BASES = ['monthly', 'hourly', 'per_case'];
+  const deriveIncome = (flow) => {
+    const pos = (v) => (Number(v) > 0 ? Number(v) : 0);
+    const payBasis = INCOME_PAY_BASES.includes(flow?.payBasis) ? flow.payBasis : 'monthly';
+    if (payBasis === 'hourly') {
+      const hourlyRateCents = Math.round(pos(flow.hourlyRateCents));
+      const monthlyWorkHours = pos(flow.monthlyWorkHours);
+      return { payBasis, grossCents: Math.round(hourlyRateCents * monthlyWorkHours), monthlyWorkHours, hourlyRateCents };
+    }
+    if (payBasis === 'per_case') {
+      const caseCount = pos(flow.caseCount);
+      const hoursPerCase = pos(flow.hoursPerCase);
+      const caseFeeCents = flow.caseFeeMode === 'fixed' ? Math.round(pos(flow.caseFeeCents)) : Math.round(pos(flow.hourlyRateCents) * hoursPerCase);
+      return {
+        payBasis, caseCount, hoursPerCase, caseFeeCents,
+        grossCents: Math.round(caseCount * caseFeeCents),
+        monthlyWorkHours: caseCount * hoursPerCase,
+        hourlyRateCents: hoursPerCase > 0 ? Math.round(caseFeeCents / hoursPerCase) : 0
+      };
+    }
+    const grossCents = Math.abs(Number(flow?.amountCents) || 0);
+    const monthlyWorkHours = pos(flow?.monthlyWorkHours) || 160;
+    return { payBasis, grossCents, monthlyWorkHours, hourlyRateCents: Math.round(grossCents / monthlyWorkHours) };
+  };
+  // 投保薪資是固定級距；只有勾選「跟著實際收入」才隨月總收入變動
+  const insuredSalaryOf = (flow, grossCents) => (flow.insuredSalaryFollowsGross !== false ? grossCents : (Number(flow.insuredSalaryCents) || grossCents));
   const calcRecurringMonthly = (flows, rates) => {
     const items = (Array.isArray(flows) ? flows : []).filter(f => f.active !== false).map((f) => {
-      const amount = Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'income') {
-        const hours = Number(f.monthlyWorkHours) > 0 ? Number(f.monthlyWorkHours) : 160;
-        const insured = f.insuredSalaryFollowsGross !== false ? amount : (Number(f.insuredSalaryCents) || amount);
-        const payroll = f.applyInsurance && amount > 0 ? calcPayroll(amount, hours, insured, rates) : { gross: amount, net: amount, laborFee: 0, healthFee: 0, hourlyRateCents: Math.round(amount / hours), insuredSalaryCents: insured };
-        return { ...f, grossCents: amount, netCents: payroll.net, payroll };
+        const income = deriveIncome(f);
+        const amount = income.grossCents;
+        const insured = insuredSalaryOf(f, amount);
+        const fees = f.applyInsurance && amount > 0 ? grossToNet(amount, insured, rates) : { net: amount, laborFee: 0, healthFee: 0 };
+        const payroll = { ...fees, gross: amount, hourlyRateCents: income.hourlyRateCents, insuredSalaryCents: insured };
+        return { ...f, grossCents: amount, netCents: payroll.net, payroll, income };
       }
+      const housingCalc = f.type === 'expense' && f.housing ? calcHousing(f.housing) : null;
+      const amount = housingCalc ? housingCalc.monthlyCents : Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'saving') return { ...f, grossCents: amount, netCents: 0, payroll: null };
-      return { ...f, grossCents: amount, netCents: -amount, payroll: null };
+      return { ...f, grossCents: amount, netCents: -amount, payroll: null, housingCalc };
     });
     const incomeCents = items.filter(f => f.type === 'income').reduce((s, f) => s + f.netCents, 0);
     const essentialExpenseCents = items.filter(f => f.type === 'expense' && f.essential !== false).reduce((s, f) => s + f.grossCents, 0);
@@ -113,17 +146,111 @@ const Money = (() => {
   };
   const wageSettingsFromIncome = (flow) => {
     if (!flow || flow.type !== 'income') throw new TypeError('必須選擇有效的固定收入來源');
-    const monthlyWorkHours = Number(flow.monthlyWorkHours) > 0 ? Number(flow.monthlyWorkHours) : 160;
-    const grossMonthlySalaryCents = Math.abs(Number(flow.amountCents) || 0);
+    const income = deriveIncome(flow);
+    // 工時反推需要正工時；本月工時為 0（如當月沒接案）時以每件時數或 160 小時代入，時薪仍以計薪方式為準
+    const monthlyWorkHours = income.monthlyWorkHours > 0 ? income.monthlyWorkHours : (income.hoursPerCase || 160);
+    const grossMonthlySalaryCents = income.grossCents > 0 ? income.grossCents : Math.round(income.hourlyRateCents * monthlyWorkHours);
     const insuredSalaryFollowsGross = flow.insuredSalaryFollowsGross !== false;
     return {
       grossMonthlySalaryCents, monthlyWorkHours, applyInsurance: !!flow.applyInsurance,
       insuredSalaryFollowsGross,
-      insuredSalaryCents: insuredSalaryFollowsGross ? grossMonthlySalaryCents : (Number(flow.insuredSalaryCents) || grossMonthlySalaryCents),
-      baseRateCentsPerHour: Math.round(grossMonthlySalaryCents / monthlyWorkHours)
+      insuredSalaryCents: insuredSalaryOf(flow, grossMonthlySalaryCents),
+      baseRateCentsPerHour: income.hourlyRateCents || Math.round(grossMonthlySalaryCents / monthlyWorkHours)
     };
   };
 
+
+  // 租屋：房租可每月／每兩月／每季／半年／一年繳，額外費用可按人數計，電費依電表度數推估
+  const RENT_CYCLES = [1, 2, 3, 6, 12];
+  const parseYmd = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ''); return m ? { y: +m[1], m: +m[2], d: +m[3] } : null; };
+  const ymIndex = (y, m) => y * 12 + (m - 1);
+  const dateInMonth = (index, day) => {
+    const y = Math.floor(index / 12), m = index % 12 + 1;
+    const d = Math.min(day, new Date(y, m, 0).getDate());
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  };
+  const daysBetween = (a, b) => Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
+  const calcHousing = (housing) => {
+    const h = housing || {};
+    const cycle = RENT_CYCLES.includes(Number(h.payCycleMonths)) ? Number(h.payCycleMonths) : 1;
+    const occupants = Number(h.occupants) >= 1 ? Math.trunc(Number(h.occupants)) : 1;
+    const rentCents = Math.max(0, Math.round(Number(h.rentCents) || 0));
+    const fees = (Array.isArray(h.fees) ? h.fees : []).map((f) => {
+      const monthlyCents = Math.max(0, Math.round(Number(f.amountCents) || 0)) * (f.perPerson ? occupants : 1);
+      return { ...f, monthlyCents };
+    });
+    const feesCents = fees.reduce((s, f) => s + f.monthlyCents, 0);
+    const start = parseYmd(h.contractStart);
+    // 繳租日：從簽約日每 cycle 個月一次（小月夾到月底），到期日當天起不再繳
+    const paymentDateAt = (k) => dateInMonth(ymIndex(start.y, start.m) + k * cycle, start.d);
+    const nextPaymentOnOrAfter = (ymd, strict = false) => {
+      if (!start || !parseYmd(ymd)) return null;
+      const from = parseYmd(ymd);
+      let k = Math.max(0, Math.floor((ymIndex(from.y, from.m) - ymIndex(start.y, start.m)) / cycle) - 1);
+      for (let guard = 0; guard < 1200; guard += 1, k += 1) {
+        const date = paymentDateAt(k);
+        if (h.contractEnd && date >= h.contractEnd) return null;
+        if (strict ? date > ymd : date >= ymd) return date;
+      }
+      return null;
+    };
+    // 電費跟房租同一天繳：每個繳租日結清上次抄表到該日的用電
+    const e = h.electricity || {};
+    const rate = Math.max(0, Number(e.rateCentsPerKwh) || 0);
+    const last = parseYmd(e.lastReadingDate), cur = parseYmd(e.currentReadingDate);
+    const usedKwh = Number(e.currentReading) - Number(e.lastReading);
+    const days = last && cur ? daysBetween(last, cur) : 0;
+    const measured = days > 0 && usedKwh >= 0 && Number.isFinite(usedKwh);
+    const dailyKwh = measured ? usedKwh / days : (Math.max(0, Number(e.fallbackMonthlyKwh) || 0) * 12) / 365;
+    const monthlyKwh = dailyKwh * 365 / 12;
+    // 上次抄表日當天若剛好是繳租日，那天已結清，下一次結算是之後的繳租日
+    const nextSettleDate = last ? nextPaymentOnOrAfter(e.lastReadingDate, true) : null;
+    const projectedKwh = last && nextSettleDate ? dailyKwh * daysBetween(last, parseYmd(nextSettleDate)) : monthlyKwh * cycle;
+    const electricity = {
+      enabled: !!e.enabled, measured, usedKwh: measured ? usedKwh : 0, days, dailyKwh, monthlyKwh,
+      usedSoFarCents: measured ? Math.round(usedKwh * rate) : 0,
+      nextSettleDate, projectedKwh, projectedBillCents: e.enabled ? Math.round(projectedKwh * rate) : 0,
+      monthlyCents: e.enabled ? Math.round(monthlyKwh * rate) : 0
+    };
+    const monthlyCents = rentCents + feesCents + electricity.monthlyCents;
+    const perPaymentCents = (rentCents + feesCents) * cycle;
+    // 某次繳租日的總額：房租＋費用 × 週期，加上這段期間的電費（下次結算用實測推估，之後用每月平均）
+    const paymentOn = (date) => {
+      const parts = [];
+      if (rentCents > 0) parts.push({ label: cycle === 1 ? '房租' : `房租 ${cycle} 個月`, cents: rentCents * cycle });
+      if (feesCents > 0) parts.push({ label: cycle === 1 ? '其他費用' : `其他費用 ${cycle} 個月`, cents: feesCents * cycle });
+      if (electricity.enabled) {
+        const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * cycle;
+        if (cents > 0) parts.push({ label: '電費（預估）', cents });
+      }
+      return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
+    };
+    return { cycle, occupants, rentCents, fees, feesCents, electricity, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+  };
+  // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
+  const housingDueInMonth = (housing, ym) => {
+    const start = parseYmd(housing?.contractStart);
+    const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    if (!start || !m) return { totalCents: 0, parts: [] };
+    const r = calcHousing(housing);
+    const diff = ymIndex(+m[1], +m[2]) - ymIndex(start.y, start.m);
+    if (diff < 0 || diff % r.cycle !== 0) return { totalCents: 0, parts: [] };
+    const date = r.paymentDateAt(diff / r.cycle);
+    if (housing.contractEnd && date >= housing.contractEnd) return { totalCents: 0, parts: [] };
+    const pay = r.paymentOn(date);
+    return { totalCents: pay.cents, parts: pay.parts, date };
+  };
+  // 從 fromDate（YYYY-MM-DD）起列出接下來 count 次繳款的日期與總額
+  const housingPaymentSchedule = (housing, fromDate, count = 6) => {
+    const r = calcHousing(housing);
+    const out = [];
+    let date = r.nextPaymentOnOrAfter(fromDate);
+    while (date && out.length < count) {
+      out.push(r.paymentOn(date));
+      date = r.nextPaymentOnOrAfter(date, true);
+    }
+    return out;
+  };
 
   // 一次性情境（買房／買地自建／旅費／喪葬）
   const calcOneTimeScenario = (scenario, config) => {
@@ -461,6 +588,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, calcRecurringMonthly, wageSettingsFromIncome, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, calcHousing, housingDueInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
