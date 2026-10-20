@@ -85,6 +85,13 @@ const App = (() => {
     ]);
   };
   const accountNatures = { checking: '活存／收支', savings: '儲蓄', cash: '現金', investment: '投資', credit: '信用／負債', earmarked: '專款' };
+  const BUILTIN_LIQUID_NATURES = ['cash', 'checking', 'savings', 'earmarked'];
+  // 使用者自訂的帳戶性質（config.customAccountNatures），可設定是否算可動用資金
+  const natureLabels = () => ({ ...accountNatures, ...Object.fromEntries((config.customAccountNatures || []).map(n => [n.id, n.label || '未命名性質'])) });
+  const isLiquidNature = (nature) => BUILTIN_LIQUID_NATURES.includes(nature) || (config.customAccountNatures || []).some(n => n.id === nature && n.liquid !== false);
+  // 帳戶可關閉「連動固定收支」：關閉後不出現在固定項目的帳戶選單，掛在它上面的固定項目不計入每月總額與帳本預測
+  const accountLinked = (id) => (config.accountProfiles || []).find(a => a.id === id)?.linkRecurring !== false;
+  const flowLinked = (f) => accountLinked(f.accountId) && (f.type !== 'saving' || accountLinked(f.fromAccountId));
   // 補上缺少的預設值，但保留同一個物件：畫面上的輸入框綁的是這個物件，若換成新物件，
   // 之後的修改會寫進沒人再讀的舊物件（2026-10-20：房貸、學貸欄位改了立刻跳回預設值）
   const fillDefaults = (target, defaults) => {
@@ -259,7 +266,7 @@ const App = (() => {
     const savingBeyondEmergencyCents = Math.max(0, recommendedSavingCents - emergencyMonthlyCents);
     return { ...assessed, recommendedSavingCents, plannedSavingsRate: plannedIncome > 0 ? recommendedSavingCents / plannedIncome : null, attainmentRate: recommendedSavingCents > 0 ? assessed.actualSavingsCents / recommendedSavingCents : null, dailyLivingCents: Math.floor(Math.max(0, plannedIncome - fixedExpense - recommendedSavingCents) / daysInMonth), emergencyMonthlyCents, savingBeyondEmergencyCents, savingsAccountId };
   };
-  const recurringSummary = () => { syncStudentLoanFixedExpense(); syncMortgageFixedExpense(); return Money.calcRecurringMonthly(config.recurringCashFlows || [], config.insuranceRates); };
+  const recurringSummary = () => { syncStudentLoanFixedExpense(); syncMortgageFixedExpense(); return Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(flowLinked), config.insuranceRates); };
   const syncWageFromLinkedIncome = () => {
     const flows = (config.recurringCashFlows || []).filter(f => f.type === 'income' && f.active !== false);
     if ((!wageReverseScenario.linkedRecurringFlowId || wageReverseScenario.linkedRecurringFlowId === 'auto') && flows.length) wageReverseScenario.linkedRecurringFlowId = flows[0].id;
@@ -280,15 +287,31 @@ const App = (() => {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     };
     const marker = config.recurringProjectionThroughMonth;
-    const startYm = /^\d{4}-(0[1-9]|1[0-2])$/.test(marker || '') ? nextMonth(marker) : currentYm;
+    // 過去月份只補一次；本月每次都重算，固定項目月中改動（新增、改金額、加補助）才會反映到本月預測
+    const resumeYm = /^\d{4}-(0[1-9]|1[0-2])$/.test(marker || '') ? nextMonth(marker) : currentYm;
+    const startYm = resumeYm < currentYm ? resumeYm : currentYm;
     let changed = false;
     for (let ym = startYm; ym <= currentYm; ym = nextMonth(ym)) {
       const [entryYear, entryMonth] = ym.split('-').map(Number);
       const entryLastDay = new Date(entryYear, entryMonth, 0).getDate();
       for (const flow of summary.items) {
         const day = Math.min(Math.max(1, Math.trunc(flow.dayOfMonth || 1)), entryLastDay);
-        if (ym === currentYm && now.getDate() < day) continue;
         // 租屋不是每月等額：半年／一年繳的房租與電費結算只在到期月入帳，金額為當期實付
+        // 租屋補助另外撥款：獨立一筆收入，按撥款日入帳，不跟繳租月綁在一起
+        const subsidyCents = flow.housingCalc ? Money.housingSubsidyInMonth(flow.housing, ym) : 0;
+        const subsidyDay = Math.min(Math.max(1, Math.trunc(flow.housing?.subsidy?.dayOfMonth || 1)), entryLastDay);
+        if (subsidyCents > 0 && !(ym === currentYm && now.getDate() < subsidyDay)) {
+          const sid = `recurring-${flow.id}-subsidy-${ym}`;
+          const subsidyEntry = {
+            id: sid, recurringFlowId: flow.id, date: `${ym}-${String(subsidyDay).padStart(2, '0')}`,
+            type: 'income', category: null, account: flow.accountId || config.accountProfiles[0]?.id || null,
+            currency: 'TWD', rateToTWD: 1, amountCents: subsidyCents, incomeSource: '租屋補助',
+            essential: null, reimbursable: false, status: 'projected', note: `${flow.name || '租屋'}：租屋補助（預測）`
+          };
+          const prev = ledger.entries.find(e => e.id === sid);
+          if (prev?.status !== 'realized') { if (prev) Object.assign(prev, subsidyEntry); else ledger.entries.push(subsidyEntry); changed = true; }
+        }
+        if (ym === currentYm && now.getDate() < day) continue;
         const housingDue = flow.housingCalc ? Money.housingDueInMonth(flow.housing, ym) : null;
         const dueCents = housingDue ? housingDue.totalCents : flow.grossCents;
         if (!(dueCents > 0)) continue;
@@ -638,7 +661,7 @@ const App = (() => {
     const recurringForHealth = recurringSummary();
     const hasRecurringIncome = recurringForHealth.items.some(f => f.type === 'income');
     const liquidBalances = getAccountBalances();
-    const derivedLiquidAssets = config.accountProfiles.filter(a => ['cash', 'checking', 'savings', 'earmarked'].includes(a.nature)).reduce((sum, a) => sum + Math.max(0, liquidBalances[a.id] || 0), 0);
+    const derivedLiquidAssets = config.accountProfiles.filter(a => isLiquidNature(a.nature)).reduce((sum, a) => sum + Math.max(0, liquidBalances[a.id] || 0), 0);
     const hasAccountAssets = derivedLiquidAssets > 0 || ledger.entries.length > 0;
     const derivedField = (label, cents, note) => el('div', { class: 'field' }, [el('label', { text: label }), el('span', { class: 'mono readonly-value', text: Money.formatTWD(cents) }), el('small', { class: 'notice', text: note })]);
     if (!['month', 'age'].includes(q.goalDeadlineMode)) q.goalDeadlineMode = 'month';
@@ -690,7 +713,7 @@ const App = (() => {
       resultRoot.append(el('h3', { text: '請修正輸入' }), el('ul', {}, result.errors.map(e => el('li', { class: 'neg', text: e.message }))));
       return;
     }
-    const pct = (v) => v === null ? '無法計算' : `${(v * 100).toFixed(1)}%`;
+    const pct = (v) => v === null ? '無法計算' : `${Math.round(v * 100)}%`;
     const [goalYear, goalMonth] = String(effectiveTargetMonth || '').split('-');
     const goalDeadlineLabel = goalYear && goalMonth ? `${goalYear} 年 ${Number(goalMonth)} 月主要儲蓄目標` : '主要儲蓄目標';
     resultRoot.append(
@@ -728,9 +751,9 @@ const App = (() => {
     const catSel = el('select', { id: 'f-category' },
       config.categories.map((c) => el('option', { value: c, text: c })));
     const accSel = el('select', { id: 'f-account' },
-      config.accountProfiles.map((a) => el('option', { value: a.id, text: `${a.name}（${accountNatures[a.nature] || a.nature}）` })));
+      config.accountProfiles.map((a) => el('option', { value: a.id, text: `${a.name}（${natureLabels()[a.nature] || a.nature}）` })));
     const toAccSel = el('select', { id: 'f-to-account' },
-      config.accountProfiles.map((a) => el('option', { value: a.id, text: `${a.name}（${accountNatures[a.nature] || a.nature}）` })));
+      config.accountProfiles.map((a) => el('option', { value: a.id, text: `${a.name}（${natureLabels()[a.nature] || a.nature}）` })));
     const amountInput = el('input', { type: 'number', id: 'f-amount', step: '1', placeholder: '金額（原始幣別，支出可留正數，系統自動處理正負號）' });
     const currencySel = el('select', { id: 'f-currency' }, [
       el('option', { value: 'TWD', text: 'TWD 台幣' }),
@@ -974,8 +997,9 @@ const App = (() => {
       const used = ledger.entries.some(e => e.account === account.id || e.account === account.name || e.fromAccount === account.id || e.toAccount === account.id) || (config.recurringCashFlows || []).some(f => f.accountId === account.id || f.fromAccountId === account.id);
       return el('div', { class: 'toolbar account-row' }, [
         el('div', { class: 'field' }, [el('label', { text: '帳戶名稱' }), el('input', { value: account.name, onchange: (ev) => { const name = ev.target.value.trim(); if (name) { account.name = name; IO.markDirty(); renderLedgerForm(); renderLedger(); } } })]),
-        el('div', { class: 'field' }, [el('label', { text: '性質' }), el('select', { onchange: (ev) => { account.nature = ev.target.value; IO.markDirty(); renderLedger(); } }, Object.entries(accountNatures).map(([value, text]) => el('option', { value, text, selected: account.nature === value ? 'selected' : undefined })))]),
+        el('div', { class: 'field' }, [el('label', { text: '性質' }), el('select', { onchange: (ev) => { account.nature = ev.target.value; IO.markDirty(); renderAll(); } }, Object.entries(natureLabels()).map(([value, text]) => el('option', { value, text, selected: account.nature === value ? 'selected' : undefined })))]),
         numField('起始餘額（元）', Money.toYuan(account.initialBalanceCents || 0), (v) => { account.initialBalanceCents = Money.toCents(v); IO.markDirty(); renderLedger(); }),
+        el('label', {}, [el('input', { type: 'checkbox', checked: account.linkRecurring !== false ? 'checked' : undefined, onchange: (ev) => { account.linkRecurring = ev.target.checked; materializeDueRecurringEntries(); IO.markDirty(); renderAll(); } }), document.createTextNode(' 連動固定收支')]),
         el('button', { class: 'btn small danger', text: used ? '已有紀錄' : '刪除', disabled: used ? 'disabled' : undefined, onclick: () => { config.accountProfiles = config.accountProfiles.filter(a => a.id !== account.id); IO.markDirty(); renderPersonalSettings(); renderLedgerForm(); renderLedger(); } })
       ]);
     });
@@ -983,7 +1007,19 @@ const App = (() => {
       el('summary', { text: '帳戶管理（名稱、性質、起始餘額）' }),
       ...accountRows,
       el('button', { class: 'btn small', text: '＋新增帳戶', onclick: () => { config.accountProfiles.push({ id: createEntryId(), name: `新帳戶 ${config.accountProfiles.length + 1}`, nature: 'checking', initialBalanceCents: 0 }); IO.markDirty(); renderPersonalSettings(); renderLedgerForm(); renderLedger(); } }),
-      el('p', { class: 'notice', text: '收入與支出都會計入指定帳戶；已有交易的帳戶不可直接刪除，以免餘額失去歸屬。' })
+      el('details', { class: 'flow-sub' }, [
+        el('summary', { text: '自訂帳戶性質' }),
+        ...(config.customAccountNatures || []).map((n) => {
+          const inUse = config.accountProfiles.some(a => a.nature === n.id);
+          return el('div', { class: 'toolbar' }, [
+            el('div', { class: 'field' }, [el('label', { text: '性質名稱' }), el('input', { value: n.label || '', placeholder: '例如：旅遊基金', onchange: (ev) => { n.label = ev.target.value.trim(); IO.markDirty(); renderAll(); } })]),
+            el('label', {}, [el('input', { type: 'checkbox', checked: n.liquid !== false ? 'checked' : undefined, onchange: (ev) => { n.liquid = ev.target.checked; IO.markDirty(); renderAll(); } }), document.createTextNode(' 算可動用資金')]),
+            el('button', { class: 'btn small danger', text: inUse ? '使用中' : '刪除', disabled: inUse ? 'disabled' : undefined, onclick: () => { config.customAccountNatures = config.customAccountNatures.filter(x => x.id !== n.id); IO.markDirty(); renderPersonalSettings(); } })
+          ]);
+        }),
+        el('button', { class: 'btn small', text: '＋自訂性質', onclick: () => { if (!Array.isArray(config.customAccountNatures)) config.customAccountNatures = []; config.customAccountNatures.push({ id: `custom-${createEntryId()}`, label: '', liquid: true }); IO.markDirty(); renderPersonalSettings(); } })
+      ]),
+      el('p', { class: 'notice', text: '收入與支出都會計入指定帳戶；已有交易的帳戶不可直接刪除，以免餘額失去歸屬。關閉「連動固定收支」的帳戶不會出現在固定項目的帳戶選單，掛在上面的固定項目也不計入每月總額。' })
     ]);
     if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
     // 收入的 amountCents／monthlyWorkHours 由計薪方式推得後寫回，帳本、健檢與工時反推都沿用同一數字
@@ -1001,12 +1037,12 @@ const App = (() => {
     };
     const saveFlow = () => { config.recurringCashFlows.forEach(syncIncomeFlow); materializeDueRecurringEntries(); IO.markDirty(); renderPersonalSettings(); renderLedger(); };
     const flowTypeSelect = (flow) => el('div', { class: 'field' }, [el('label', { text: '類型' }), el('select', { onchange: (ev) => { flow.type = ev.target.value; flow.kind = flow.type === 'income' ? 'salary' : (flow.type === 'saving' ? 'fixed_saving' : 'fixed_expense'); saveFlow(); } }, [el('option', { value: 'income', text: '固定收入', selected: flow.type === 'income' ? 'selected' : undefined }), el('option', { value: 'expense', text: '固定支出', selected: flow.type === 'expense' ? 'selected' : undefined }), el('option', { value: 'saving', text: '固定儲蓄', selected: flow.type === 'saving' ? 'selected' : undefined })])]);
-    const accountSelect = (flow, label) => el('div', { class: 'field' }, [el('label', { text: label }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.accountId === a.id ? 'selected' : undefined, disabled: flow.type === 'saving' && a.id === flow.fromAccountId ? 'disabled' : undefined })))]);
+    const accountSelect = (flow, label) => el('div', { class: 'field' }, [el('label', { text: label }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.filter(a => a.linkRecurring !== false || a.id === flow.accountId).map(a => el('option', { value: a.id, text: a.linkRecurring === false ? `${a.name}（未連動）` : a.name, selected: flow.accountId === a.id ? 'selected' : undefined, disabled: flow.type === 'saving' && a.id === flow.fromAccountId ? 'disabled' : undefined })))]);
     // 大字、附單位與說明的數字欄位，給收入卡片用（長者也能一眼看懂要填什麼）
     const incomeField = (label, unit, value, onchange, hint, step = 'any') => el('div', { class: 'field income-field' }, [
       el('label', { text: label }),
       el('div', { class: 'input-unit' }, [
-        el('input', { type: 'number', inputmode: 'decimal', min: '0', step, class: 'mono', value, onchange: (ev) => { const v = Number(ev.target.value); if (!(v >= 0)) return alert('請輸入 0 或以上的數字'); onchange(v); } }),
+        el('input', { type: 'number', inputmode: 'decimal', min: '0', step, class: 'mono', value, onchange: (ev) => { const v = Number(ev.target.value); if (!(v >= 0)) return alert('請輸入 0 或以上的數字'); onchange(step === '1' ? Math.round(v) : v); } }),
         el('span', { text: unit })
       ]),
       hint ? el('small', { text: hint }) : null
@@ -1036,10 +1072,13 @@ const App = (() => {
       saveFlow();
     };
     // 每個固定項目收合成一行重點（名稱、方式、每月金額），要改才展開；展開狀態由 data-collapse-id 記住
-    const flowCard = (flow, summaryChildren, body) => el('details', { class: 'card flow-card', 'data-collapse-id': `flow-${flow.id}` }, [
-      el('summary', { class: 'flow-summary' }, summaryChildren),
-      el('div', { class: 'flow-body' }, body)
-    ]);
+    const flowCard = (flow, summaryChildren, body) => {
+      const linked = flowLinked(flow);
+      return el('details', { class: 'card flow-card', 'data-collapse-id': `flow-${flow.id}` }, [
+        el('summary', { class: 'flow-summary' }, [...summaryChildren, linked ? null : el('span', { class: 'flow-tag warn', text: '帳戶未連動・不計入' })]),
+        el('div', { class: 'flow-body' }, [linked ? null : el('p', { class: 'linked-note', text: '指定的帳戶已關閉「連動固定收支」，本項目不計入每月總額與帳本預測；改選其他帳戶或到帳戶管理重新開啟即可。' }), ...body])
+      ]);
+    };
     const openFlowCard = (id) => { expandedDetailKeys.add(`panel-ledger｜flow-${id}`); };
     const rentCycleNames = { 1: '每月', 2: '每兩個月', 3: '每季', 6: '每半年', 12: '每年' };
     const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
@@ -1049,10 +1088,13 @@ const App = (() => {
       const h = flow.housing;
       if (!Array.isArray(h.fees)) h.fees = [];
       if (!h.electricity || typeof h.electricity !== 'object') h.electricity = { enabled: false };
+      if (!h.subsidy || typeof h.subsidy !== 'object') h.subsidy = { enabled: false };
+      const sub = h.subsidy;
+      const monthField = (label, value, onchange) => el('div', { class: 'field' }, [el('label', { text: label }), el('input', { type: 'month', value: value || '', onchange: (ev) => onchange(Validation.isValidMonth(ev.target.value) ? ev.target.value : '') })]);
       const e = h.electricity;
       const r = Money.calcHousing(h);
       const yuan = (cents) => Money.formatTWD(cents);
-      const kwh = (v) => `${Number(v.toFixed(1)).toLocaleString()} 度`;
+      const kwh = (v) => `${Math.round(v).toLocaleString()} 度`;
       const schedule = Money.housingPaymentSchedule(h, localToday(), 6);
       const next = schedule[0];
       const elecBody = e.enabled ? [
@@ -1093,7 +1135,7 @@ const App = (() => {
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),
         el('div', { class: 'flow-result' }, [
-          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}` }),
+          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
           el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費` }),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
@@ -1103,6 +1145,18 @@ const App = (() => {
           el('summary', { text: `電費${e.enabled ? `：每月約 ${yuan(r.electricity.monthlyCents)}` : '（未計入）'}` }),
           el('label', {}, [el('input', { type: 'checkbox', checked: e.enabled ? 'checked' : undefined, onchange: (ev) => { e.enabled = ev.target.checked; saveFlow(); } }), document.createTextNode(' 計入電費（依電表度數推估）')]),
           ...elecBody
+        ]),
+        el('details', { class: 'flow-sub' }, [
+          el('summary', { text: !sub.enabled ? '租屋補助（未申請）' : sub.includeInCalc === false ? '租屋補助：已填寫，未納入計算' : `租屋補助：${r.subsidyCents ? `本月 ＋${yuan(r.subsidyCents)}` : '本月不在核定期間'}` }),
+          el('label', {}, [el('input', { type: 'checkbox', checked: sub.enabled ? 'checked' : undefined, onchange: (ev) => { sub.enabled = ev.target.checked; if (sub.enabled && !sub.startMonth) sub.startMonth = localToday().slice(0, 7); if (sub.enabled && sub.includeInCalc === undefined) sub.includeInCalc = true; saveFlow(); } }), document.createTextNode(' 有領租屋補助')]),
+          sub.enabled ? el('label', {}, [el('input', { type: 'checkbox', checked: sub.includeInCalc !== false ? 'checked' : undefined, onchange: (ev) => { sub.includeInCalc = ev.target.checked; saveFlow(); } }), document.createTextNode(' 納入計算（扣入每月平均並記入帳本）')]) : null,
+          sub.enabled ? el('div', { class: 'toolbar' }, [
+            numField('每月補助（元）', Money.toYuan(sub.amountCents || 0), (v) => { sub.amountCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
+            monthField('核定起始月', sub.startMonth, (v) => { sub.startMonth = v; saveFlow(); }),
+            monthField('核定結束月（可空）', sub.endMonth, (v) => { sub.endMonth = v; saveFlow(); }),
+            numField('每月幾號撥款', sub.dayOfMonth || 1, (v) => { sub.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); })
+          ]) : null,
+          sub.enabled ? el('p', { class: 'notice', text: '補助撥到自己的帳戶，不從房租扣；金額與期間請依核定通知填寫，到期續辦後更新結束月。' }) : null
         ]),
         el('details', { class: 'flow-sub' }, [
           el('summary', { text: `其他費用${h.fees.length ? `：每月 ${yuan(r.feesCents)}` : '（管理費、網路費…）'}` }),
@@ -1120,7 +1174,7 @@ const App = (() => {
       const income = Money.deriveIncome(flow);
       const basis = income.payBasis;
       const yuan = (cents) => Money.formatTWD(cents);
-      const hoursText = (h) => `${Number(h.toFixed(2)).toLocaleString()} 小時`;
+      const hoursText = (h) => `${Math.round(h).toLocaleString()} 小時`;
       const basisPicker = el('div', { class: 'basis-picker', role: 'radiogroup', 'aria-label': '計薪方式' }, Object.entries(payBasisOptions).map(([value, opt]) => el('label', { class: `basis-option${basis === value ? ' active' : ''}` }, [
         el('input', { type: 'radio', name: `pay-basis-${flow.id}`, value, checked: basis === value ? 'checked' : undefined, onchange: () => switchPayBasis(flow, value) }),
         el('strong', { text: opt.label }),
@@ -1128,10 +1182,10 @@ const App = (() => {
       ])));
       const basisFields = basis === 'hourly' ? [
         incomeField('時薪', '元／小時', Money.toYuan(flow.hourlyRateCents || 0), (v) => { flow.hourlyRateCents = Money.toCents(v); saveFlow(); }),
-        incomeField('這個月工作時數', '小時', flow.monthlyWorkHours || 0, (v) => { flow.monthlyWorkHours = v; saveFlow(); }, '每月更新', '0.5')
+        incomeField('這個月工作時數', '小時', flow.monthlyWorkHours || 0, (v) => { flow.monthlyWorkHours = v; saveFlow(); }, '每月更新', '1')
       ] : basis === 'per_case' ? [
-        incomeField('這個月接幾件', '件', flow.caseCount || 0, (v) => { flow.caseCount = v; saveFlow(); }, '每月更新', '0.5'),
-        incomeField('每件大約花幾小時', '小時', flow.hoursPerCase || 1, (v) => { if (!(v > 0)) return alert('每件時數必須大於 0'); flow.hoursPerCase = v; saveFlow(); }, null, '0.5'),
+        incomeField('這個月接幾件', '件', flow.caseCount || 0, (v) => { flow.caseCount = v; saveFlow(); }, '每月更新', '1'),
+        incomeField('每件大約花幾小時', '小時', flow.hoursPerCase || 1, (v) => { if (!(v > 0)) return alert('每件時數必須大於 0'); flow.hoursPerCase = v; saveFlow(); }, null, '1'),
         el('div', { class: 'field income-field' }, [
           el('label', { text: '案件怎麼計價' }),
           el('select', { onchange: (ev) => { flow.caseFeeMode = ev.target.value; if (flow.caseFeeMode === 'fixed' && !(flow.caseFeeCents > 0)) flow.caseFeeCents = income.caseFeeCents; saveFlow(); } }, [
@@ -1144,12 +1198,12 @@ const App = (() => {
           : incomeField('案件時薪', '元／小時', Money.toYuan(flow.hourlyRateCents || 0), (v) => { flow.hourlyRateCents = Money.toCents(v); saveFlow(); })
       ] : [
         incomeField('每月薪資（稅前）', '元', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(v); saveFlow(); }, null),
-        incomeField('每月大約工作時數', '小時', flow.monthlyWorkHours || 160, (v) => { if (!(v > 0)) return alert('月工時必須大於 0'); flow.monthlyWorkHours = v; saveFlow(); }, '換算時薪用', '0.5')
+        incomeField('每月大約工作時數', '小時', flow.monthlyWorkHours || 160, (v) => { if (!(v > 0)) return alert('月工時必須大於 0'); flow.monthlyWorkHours = v; saveFlow(); }, '換算時薪用', '1')
       ];
       const formula = basis === 'hourly'
         ? `時薪 ${yuan(income.hourlyRateCents)} × ${hoursText(income.monthlyWorkHours)} ＝ 本月稅前 ${yuan(income.grossCents)}`
         : basis === 'per_case'
-          ? `每件 ${yuan(income.caseFeeCents)}${flow.caseFeeMode === 'fixed' ? '' : `（${yuan(income.hourlyRateCents)} × ${hoursText(income.hoursPerCase)}）`} × ${Number(income.caseCount.toFixed(2)).toLocaleString()} 件 ＝ 本月稅前 ${yuan(income.grossCents)}`
+          ? `每件 ${yuan(income.caseFeeCents)}${flow.caseFeeMode === 'fixed' ? '' : `（${yuan(income.hourlyRateCents)} × ${hoursText(income.hoursPerCase)}）`} × ${Math.round(income.caseCount).toLocaleString()} 件 ＝ 本月稅前 ${yuan(income.grossCents)}`
           : `月薪 ${yuan(income.grossCents)} ÷ ${hoursText(income.monthlyWorkHours)} ＝ 時薪約 ${yuan(income.hourlyRateCents)}`;
       const payroll = summaryItem?.payroll;
       const result = el('div', { class: 'income-result', 'aria-live': 'polite' }, [
@@ -1157,7 +1211,7 @@ const App = (() => {
         summaryItem ? el('p', { class: 'income-net' }, [
           document.createTextNode('每月實際入帳約 '),
           el('strong', { class: 'mono', text: yuan(summaryItem.netCents) })
-        ]) : el('p', { class: 'income-net', text: '目前未啟用，不計入每月收入' }),
+        ]) : el('p', { class: 'income-net', text: '目前不計入每月收入' }),
         payroll && payroll.laborFee + payroll.healthFee > 0 ? el('p', { class: 'income-sub', text: `已扣勞保 ${yuan(payroll.laborFee)}、健保 ${yuan(payroll.healthFee)}（依投保薪資 ${yuan(payroll.insuredSalaryCents)}）` }) : null,
         basis !== 'monthly' && income.monthlyWorkHours > 0 ? el('p', { class: 'income-sub', text: `本月共工作 ${hoursText(income.monthlyWorkHours)}，實際時薪 ${yuan(income.hourlyRateCents)}` }) : null
       ]);
@@ -1213,7 +1267,7 @@ const App = (() => {
           flowTypeSelect(flow),
           numField(isSaving ? '每月儲蓄（元）' : '每月金額（元）', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
           numField(isSaving ? '轉存日' : '扣款日', flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
-          isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
+          isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.filter(a => a.linkRecurring !== false || a.id === flow.fromAccountId).map(a => el('option', { value: a.id, text: a.linkRecurring === false ? `${a.name}（未連動）` : a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
           accountSelect(flow, isSaving ? '儲蓄帳戶' : '扣款帳戶')
         ]),
         isSaving ? el('p', { class: 'linked-note', text: '固定儲蓄會建立帳戶間轉帳，不列入收入或支出。' }) : el('label', {}, [el('input', { type: 'checkbox', checked: flow.essential !== false ? 'checked' : undefined, onchange: (ev) => { flow.essential = ev.target.checked; saveFlow(); } }), document.createTextNode(' 必要固定支出')]),
@@ -1468,7 +1522,7 @@ const App = (() => {
     const ltv = housePrice > 0 ? principal / housePrice : null;
     const neededDownPayment = Math.max(0, housePrice - principal);
     const downPaymentGap = Math.max(0, neededDownPayment - Math.max(0, scenario.downPaymentCurrentCents || 0));
-    const cashFlowWithoutMortgage = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-mortgage-repayment'), config.insuranceRates);
+    const cashFlowWithoutMortgage = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-mortgage-repayment' && flowLinked(f)), config.insuranceRates);
     const beforeMortgage = cashFlowWithoutMortgage.incomeCents - cashFlowWithoutMortgage.essentialExpenseCents - cashFlowWithoutMortgage.otherExpenseCents - cashFlowWithoutMortgage.fixedSavingCents;
     const afterPayment = beforeMortgage - plan.currentPaymentCents;
     const burdenRate = cashFlowWithoutMortgage.incomeCents > 0 ? plan.currentPaymentCents / cashFlowWithoutMortgage.incomeCents : null;
@@ -1581,7 +1635,7 @@ const App = (() => {
     const principal = repayment.principalMode === 'manual' ? repayment.manualPrincipalCents : result.grandTotal;
     const plan = Money.calcStudentLoanRepayment(principal, scenario.periods.filter(p => !p.isLeaveOfAbsence).length, repayment, config.personalBaseline.currentAge);
     const statusText = plan.status === 'waiting' ? `尚未起繳；預計 ${plan.repaymentStartAge} 歲開始` : (plan.status === 'repaying' ? `目前在攤還期${repayment.includeAsFixedExpense ? '，已自動納入固定支出' : '，請勾選納入固定支出'}` : `依年齡估算已於 ${plan.repaymentEndAge} 歲完成`);
-    const cashFlowWithoutLoan = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-student-loan-repayment'), config.insuranceRates);
+    const cashFlowWithoutLoan = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-student-loan-repayment' && flowLinked(f)), config.insuranceRates);
     const availableBeforeLoan = cashFlowWithoutLoan.incomeCents - cashFlowWithoutLoan.essentialExpenseCents - cashFlowWithoutLoan.otherExpenseCents - cashFlowWithoutLoan.fixedSavingCents;
     const afterPayment = availableBeforeLoan - plan.monthlyPaymentCents;
     const burdenRate = cashFlowWithoutLoan.incomeCents > 0 ? plan.monthlyPaymentCents / cashFlowWithoutLoan.incomeCents : null;

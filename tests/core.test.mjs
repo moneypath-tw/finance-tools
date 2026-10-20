@@ -120,7 +120,9 @@ test('工時設定拒絕零時薪', () => {
 test('月總工資可一次回算時薪、勞健保與實領', () => {
   const rates = api.DEFAULT_CONFIG.insuranceRates;
   const result = api.Money.calcPayroll(3300000, 160, 3300000, rates);
-  assert.equal(result.hourlyRateCents, 20625);
+  assert.equal(result.hourlyRateCents, 20600); // 33,000 ÷ 160 = 206.25 → 四捨五入 206 元
+  assert.equal(result.laborFee % 100, 0);
+  assert.equal(result.healthFee % 100, 0);
   assert.equal(result.net, result.gross - result.laborFee - result.healthFee);
   assert.ok(result.laborFee > 0);
   assert.ok(result.healthFee > 0);
@@ -185,7 +187,7 @@ test('接案：月總收入 = 案件數 × 每件報酬，可按案件時薪或�
   const fixed = { ...byHour, caseFeeMode: 'fixed', caseFeeCents: 500000, hourlyRateCents: undefined };
   const b = api.Money.deriveIncome(fixed);
   assert.equal(b.grossCents, 2000000);
-  assert.equal(b.hourlyRateCents, 166667);
+  assert.equal(b.hourlyRateCents, 166700); // 5,000 ÷ 3 = 1,666.67 → 1,667 元
   assert.equal(api.Money.calcRecurringMonthly([fixed], api.DEFAULT_CONFIG.insuranceRates).incomeCents, 2000000);
   assert.equal(api.Validation.validateRecurringFlows([byHour]).valid, true);
   assert.equal(api.Validation.validateRecurringFlows([fixed]).valid, true);
@@ -220,7 +222,7 @@ test('租屋：半年繳房租、按人數費用與電表推估合成每月平�
   // 電費跟房租同一天結清：上次抄表後的第一個繳租日
   assert.equal(r.electricity.nextSettleDate, '2027-01-31');
   assert.equal(r.electricity.projectedBillCents, BILL_TO_JAN);
-  assert.equal(r.electricity.monthlyCents, Math.round(5 * 365 / 12 * 500));
+  assert.equal(r.electricity.monthlyCents, Math.round(5 * 365 / 12 * 5) * 100); // 760.42 元 → 760 元
   assert.equal(r.monthlyCents, 800000 + 90000 + r.electricity.monthlyCents);
 });
 
@@ -241,6 +243,34 @@ test('租屋：房租、費用、電費同一天繳；簽約日推出繳款日�
   assert.equal(api.Validation.validateRecurringFlows(flows).valid, true);
   assert.equal(api.Money.calcRecurringMonthly(flows, api.DEFAULT_CONFIG.insuranceRates).essentialExpenseCents, api.Money.calcHousing(h).monthlyCents);
   assert.equal(api.Validation.validateRecurringFlows([{ ...flows[0], housing: { ...h, payCycleMonths: 4 } }]).valid, false);
+});
+
+test('租屋補助：核定期間內每月撥款，每月平均扣掉補助，不影響繳租金額', () => {
+  const h = { ...sampleHousing(), subsidy: { enabled: true, amountCents: 300000, startMonth: '2026-03', endMonth: '2027-02', dayOfMonth: 10 } };
+  const r = api.Money.calcHousing(h, '2026-10');
+  assert.equal(r.subsidyCents, 300000);
+  assert.equal(r.monthlyCents, r.grossMonthlyCents - 300000);
+  assert.equal(api.Money.calcHousing(h, '2027-03').subsidyCents, 0); // 核定期滿
+  assert.equal(api.Money.calcHousing(h, '2026-02').monthlyCents, r.grossMonthlyCents);
+  assert.equal(api.Money.housingSubsidyInMonth(h, '2026-03'), 300000);
+  assert.equal(api.Money.housingSubsidyInMonth(h, '2027-03'), 0);
+  assert.equal(api.Money.housingSubsidyInMonth({ ...h, subsidy: { ...h.subsidy, enabled: false } }, '2026-10'), 0);
+  assert.equal(api.Money.housingDueInMonth(h, '2026-07').totalCents, api.Money.housingDueInMonth(sampleHousing(), '2026-07').totalCents);
+  const flow = { id: 'home', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 31, accountId: 'bank', housing: h };
+  assert.equal(api.Validation.validateRecurringFlows([flow]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, housing: { ...h, subsidy: { ...h.subsidy, endMonth: '2026-01' } } }]).valid, false);
+});
+
+test('台幣金額一律四捨五入到整數元顯示，外幣保留小數', () => {
+  assert.equal(api.Money.formatTWD(3172917), '31,729元');
+  assert.equal(api.Money.formatTWD(3172950), '31,730元');
+  assert.ok(api.Money.formatMoney(1250, 'EUR').includes('12.5'));
+});
+
+test('租屋補助可保留資料但不納入計算', () => {
+  const h = { ...sampleHousing(), subsidy: { enabled: true, includeInCalc: false, amountCents: 300000, startMonth: '2026-01' } };
+  assert.equal(api.Money.housingSubsidyInMonth(h, '2026-10'), 0);
+  assert.equal(api.Money.calcHousing(h, '2026-10').monthlyCents, api.Money.calcHousing(sampleHousing(), '2026-10').monthlyCents);
 });
 
 test('多帳戶分配先滿足生活、固定支出與緊急預備金', () => {
