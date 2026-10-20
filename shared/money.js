@@ -179,66 +179,75 @@ const Money = (() => {
       const monthlyCents = Math.max(0, Math.round(Number(f.amountCents) || 0)) * (f.perPerson ? occupants : 1);
       return { ...f, monthlyCents };
     });
-    const feesWithRentCents = fees.filter(f => !f.separate).reduce((s, f) => s + f.monthlyCents, 0);
-    const feesSeparateCents = fees.filter(f => f.separate).reduce((s, f) => s + f.monthlyCents, 0);
+    const feesCents = fees.reduce((s, f) => s + f.monthlyCents, 0);
+    const start = parseYmd(h.contractStart);
+    // 繳租日：從簽約日每 cycle 個月一次（小月夾到月底），到期日當天起不再繳
+    const paymentDateAt = (k) => dateInMonth(ymIndex(start.y, start.m) + k * cycle, start.d);
+    const nextPaymentOnOrAfter = (ymd, strict = false) => {
+      if (!start || !parseYmd(ymd)) return null;
+      const from = parseYmd(ymd);
+      let k = Math.max(0, Math.floor((ymIndex(from.y, from.m) - ymIndex(start.y, start.m)) / cycle) - 1);
+      for (let guard = 0; guard < 1200; guard += 1, k += 1) {
+        const date = paymentDateAt(k);
+        if (h.contractEnd && date >= h.contractEnd) return null;
+        if (strict ? date > ymd : date >= ymd) return date;
+      }
+      return null;
+    };
+    // 電費跟房租同一天繳：每個繳租日結清上次抄表到該日的用電
     const e = h.electricity || {};
     const rate = Math.max(0, Number(e.rateCentsPerKwh) || 0);
-    const settleMonths = Number(e.settleMonths) === 2 ? 2 : 1;
     const last = parseYmd(e.lastReadingDate), cur = parseYmd(e.currentReadingDate);
     const usedKwh = Number(e.currentReading) - Number(e.lastReading);
     const days = last && cur ? daysBetween(last, cur) : 0;
     const measured = days > 0 && usedKwh >= 0 && Number.isFinite(usedKwh);
     const dailyKwh = measured ? usedKwh / days : (Math.max(0, Number(e.fallbackMonthlyKwh) || 0) * 12) / 365;
     const monthlyKwh = dailyKwh * 365 / 12;
-    const nextSettleDate = last ? dateInMonth(ymIndex(last.y, last.m) + settleMonths, last.d) : null;
-    const cycleDays = last ? daysBetween(last, parseYmd(nextSettleDate)) : Math.round(settleMonths * 365 / 12);
-    const projectedKwh = dailyKwh * cycleDays;
+    // 上次抄表日當天若剛好是繳租日，那天已結清，下一次結算是之後的繳租日
+    const nextSettleDate = last ? nextPaymentOnOrAfter(e.lastReadingDate, true) : null;
+    const projectedKwh = last && nextSettleDate ? dailyKwh * daysBetween(last, parseYmd(nextSettleDate)) : monthlyKwh * cycle;
     const electricity = {
       enabled: !!e.enabled, measured, usedKwh: measured ? usedKwh : 0, days, dailyKwh, monthlyKwh,
       usedSoFarCents: measured ? Math.round(usedKwh * rate) : 0,
-      nextSettleDate, projectedKwh, projectedBillCents: Math.round(projectedKwh * rate),
-      monthlyCents: e.enabled ? Math.round(monthlyKwh * rate) : 0, settleMonths
+      nextSettleDate, projectedKwh, projectedBillCents: e.enabled ? Math.round(projectedKwh * rate) : 0,
+      monthlyCents: e.enabled ? Math.round(monthlyKwh * rate) : 0
     };
-    const monthlyCents = rentCents + feesWithRentCents + feesSeparateCents + electricity.monthlyCents;
-    return { cycle, occupants, rentCents, fees, feesWithRentCents, feesSeparateCents, electricity, monthlyCents, perPaymentCents: (rentCents + feesWithRentCents) * cycle };
+    const monthlyCents = rentCents + feesCents + electricity.monthlyCents;
+    const perPaymentCents = (rentCents + feesCents) * cycle;
+    // 某次繳租日的總額：房租＋費用 × 週期，加上這段期間的電費（下次結算用實測推估，之後用每月平均）
+    const paymentOn = (date) => {
+      const parts = [];
+      if (rentCents > 0) parts.push({ label: cycle === 1 ? '房租' : `房租 ${cycle} 個月`, cents: rentCents * cycle });
+      if (feesCents > 0) parts.push({ label: cycle === 1 ? '其他費用' : `其他費用 ${cycle} 個月`, cents: feesCents * cycle });
+      if (electricity.enabled) {
+        const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * cycle;
+        if (cents > 0) parts.push({ label: '電費（預估）', cents });
+      }
+      return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
+    };
+    return { cycle, occupants, rentCents, fees, feesCents, electricity, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
-  // 某月實際要付的錢（現金流）：繳租月付房租＋隨租費用×週期；另繳費用每月；電費在結算月
+  // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {
     const start = parseYmd(housing?.contractStart);
     const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
     if (!start || !m) return { totalCents: 0, parts: [] };
     const r = calcHousing(housing);
-    const idx = ymIndex(+m[1], +m[2]);
-    const diff = idx - ymIndex(start.y, start.m);
-    if (diff < 0) return { totalCents: 0, parts: [] };
-    const end = parseYmd(housing.contractEnd);
-    const beforeEnd = !end || dateInMonth(idx, start.d) < housing.contractEnd;
-    const parts = [];
-    if (beforeEnd && diff % r.cycle === 0 && r.perPaymentCents > 0) parts.push({ label: r.cycle === 1 ? '房租' : `房租（${r.cycle} 個月）`, cents: r.perPaymentCents });
-    if (beforeEnd && r.feesSeparateCents > 0) parts.push({ label: '另繳費用', cents: r.feesSeparateCents });
-    const last = parseYmd(housing.electricity?.lastReadingDate);
-    if (r.electricity.enabled && last && beforeEnd) {
-      const eDiff = idx - ymIndex(last.y, last.m);
-      if (eDiff !== 0 && eDiff % r.electricity.settleMonths === 0) {
-        const cents = eDiff === r.electricity.settleMonths && r.electricity.measured ? r.electricity.projectedBillCents : r.electricity.monthlyCents * r.electricity.settleMonths;
-        if (cents > 0) parts.push({ label: '電費（預估）', cents });
-      }
-    }
-    return { totalCents: parts.reduce((s, p) => s + p.cents, 0), parts };
+    const diff = ymIndex(+m[1], +m[2]) - ymIndex(start.y, start.m);
+    if (diff < 0 || diff % r.cycle !== 0) return { totalCents: 0, parts: [] };
+    const date = r.paymentDateAt(diff / r.cycle);
+    if (housing.contractEnd && date >= housing.contractEnd) return { totalCents: 0, parts: [] };
+    const pay = r.paymentOn(date);
+    return { totalCents: pay.cents, parts: pay.parts, date };
   };
-  // 從 fromDate（YYYY-MM-DD）起列出接下來 count 次繳房租的日期與金額
+  // 從 fromDate（YYYY-MM-DD）起列出接下來 count 次繳款的日期與總額
   const housingPaymentSchedule = (housing, fromDate, count = 6) => {
-    const start = parseYmd(housing?.contractStart);
-    const from = parseYmd(fromDate);
-    if (!start || !from) return [];
     const r = calcHousing(housing);
     const out = [];
-    let k = Math.max(0, Math.ceil((ymIndex(from.y, from.m) - ymIndex(start.y, start.m)) / r.cycle) - 1);
-    while (out.length < count && k < 1200) {
-      const date = dateInMonth(ymIndex(start.y, start.m) + k * r.cycle, start.d);
-      k += 1;
-      if (housing.contractEnd && date >= housing.contractEnd) break;
-      if (date >= fromDate) out.push({ date, cents: r.perPaymentCents });
+    let date = r.nextPaymentOnOrAfter(fromDate);
+    while (date && out.length < count) {
+      out.push(r.paymentOn(date));
+      date = r.nextPaymentOnOrAfter(date, true);
     }
     return out;
   };

@@ -1058,9 +1058,8 @@ const App = (() => {
       const elecBody = e.enabled ? [
         el('div', { class: 'toolbar' }, [
           numField('每度電費（元）', Money.toYuan(e.rateCentsPerKwh || 0), (v) => { e.rateCentsPerKwh = Math.max(0, Math.round(v * 100)); saveFlow(); }),
-          el('div', { class: 'field' }, [el('label', { text: '多久結算一次' }), el('select', { onchange: (ev) => { e.settleMonths = Number(ev.target.value); saveFlow(); } }, [1, 2].map(n => el('option', { value: n, text: rentCycleNames[n], selected: r.electricity.settleMonths === n ? 'selected' : undefined })))]),
-          dateField('上次結算日', e.lastReadingDate, (v) => { e.lastReadingDate = v; saveFlow(); }),
-          numField('上次結算度數', e.lastReading || 0, (v) => { e.lastReading = Math.max(0, v); saveFlow(); }),
+          dateField('上次結清日（抄表日）', e.lastReadingDate, (v) => { e.lastReadingDate = v; saveFlow(); }),
+          numField('上次結清度數', e.lastReading || 0, (v) => { e.lastReading = Math.max(0, v); saveFlow(); }),
           numField('目前電表度數', e.currentReading || 0, (v) => { e.currentReading = Math.max(0, v); if (!e.currentReadingDate) e.currentReadingDate = localToday(); saveFlow(); }),
           dateField('抄表日', e.currentReadingDate, (v) => { e.currentReadingDate = v; saveFlow(); }),
           !r.electricity.measured ? numField('沒抄表時：每月約幾度', e.fallbackMonthlyKwh || 0, (v) => { e.fallbackMonthlyKwh = Math.max(0, v); saveFlow(); }) : null
@@ -1068,14 +1067,13 @@ const App = (() => {
         el('p', { class: 'flow-result' }, [
           r.electricity.measured ? document.createTextNode(`已用 ${kwh(r.electricity.usedKwh)}／${r.electricity.days} 天（約 ${yuan(r.electricity.usedSoFarCents)}）；`) : null,
           document.createTextNode(`每月平均 ${kwh(r.electricity.monthlyKwh)} ≈ ${yuan(r.electricity.monthlyCents)}`),
-          r.electricity.nextSettleDate ? document.createTextNode(`；預計 ${r.electricity.nextSettleDate} 結算 ${kwh(r.electricity.projectedKwh)}，約 ${yuan(r.electricity.projectedBillCents)}`) : null
+          r.electricity.nextSettleDate ? document.createTextNode(`；預計 ${r.electricity.nextSettleDate} 隨房租結清 ${kwh(r.electricity.projectedKwh)}，約 ${yuan(r.electricity.projectedBillCents)}`) : null
         ])
       ] : [];
       const feeRows = h.fees.map((fee, i) => el('div', { class: 'toolbar fee-row' }, [
         el('div', { class: 'field' }, [el('label', { text: '費用名稱' }), el('input', { value: fee.name || '', onchange: (ev) => { fee.name = ev.target.value.trim(); saveFlow(); } })]),
         numField('每月金額（元）', Money.toYuan(fee.amountCents || 0), (v) => { fee.amountCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
         el('label', {}, [el('input', { type: 'checkbox', checked: fee.perPerson ? 'checked' : undefined, onchange: (ev) => { fee.perPerson = ev.target.checked; saveFlow(); } }), document.createTextNode(' 每人一份')]),
-        el('label', {}, [el('input', { type: 'checkbox', checked: fee.separate ? 'checked' : undefined, onchange: (ev) => { fee.separate = ev.target.checked; saveFlow(); } }), document.createTextNode(' 每月另繳（不隨房租）')]),
         el('span', { class: 'mono', text: `＝${yuan(r.fees[i].monthlyCents)}／月` }),
         el('button', { class: 'btn small danger', text: '刪除', onclick: () => { h.fees.splice(i, 1); saveFlow(); } })
       ]));
@@ -1095,21 +1093,21 @@ const App = (() => {
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),
         el('div', { class: 'flow-result' }, [
-          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesWithRentCents + r.feesSeparateCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}` }),
-          el('p', { text: r.cycle > 1 ? `每次繳 ${yuan(r.perPaymentCents)}（房租與隨租費用 × ${r.cycle} 個月）` : `每次繳 ${yuan(r.perPaymentCents)}` }),
+          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}` }),
+          el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費` }),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
             : el('p', { class: 'notice', text: h.contractStart ? '租約期間內已無繳款日。' : '填入簽約起租日，就會列出接下來的繳款日。' })
         ]),
         el('details', { class: 'flow-sub' }, [
           el('summary', { text: `電費${e.enabled ? `：每月約 ${yuan(r.electricity.monthlyCents)}` : '（未計入）'}` }),
-          el('label', {}, [el('input', { type: 'checkbox', checked: e.enabled ? 'checked' : undefined, onchange: (ev) => { e.enabled = ev.target.checked; if (e.enabled && !e.settleMonths) e.settleMonths = 1; saveFlow(); } }), document.createTextNode(' 計入電費（依電表度數推估）')]),
+          el('label', {}, [el('input', { type: 'checkbox', checked: e.enabled ? 'checked' : undefined, onchange: (ev) => { e.enabled = ev.target.checked; saveFlow(); } }), document.createTextNode(' 計入電費（依電表度數推估）')]),
           ...elecBody
         ]),
         el('details', { class: 'flow-sub' }, [
-          el('summary', { text: `其他費用${h.fees.length ? `：每月 ${yuan(r.feesWithRentCents + r.feesSeparateCents)}` : '（管理費、網路費…）'}` }),
+          el('summary', { text: `其他費用${h.fees.length ? `：每月 ${yuan(r.feesCents)}` : '（管理費、網路費…）'}` }),
           ...feeRows,
-          el('div', { class: 'toolbar' }, housingFeePresets.map(name => el('button', { class: 'btn small', text: `＋${name}`, onclick: () => { h.fees.push({ id: createEntryId(), name: name === '其他' ? '' : name, amountCents: 0, perPerson: false, separate: false }); saveFlow(); } })))
+          el('div', { class: 'toolbar' }, housingFeePresets.map(name => el('button', { class: 'btn small', text: `＋${name}`, onclick: () => { h.fees.push({ id: createEntryId(), name: name === '其他' ? '' : name, amountCents: 0, perPerson: false }); saveFlow(); } })))
         ]),
         el('div', { class: 'toolbar' }, [
           accountSelect(flow, '扣款帳戶'),
@@ -1255,7 +1253,7 @@ const App = (() => {
         } })),
         el('button', { class: 'btn small', text: '＋租屋（房租／電費／管理費）', onclick: () => {
           const id = createEntryId();
-          config.recurringCashFlows.push({ id, name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0]?.id, essential: true, active: true, housing: { rentCents: 0, payCycleMonths: 1, contractStart: localToday(), contractEnd: '', occupants: 1, fees: [], electricity: { enabled: false, rateCentsPerKwh: 0, settleMonths: 1, lastReading: 0, lastReadingDate: '', currentReading: 0, currentReadingDate: '', fallbackMonthlyKwh: 0 } } });
+          config.recurringCashFlows.push({ id, name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0]?.id, essential: true, active: true, housing: { rentCents: 0, payCycleMonths: 1, contractStart: localToday(), contractEnd: '', occupants: 1, fees: [], electricity: { enabled: false, rateCentsPerKwh: 0, lastReading: 0, lastReadingDate: '', currentReading: 0, currentReadingDate: '', fallbackMonthlyKwh: 0 } } });
           openFlowCard(id); IO.markDirty(); renderPersonalSettings();
         } }),
         el('button', { class: 'btn small', text: '＋新增固定支出', onclick: () => { config.recurringCashFlows.push({ id: createEntryId(), name: '新固定支出', type: 'expense', kind: 'fixed_expense', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0]?.id, essential: true, active: true }); IO.markDirty(); renderPersonalSettings(); } }),

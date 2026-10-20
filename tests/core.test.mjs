@@ -203,38 +203,40 @@ test('未設定計薪方式的舊資料仍視為固定月薪', () => {
 });
 
 const sampleHousing = () => ({
-  rentCents: 800000, payCycleMonths: 6, contractStart: '2026-01-31', contractEnd: '2027-01-31', occupants: 2,
-  fees: [{ name: '管理費', amountCents: 50000, perPerson: false, separate: false }, { name: '網路費', amountCents: 20000, perPerson: true, separate: true }],
-  electricity: { enabled: true, rateCentsPerKwh: 500, settleMonths: 2, lastReading: 1000, lastReadingDate: '2026-09-01', currentReading: 1150, currentReadingDate: '2026-10-01' }
+  rentCents: 800000, payCycleMonths: 6, contractStart: '2026-01-31', contractEnd: '2027-08-01', occupants: 2,
+  fees: [{ name: '管理費', amountCents: 50000, perPerson: false }, { name: '網路費', amountCents: 20000, perPerson: true }],
+  electricity: { enabled: true, rateCentsPerKwh: 500, lastReading: 1000, lastReadingDate: '2026-09-01', currentReading: 1150, currentReadingDate: '2026-10-01' }
 });
+const PER_PAYMENT = (800000 + 50000 + 40000) * 6; // 網路費每人一份 × 2 人
+const BILL_TO_JAN = 5 * 152 * 500; // 每天 5 度，2026-09-01 → 2027-01-31 共 152 天
 
 test('租屋：半年繳房租、按人數費用與電表推估合成每月平均', () => {
   const r = api.Money.calcHousing(sampleHousing());
-  assert.equal(r.feesWithRentCents, 50000);
-  assert.equal(r.feesSeparateCents, 40000); // 網路費每人一份 × 2 人
-  assert.equal(r.perPaymentCents, (800000 + 50000) * 6);
+  assert.equal(r.feesCents, 90000);
+  assert.equal(r.perPaymentCents, PER_PAYMENT);
   assert.equal(r.electricity.days, 30);
   assert.equal(r.electricity.usedKwh, 150);
   assert.equal(r.electricity.usedSoFarCents, 75000);
-  assert.equal(r.electricity.nextSettleDate, '2026-11-01');
-  assert.equal(r.electricity.projectedKwh, 5 * 61);
-  assert.equal(r.electricity.projectedBillCents, 5 * 61 * 500);
+  // 電費跟房租同一天結清：上次抄表後的第一個繳租日
+  assert.equal(r.electricity.nextSettleDate, '2027-01-31');
+  assert.equal(r.electricity.projectedBillCents, BILL_TO_JAN);
   assert.equal(r.electricity.monthlyCents, Math.round(5 * 365 / 12 * 500));
-  assert.equal(r.monthlyCents, 800000 + 50000 + 40000 + r.electricity.monthlyCents);
+  assert.equal(r.monthlyCents, 800000 + 90000 + r.electricity.monthlyCents);
 });
 
-test('租屋：簽約日推出繳款日（月底夾日、到期日後停止），只在到期月扣整期', () => {
+test('租屋：房租、費用、電費同一天繳；簽約日推出繳款日（月底夾日、到期日後停止）', () => {
   const h = sampleHousing();
-  const dates = Array.from(api.Money.housingPaymentSchedule(h, '2026-02-01', 6), p => p.date);
-  assert.deepEqual(dates, ['2026-07-31']);
+  const elecMonthly = api.Money.calcHousing(h).electricity.monthlyCents;
+  const schedule = api.Money.housingPaymentSchedule(h, '2026-02-01', 6);
+  assert.deepEqual(Array.from(schedule, p => p.date), ['2026-07-31', '2027-01-31', '2027-07-31']);
+  assert.deepEqual(Array.from(schedule, p => p.cents), [PER_PAYMENT + elecMonthly * 6, PER_PAYMENT + BILL_TO_JAN, PER_PAYMENT + elecMonthly * 6]);
   assert.deepEqual(Array.from(api.Money.housingPaymentSchedule({ ...h, payCycleMonths: 1 }, '2026-02-01', 2), p => p.date), ['2026-02-28', '2026-03-31']);
   const due = (ym) => api.Money.housingDueInMonth(h, ym).totalCents;
   assert.equal(due('2025-12'), 0);
-  const elecMonthly = api.Money.calcHousing(h).electricity.monthlyCents;
-  assert.equal(due('2026-07'), 850000 * 6 + 40000 + elecMonthly * 2); // 結算週期錨定上次結算日，往前的結算月用每月平均估
-  assert.equal(due('2026-08'), 40000);
-  assert.equal(due('2026-11'), 40000 + 5 * 61 * 500); // 電費結算月用實測推估
-  assert.equal(due('2027-01'), 0); // 租約到期
+  assert.equal(due('2026-07'), PER_PAYMENT + elecMonthly * 6);
+  assert.equal(due('2026-08'), 0); // 非繳款月什麼都不用付
+  assert.equal(due('2027-01'), PER_PAYMENT + BILL_TO_JAN);
+  assert.equal(due('2028-01'), 0); // 租約到期
   const flows = [{ id: 'home', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 31, accountId: 'bank', housing: h }];
   assert.equal(api.Validation.validateRecurringFlows(flows).valid, true);
   assert.equal(api.Money.calcRecurringMonthly(flows, api.DEFAULT_CONFIG.insuranceRates).essentialExpenseCents, api.Money.calcHousing(h).monthlyCents);
