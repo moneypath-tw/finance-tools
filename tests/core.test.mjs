@@ -243,6 +243,22 @@ test('租屋：房租、費用、電費同一天繳；簽約日推出繳款日�
   assert.equal(api.Validation.validateRecurringFlows([{ ...flows[0], housing: { ...h, payCycleMonths: 4 } }]).valid, false);
 });
 
+test('租屋補助：核定期間內每月撥款，每月平均扣掉補助，不影響繳租金額', () => {
+  const h = { ...sampleHousing(), subsidy: { enabled: true, amountCents: 300000, startMonth: '2026-03', endMonth: '2027-02', dayOfMonth: 10 } };
+  const r = api.Money.calcHousing(h, '2026-10');
+  assert.equal(r.subsidyCents, 300000);
+  assert.equal(r.monthlyCents, r.grossMonthlyCents - 300000);
+  assert.equal(api.Money.calcHousing(h, '2027-03').subsidyCents, 0); // 核定期滿
+  assert.equal(api.Money.calcHousing(h, '2026-02').monthlyCents, r.grossMonthlyCents);
+  assert.equal(api.Money.housingSubsidyInMonth(h, '2026-03'), 300000);
+  assert.equal(api.Money.housingSubsidyInMonth(h, '2027-03'), 0);
+  assert.equal(api.Money.housingSubsidyInMonth({ ...h, subsidy: { ...h.subsidy, enabled: false } }, '2026-10'), 0);
+  assert.equal(api.Money.housingDueInMonth(h, '2026-07').totalCents, api.Money.housingDueInMonth(sampleHousing(), '2026-07').totalCents);
+  const flow = { id: 'home', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 31, accountId: 'bank', housing: h };
+  assert.equal(api.Validation.validateRecurringFlows([flow]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, housing: { ...h, subsidy: { ...h.subsidy, endMonth: '2026-01' } } }]).valid, false);
+});
+
 test('多帳戶分配先滿足生活、固定支出與緊急預備金', () => {
   const result = api.Planning.allocateMonthly({
     incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyGapCents: 1200000,

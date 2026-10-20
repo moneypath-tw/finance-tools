@@ -280,15 +280,31 @@ const App = (() => {
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     };
     const marker = config.recurringProjectionThroughMonth;
-    const startYm = /^\d{4}-(0[1-9]|1[0-2])$/.test(marker || '') ? nextMonth(marker) : currentYm;
+    // 過去月份只補一次；本月每次都重算，固定項目月中改動（新增、改金額、加補助）才會反映到本月預測
+    const resumeYm = /^\d{4}-(0[1-9]|1[0-2])$/.test(marker || '') ? nextMonth(marker) : currentYm;
+    const startYm = resumeYm < currentYm ? resumeYm : currentYm;
     let changed = false;
     for (let ym = startYm; ym <= currentYm; ym = nextMonth(ym)) {
       const [entryYear, entryMonth] = ym.split('-').map(Number);
       const entryLastDay = new Date(entryYear, entryMonth, 0).getDate();
       for (const flow of summary.items) {
         const day = Math.min(Math.max(1, Math.trunc(flow.dayOfMonth || 1)), entryLastDay);
-        if (ym === currentYm && now.getDate() < day) continue;
         // 租屋不是每月等額：半年／一年繳的房租與電費結算只在到期月入帳，金額為當期實付
+        // 租屋補助另外撥款：獨立一筆收入，按撥款日入帳，不跟繳租月綁在一起
+        const subsidyCents = flow.housingCalc ? Money.housingSubsidyInMonth(flow.housing, ym) : 0;
+        const subsidyDay = Math.min(Math.max(1, Math.trunc(flow.housing?.subsidy?.dayOfMonth || 1)), entryLastDay);
+        if (subsidyCents > 0 && !(ym === currentYm && now.getDate() < subsidyDay)) {
+          const sid = `recurring-${flow.id}-subsidy-${ym}`;
+          const subsidyEntry = {
+            id: sid, recurringFlowId: flow.id, date: `${ym}-${String(subsidyDay).padStart(2, '0')}`,
+            type: 'income', category: null, account: flow.accountId || config.accountProfiles[0]?.id || null,
+            currency: 'TWD', rateToTWD: 1, amountCents: subsidyCents, incomeSource: '租屋補助',
+            essential: null, reimbursable: false, status: 'projected', note: `${flow.name || '租屋'}：租屋補助（預測）`
+          };
+          const prev = ledger.entries.find(e => e.id === sid);
+          if (prev?.status !== 'realized') { if (prev) Object.assign(prev, subsidyEntry); else ledger.entries.push(subsidyEntry); changed = true; }
+        }
+        if (ym === currentYm && now.getDate() < day) continue;
         const housingDue = flow.housingCalc ? Money.housingDueInMonth(flow.housing, ym) : null;
         const dueCents = housingDue ? housingDue.totalCents : flow.grossCents;
         if (!(dueCents > 0)) continue;
@@ -1049,6 +1065,9 @@ const App = (() => {
       const h = flow.housing;
       if (!Array.isArray(h.fees)) h.fees = [];
       if (!h.electricity || typeof h.electricity !== 'object') h.electricity = { enabled: false };
+      if (!h.subsidy || typeof h.subsidy !== 'object') h.subsidy = { enabled: false };
+      const sub = h.subsidy;
+      const monthField = (label, value, onchange) => el('div', { class: 'field' }, [el('label', { text: label }), el('input', { type: 'month', value: value || '', onchange: (ev) => onchange(Validation.isValidMonth(ev.target.value) ? ev.target.value : '') })]);
       const e = h.electricity;
       const r = Money.calcHousing(h);
       const yuan = (cents) => Money.formatTWD(cents);
@@ -1093,7 +1112,7 @@ const App = (() => {
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),
         el('div', { class: 'flow-result' }, [
-          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}` }),
+          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
           el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費` }),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
@@ -1103,6 +1122,17 @@ const App = (() => {
           el('summary', { text: `電費${e.enabled ? `：每月約 ${yuan(r.electricity.monthlyCents)}` : '（未計入）'}` }),
           el('label', {}, [el('input', { type: 'checkbox', checked: e.enabled ? 'checked' : undefined, onchange: (ev) => { e.enabled = ev.target.checked; saveFlow(); } }), document.createTextNode(' 計入電費（依電表度數推估）')]),
           ...elecBody
+        ]),
+        el('details', { class: 'flow-sub' }, [
+          el('summary', { text: sub.enabled ? `租屋補助：${r.subsidyCents ? `本月 ＋${yuan(r.subsidyCents)}` : '本月不在核定期間'}` : '租屋補助（未申請）' }),
+          el('label', {}, [el('input', { type: 'checkbox', checked: sub.enabled ? 'checked' : undefined, onchange: (ev) => { sub.enabled = ev.target.checked; if (sub.enabled && !sub.startMonth) sub.startMonth = localToday().slice(0, 7); saveFlow(); } }), document.createTextNode(' 有領租屋補助')]),
+          sub.enabled ? el('div', { class: 'toolbar' }, [
+            numField('每月補助（元）', Money.toYuan(sub.amountCents || 0), (v) => { sub.amountCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
+            monthField('核定起始月', sub.startMonth, (v) => { sub.startMonth = v; saveFlow(); }),
+            monthField('核定結束月（可空）', sub.endMonth, (v) => { sub.endMonth = v; saveFlow(); }),
+            numField('每月幾號撥款', sub.dayOfMonth || 1, (v) => { sub.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); })
+          ]) : null,
+          sub.enabled ? el('p', { class: 'notice', text: '補助撥到自己的帳戶，不從房租扣；金額與期間請依核定通知填寫，到期續辦後更新結束月。' }) : null
         ]),
         el('details', { class: 'flow-sub' }, [
           el('summary', { text: `其他費用${h.fees.length ? `：每月 ${yuan(r.feesCents)}` : '（管理費、網路費…）'}` }),

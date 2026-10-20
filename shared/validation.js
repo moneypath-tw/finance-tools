@@ -199,6 +199,9 @@ const Validation = (() => {
           if (!Array.isArray(h.fees) || h.fees.some(x => !x || !integer(x.amountCents) || x.amountCents < 0)) errors.push(error(`${hp}.fees`, 'INVALID_MONEY', '租屋費用金額必須是非負整數分'));
           const e = h.electricity || {};
           if (![e.rateCentsPerKwh, e.lastReading, e.currentReading, e.fallbackMonthlyKwh].every(nonNeg) || !optDate(e.lastReadingDate) || !optDate(e.currentReadingDate)) errors.push(error(`${hp}.electricity`, 'INVALID_ELECTRICITY', '電費設定的度數、單價或日期不正確'));
+          const s = h.subsidy;
+          const optMonth = (v) => v === undefined || v === '' || isValidMonth(v);
+          if (s !== undefined && (!s || typeof s !== 'object' || (s.amountCents !== undefined && (!integer(s.amountCents) || s.amountCents < 0)) || !optMonth(s.startMonth) || !optMonth(s.endMonth) || (s.startMonth && s.endMonth && s.endMonth < s.startMonth))) errors.push(error(`${hp}.subsidy`, 'INVALID_SUBSIDY', '租屋補助的金額或核定期間不正確'));
         }
       }
       if (typeof f.accountId !== 'string' || !f.accountId) errors.push(error(`${p}.accountId`, 'MISSING_ACCOUNT', '固定項目必須指定帳戶'));

@@ -170,7 +170,16 @@ const Money = (() => {
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   };
   const daysBetween = (a, b) => Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
-  const calcHousing = (housing) => {
+  // 租屋補助：核定期間內每月撥款到自己帳戶（不從房租扣），金額由使用者依核定通知填寫，不內建會過期的官方級距
+  const currentYm = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const housingSubsidyInMonth = (housing, ym) => {
+    const s = housing?.subsidy;
+    if (!s?.enabled || !/^\d{4}-\d{2}$/.test(ym || '')) return 0;
+    if (s.startMonth && ym < s.startMonth) return 0;
+    if (s.endMonth && ym > s.endMonth) return 0;
+    return Math.max(0, Math.round(Number(s.amountCents) || 0));
+  };
+  const calcHousing = (housing, asOfYm = currentYm()) => {
     const h = housing || {};
     const cycle = RENT_CYCLES.includes(Number(h.payCycleMonths)) ? Number(h.payCycleMonths) : 1;
     const occupants = Number(h.occupants) >= 1 ? Math.trunc(Number(h.occupants)) : 1;
@@ -212,7 +221,10 @@ const Money = (() => {
       nextSettleDate, projectedKwh, projectedBillCents: e.enabled ? Math.round(projectedKwh * rate) : 0,
       monthlyCents: e.enabled ? Math.round(monthlyKwh * rate) : 0
     };
-    const monthlyCents = rentCents + feesCents + electricity.monthlyCents;
+    const grossMonthlyCents = rentCents + feesCents + electricity.monthlyCents;
+    const subsidyCents = housingSubsidyInMonth(h, asOfYm);
+    // 每月平均看實際負擔：房租＋費用＋電費－本月有效的補助
+    const monthlyCents = Math.max(0, grossMonthlyCents - subsidyCents);
     const perPaymentCents = (rentCents + feesCents) * cycle;
     // 某次繳租日的總額：房租＋費用 × 週期，加上這段期間的電費（下次結算用實測推估，之後用每月平均）
     const paymentOn = (date) => {
@@ -225,7 +237,7 @@ const Money = (() => {
       }
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
     };
-    return { cycle, occupants, rentCents, fees, feesCents, electricity, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    return { cycle, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {
@@ -588,6 +600,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, calcHousing, housingDueInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

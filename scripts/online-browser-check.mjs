@@ -173,6 +173,13 @@ try {
   flows = await savedFlows();
   const rentSummary = await evaluate(`[...document.querySelectorAll('#personal-settings .flow-card')][3]?.querySelector('summary').textContent || ''`);
   check('semiannual rent: monthly 8,000, next payment 48,000 on the 15th', typedRent && flows[3]?.amountCents === 800000 && flows[3]?.dayOfMonth === 15 && rentSummary.includes('每半年繳') && rentSummary.includes('48,000'), rentSummary);
+  // rent subsidy: paid into own account monthly, lowers the monthly average, separate income entry in the ledger
+  await evaluate(`(() => { [...document.querySelectorAll('#personal-settings details')].forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][3]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.includes('有領租屋補助')).querySelector('input'); box.click(); return true; })()`);
+  const typedSubsidy = await typeIncome(3, '每月補助（元）', '3000');
+  const stored = await evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1'))`);
+  const rentFlow = stored.config.recurringCashFlows[3];
+  const subsidyEntry = stored.ledger.entries.find(x => x.id.startsWith(`recurring-${rentFlow?.id}-subsidy-`));
+  check('rent subsidy 3,000 lowers monthly average and posts income', typedSubsidy && rentFlow?.amountCents === 500000 && subsidyEntry?.amountCents === 300000 && subsidyEntry?.type === 'income', JSON.stringify(subsidyEntry || rentFlow?.housing?.subsidy));
   const incomeErrs = events.filter((e) => e.method === 'Runtime.exceptionThrown').map((e) => e.params.exceptionDetails.exception?.description?.split('\n')[0]);
   check('no page exceptions or dialogs while editing income cards', incomeErrs.length === 0 && dialogs.length === 0, [...incomeErrs, ...dialogs].join(' | '));
   if (process.env.SHOT_DIR) {
