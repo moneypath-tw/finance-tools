@@ -228,6 +228,8 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .dashboard-mini-value { margin: 8px 0 5px; font-size: 1.12rem; font-weight: 700; overflow-wrap: anywhere; }
 .dashboard-mini-card .notice { margin: 0; font-size: 0.76rem; }
 .dashboard-mini-card.negative-card { border-color: #E8D7DA; background: #FCF6F7; }
+.dashboard-mini-card.watch-card { border-color: #EADFC8; background: #FCF9F2; }
+.dashboard-mini-value.watch { color: var(--over-limit); }
 .dashboard-mini-card.missing-card { border-style: dashed; background: #FAFBFA; }
 .summary-card-setting-row { display: grid; grid-template-columns: auto minmax(140px, 1fr) minmax(170px, 1.2fr) auto; gap: 8px; align-items: center; margin: 8px 0; }
 .summary-card-setting-row input[type="text"], .summary-card-setting-row select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; color: var(--ink); }
