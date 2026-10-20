@@ -313,7 +313,9 @@ const App = (() => {
         }
         if (ym === currentYm && now.getDate() < day) continue;
         const housingDue = flow.housingCalc ? Money.housingDueInMonth(flow.housing, ym) : null;
-        const dueCents = housingDue ? housingDue.totalCents : flow.grossCents;
+        // 一般固定支出若是兩月／季／半年／年繳，只在繳款月入帳，金額為每月金額 × 週期
+        const cycle = flow.type === 'expense' && !housingDue ? Money.flowPayCycle(flow) : 1;
+        const dueCents = housingDue ? housingDue.totalCents : (cycle > 1 ? Money.flowDueInMonth(flow, ym) : flow.grossCents);
         if (!(dueCents > 0)) continue;
         const id = `recurring-${flow.id}-${ym}`;
         const isIncome = flow.type === 'income';
@@ -330,7 +332,7 @@ const App = (() => {
           currency: 'TWD', rateToTWD: 1, amountCents: isIncome ? flow.netCents : -dueCents,
           incomeSource: isIncome ? (recurringKinds[flow.kind] || flow.name || '其他') : null,
           essential: isIncome ? null : flow.essential !== false, reimbursable: false, status: 'projected',
-          note: housingDue ? `${flow.name || '租屋'}：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`
+          note: housingDue ? `${flow.name || '租屋'}：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
         };
         const existing = ledger.entries.find(e => e.id === id);
         if (existing?.status === 'realized') continue;
@@ -1256,16 +1258,21 @@ const App = (() => {
       if (flow.type === 'income') return incomeCard(flow);
       if (flow.type === 'expense' && flow.housing) return housingCard(flow);
       const isSaving = flow.type === 'saving';
+      // 學貸／房貸由貸款設定管理，固定每月繳；其他固定支出可跟房租一樣選繳款週期
+      const canCycle = flow.type === 'expense' && !flow.systemManaged;
+      const cycle = canCycle ? Money.flowPayCycle(flow) : 1;
       return flowCard(flow, [
         el('span', { class: 'flow-name', text: flow.name || (isSaving ? '固定儲蓄' : '固定支出') }),
-        el('span', { class: 'flow-tag', text: `${isSaving ? '每月轉存' : '每月扣款'} ${flow.dayOfMonth || 1} 日` }),
+        el('span', { class: 'flow-tag', text: isSaving ? `每月轉存 ${flow.dayOfMonth || 1} 日` : `${rentCycleNames[cycle]}扣款 ${flow.dayOfMonth || 1} 日${cycle > 1 ? `・每次 ${Money.formatTWD((flow.amountCents || 0) * cycle)}` : ''}` }),
         el('span', { class: `flow-amount mono${isSaving ? '' : ' negative'}`, text: flow.active === false ? '未啟用' : `${isSaving ? '' : '－'}${Money.formatTWD(flow.amountCents || 0)}／月` })
       ], [
         el('div', { class: 'toolbar' }, [
           el('label', {}, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.active = ev.target.checked; saveFlow(); } }), document.createTextNode(flow.systemManaged ? ' 依年齡自動啟用' : ' 啟用')]),
           el('div', { class: 'field' }, [el('label', { text: '名稱' }), el('input', { value: flow.name || '', disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
           flowTypeSelect(flow),
-          numField(isSaving ? '每月儲蓄（元）' : '每月金額（元）', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
+          numField(isSaving ? '每月儲蓄（元）' : (cycle > 1 ? `每月金額（元，每次繳 ${cycle} 個月）` : '每月金額（元）'), Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
+          canCycle ? el('div', { class: 'field' }, [el('label', { text: '繳款方式' }), el('select', { onchange: (ev) => { flow.payCycleMonths = Number(ev.target.value); if (flow.payCycleMonths > 1 && !Validation.isValidMonth(flow.payStartMonth)) flow.payStartMonth = localToday().slice(0, 7); saveFlow(); } }, Money.RENT_CYCLES.map(n => el('option', { value: n, text: `${rentCycleNames[n]}繳`, selected: cycle === n ? 'selected' : undefined })))]) : null,
+          canCycle && cycle > 1 ? el('div', { class: 'field' }, [el('label', { text: '首次繳款月份' }), el('input', { type: 'month', value: flow.payStartMonth || '', onchange: (ev) => { if (Validation.isValidMonth(ev.target.value)) { flow.payStartMonth = ev.target.value; saveFlow(); } } })]) : null,
           numField(isSaving ? '轉存日' : '扣款日', flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
           isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.filter(a => a.linkRecurring !== false || a.id === flow.fromAccountId).map(a => el('option', { value: a.id, text: a.linkRecurring === false ? `${a.name}（未連動）` : a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
           accountSelect(flow, isSaving ? '儲蓄帳戶' : '扣款帳戶')

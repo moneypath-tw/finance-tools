@@ -204,6 +204,8 @@ const Validation = (() => {
           if (s !== undefined && (!s || typeof s !== 'object' || (s.amountCents !== undefined && (!integer(s.amountCents) || s.amountCents < 0)) || !optMonth(s.startMonth) || !optMonth(s.endMonth) || (s.startMonth && s.endMonth && s.endMonth < s.startMonth))) errors.push(error(`${hp}.subsidy`, 'INVALID_SUBSIDY', '租屋補助的金額或核定期間不正確'));
         }
       }
+      if (f.payCycleMonths !== undefined && ![1, 2, 3, 6, 12].includes(f.payCycleMonths)) errors.push(error(`${p}.payCycleMonths`, 'INVALID_CYCLE', '繳款週期只能是 1、2、3、6、12 個月'));
+      else if (f.payCycleMonths > 1 && !isValidMonth(f.payStartMonth)) errors.push(error(`${p}.payStartMonth`, 'INVALID_DATE', '非每月繳的固定支出必須指定首次繳款月份'));
       if (typeof f.accountId !== 'string' || !f.accountId) errors.push(error(`${p}.accountId`, 'MISSING_ACCOUNT', '固定項目必須指定帳戶'));
       if (f.type === 'saving' && (typeof f.fromAccountId !== 'string' || !f.fromAccountId || f.fromAccountId === f.accountId)) errors.push(error(p, 'INVALID_SAVING_TRANSFER', '固定儲蓄必須指定兩個不同帳戶'));
     });

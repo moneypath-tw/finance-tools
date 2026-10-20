@@ -691,3 +691,21 @@ test('commit 前隱私掃描確實會被 git 執行（hook 檔名必須是 pre-c
   assert.match(fs.readFileSync(hook, 'utf8'), /bash scripts\/check-no-real-data\.sh --staged/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'hooks')), ['pre-commit']);
 });
+
+test('固定支出：可跟房租一樣選繳款週期，只在繳款月付每月金額 × 週期', () => {
+  const flow = { id: 'ins', name: '保險', type: 'expense', kind: 'fixed_expense', amountCents: 100000, dayOfMonth: 5, accountId: 'bank', payCycleMonths: 3, payStartMonth: '2026-02' };
+  const due = (ym, f = flow) => api.Money.flowDueInMonth(f, ym);
+  assert.equal(due('2026-01'), 0); // 首次繳款月之前不付
+  assert.equal(due('2026-02'), 300000);
+  assert.equal(due('2026-03'), 0);
+  assert.equal(due('2026-05'), 300000);
+  assert.equal(due('2027-02'), 300000);
+  assert.equal(due('2026-03', { ...flow, payCycleMonths: undefined }), 100000); // 舊資料沒有週期＝每月繳
+  assert.equal(due('2026-03', { ...flow, payStartMonth: undefined }), 0);
+  // 每月平均不受週期影響
+  assert.equal(api.Money.calcRecurringMonthly([flow], api.DEFAULT_CONFIG.insuranceRates).essentialExpenseCents, 100000);
+  assert.equal(api.Validation.validateRecurringFlows([flow]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payCycleMonths: 1, payStartMonth: undefined }]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payCycleMonths: 4 }]).valid, false);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, payStartMonth: '' }]).valid, false);
+});

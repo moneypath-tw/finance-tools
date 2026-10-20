@@ -268,6 +268,18 @@ const Money = (() => {
     return out;
   };
 
+  // 一般固定支出也跟房租一樣可選繳款週期：amountCents 是每月金額，從 payStartMonth 起每 cycle 個月付一次「每月金額 × 週期」
+  const flowPayCycle = (flow) => (RENT_CYCLES.includes(Number(flow?.payCycleMonths)) ? Number(flow.payCycleMonths) : 1);
+  const flowDueInMonth = (flow, ym) => {
+    const monthlyCents = Math.abs(Math.round(Number(flow?.amountCents) || 0));
+    const cycle = flowPayCycle(flow);
+    if (cycle === 1) return monthlyCents;
+    const s = /^(\d{4})-(\d{2})$/.exec(flow.payStartMonth || ''), m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    if (!s || !m) return 0;
+    const diff = ymIndex(+m[1], +m[2]) - ymIndex(+s[1], +s[2]);
+    return diff >= 0 && diff % cycle === 0 ? monthlyCents * cycle : 0;
+  };
+
   // 一次性情境（買房／買地自建／旅費／喪葬）
   const calcOneTimeScenario = (scenario, config) => {
     const total = sumItems(scenario.items);
@@ -604,6 +616,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
