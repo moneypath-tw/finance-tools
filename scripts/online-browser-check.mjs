@@ -191,6 +191,25 @@ try {
   await go(`${base}/index.html`);
   const fixedSummary = await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; return { tag: card?.querySelector('summary').textContent || '', cycle: [...card.querySelectorAll('.field')].find(f => f.querySelector('label').textContent === '繳款方式')?.querySelector('select').value }; })()`);
   check('quarterly fixed expense: monthly 1,000, posts 3,000 this month, survives reload', typedFixed && fixedFlow?.amountCents === 100000 && fixedFlow?.payCycleMonths === 3 && fixedFlow?.payStartMonth === nowYm && fixedEntry?.amountCents === -300000 && fixedSummary.cycle === '3' && fixedSummary.tag.includes('每季扣款') && fixedSummary.tag.includes('3,000'), JSON.stringify({ fixedFlow, fixedEntry, fixedSummary }));
+  // home health form takes 必要支出 from fixed expenses marked essential; summary cards add up from one plan
+  const home = await evaluate(`(() => {
+    const f = [...document.querySelectorAll('#health-form .field')].find(x => x.querySelector('label')?.textContent === '每月必要支出');
+    const yuan = (t) => Number(t.replace(/－/g, '-').replace(/[^0-9-]/g, ''));
+    const cards = Object.fromEntries([...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].map(c => [c.querySelector('h3').textContent, yuan(c.querySelector('.dashboard-mini-value').textContent)]));
+    const ws = JSON.parse(localStorage.getItem('finance-tools.workspace.v1'));
+    const essential = ws.config.recurringCashFlows.filter(x => x.type === 'expense' && x.essential !== false && x.active !== false).reduce((s, x) => s + x.amountCents, 0) / 100;
+    return { shown: f ? yuan(f.querySelector('.readonly-value')?.textContent || '') : null, essential, living: ws.config.quickPlan.monthlyOtherExpenseCents / 100, cards };
+  })()`);
+  const c = home.cards;
+  check('health form: 必要支出 auto-filled from essential fixed expenses', home.shown === home.essential && home.essential > 0, JSON.stringify(home));
+  check('summary cards: 月度餘裕 = 月收入 − 固定支出 − 生活開銷 − 應儲蓄', c['月度餘裕'] === c['月收入'] - c['固定支出'] - home.living - c['應儲蓄'], JSON.stringify(home));
+  // turning a fixed item off mid-month removes its projected entry for this month; turning it back on restores it
+  const toggleFixed = () => evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.trim() === '啟用').querySelector('input'); box.click(); return true; })()`);
+  const hasFixedEntry = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.some(e => e.id === ${JSON.stringify(`recurring-${fixedFlow?.id}-${nowYm}`)})`);
+  await toggleFixed();
+  const goneWhenOff = !(await hasFixedEntry());
+  await toggleFixed();
+  check('disabling a fixed item drops only its projected entry this month; re-enabling restores it', goneWhenOff && (await hasFixedEntry()));
   // custom account nature + turning off 連動固定收支 drops every fixed item on that account from the totals
   await evaluate(`[...document.querySelectorAll('#personal-settings button')].find(b => b.textContent === '＋自訂性質').click(); true`);
   const typedNature = await evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const i = [...document.querySelectorAll('#personal-settings .field')].find(f => f.querySelector('label').textContent === '性質名稱')?.querySelector('input'); if (!i) return false; i.value = '旅遊基金'; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);

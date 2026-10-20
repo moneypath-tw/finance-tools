@@ -273,22 +273,48 @@ test('租屋補助可保留資料但不納入計算', () => {
   assert.equal(api.Money.calcHousing(h, '2026-10').monthlyCents, api.Money.calcHousing(sampleHousing(), '2026-10').monthlyCents);
 });
 
-test('多帳戶分配先滿足生活、固定支出與緊急預備金', () => {
+test('多帳戶分配先付固定支出，再滿足生活與緊急預備金', () => {
   const result = api.Planning.allocateMonthly({
     incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyGapCents: 1200000,
     savingCents: 300000, livingAccountId: 'living', fixedExpenseAccountId: 'fixed', emergencyAccountId: 'emergency', savingsAccountId: 'saving',
     goals: [{ key: 'trip', label: '旅行', gapCents: 2400000, months: 12, accountId: 'trip' }]
   });
-  assert.deepEqual(Array.from(result.rows, r => r.accountId), ['living', 'fixed', 'emergency', 'saving', 'trip']);
-  assert.deepEqual(Array.from(result.rows, r => r.allocatedCents), [1800000, 1200000, 100000, 300000, 200000]);
+  assert.deepEqual(Array.from(result.rows, r => r.accountId), ['fixed', 'living', 'emergency', 'saving', 'trip']);
+  assert.deepEqual(Array.from(result.rows, r => r.allocatedCents), [1200000, 1800000, 100000, 300000, 200000]);
   assert.equal(result.unallocatedCents, 1400000);
 });
 
 test('收入不足時可選成本目標不會排擠必備分配', () => {
   const result = api.Planning.allocateMonthly({ incomeCents: 2000000, livingCents: 1500000, fixedExpenseCents: 1000000, emergencyGapCents: 1200000, goals: [{ key: 'goal', label: '目標', gapCents: 1200000, months: 12 }] });
-  assert.equal(result.rows[0].allocatedCents, 1500000);
-  assert.equal(result.rows[1].allocatedCents, 500000);
+  assert.equal(result.rows[0].key, 'fixed');
+  assert.equal(result.rows[0].allocatedCents, 1000000); // 已約定的固定支出先付足
+  assert.equal(result.rows[1].allocatedCents, 1000000);
   assert.equal(result.rows[3].allocatedCents, 0);
+});
+
+test('成本目標已存金額：同帳戶先保留緊急預備金，再依期限分給各目標，不重複計算', () => {
+  const goals = [
+    { key: 'late', label: '晚', accountId: 'bank', months: 24, targetCents: 5000000 },
+    { key: 'soon', label: '早', accountId: 'bank', months: 6, targetCents: 3000000 },
+    { key: 'other', label: '別帳戶', accountId: 'trip', months: 12, targetCents: 1200000 },
+    { key: 'bad', label: '錯誤', accountId: 'trip', months: 12, targetCents: 999, invalid: true }
+  ];
+  const pooled = Object.fromEntries(Array.from(api.Planning.poolGoalSavings(goals, { bank: 10000000, trip: 0 }, { bank: 6000000 }), g => [g.key, g]));
+  assert.equal(pooled.soon.savedCents, 3000000); // 1,000 萬－緊急預備金 600 萬＝400 萬可用，先給期限近的
+  assert.equal(pooled.late.savedCents, 1000000);
+  assert.equal(pooled.late.gapCents, 4000000);
+  assert.equal(pooled.late.monthlyRequiredCents, Math.ceil(4000000 / 24));
+  assert.equal(pooled.other.monthlyRequiredCents, 100000);
+  assert.equal(pooled.bad.monthlyRequiredCents, 0);
+});
+
+test('本月儲蓄評估用呼叫端給的應儲蓄，問題點與每日生活費跟摘要卡一致', () => {
+  const base = { incomeCents: 4000000, fixedExpenseCents: 1500000, fixedSavingCents: 0, actualIncomeCents: 4000000, actualExpenseCents: 3000000, daysInMonth: 30 };
+  const planned = api.Planning.assessMonthlySavings({ ...base, recommendedSavingCents: 2000000 });
+  assert.equal(planned.recommendedSavingCents, 2000000);
+  assert.equal(planned.dailyLivingCents, Math.floor((4000000 - 1500000 - 2000000) / 30));
+  assert.ok(planned.issues.includes('本月儲蓄尚未達成建議金額')); // 實存 1 萬 < 應存 2 萬
+  assert.equal(api.Planning.assessMonthlySavings(base).recommendedSavingCents, 800000); // 沒給時仍是收入 20%
 });
 
 test('固定儲蓄不列為支出並驗證不同轉出入帳戶', () => {

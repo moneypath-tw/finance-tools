@@ -236,10 +236,29 @@ const App = (() => {
     });
     return { settings, plan, flow };
   };
+  // 首頁的必要／其他支出：有固定支出項目時，必要支出直接用標為必要的固定支出每月推估，
+  // 其他支出＝非必要固定支出＋自填的「固定支出以外的生活開銷」；沒有固定支出時沿用自填的兩個數字
+  const plannedExpenses = (recurring = recurringSummary()) => {
+    const q = config.quickPlan;
+    const derived = recurring.items.some(f => f.type === 'expense');
+    if (!derived) return { derived, essentialCents: q.monthlyEssentialExpenseCents, otherCents: q.monthlyOtherExpenseCents, livingCents: q.monthlyEssentialExpenseCents + q.monthlyOtherExpenseCents };
+    return { derived, essentialCents: recurring.essentialExpenseCents, otherCents: recurring.otherExpenseCents + q.monthlyOtherExpenseCents, livingCents: q.monthlyOtherExpenseCents };
+  };
+  // 首頁勾選的成本目標（期限、總額、搭配帳戶）；已存金額另由 Planning.poolGoalSavings 分配
+  const selectedGoals = (now = new Date()) => scenarios.filter(s => config.dashboard.scenarioSelections[s.scenarioId]).map(s => {
+    const accountId = config.dashboard.scenarioAccountMap[s.scenarioId] || config.accountProfiles[0]?.id;
+    const configuredMonth = config.dashboard.scenarioTargetMonths[s.scenarioId];
+    const targetMonth = Validation.isValidMonth(configuredMonth) ? configuredMonth : config.quickPlan.goalTargetMonth;
+    const months = Math.max(1, Planning.monthsBetween(now, targetMonth));
+    const summary = scenarioSummary(s);
+    return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: summary.status === 'invalid' ? 0 : summary.targetCents, invalid: summary.status === 'invalid', error: summary.error || null };
+  });
+  // 每月計畫的唯一算法：摘要卡、建議分配表、本月問題點都讀這裡的結果
   const currentMonthSavingsHealth = (now = new Date()) => {
     ensureAccountProfiles(); ensureDashboard();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const recurring = recurringSummary();
+    const expenses = plannedExpenses(recurring);
     const hasRecurringIncome = recurring.items.some(f => f.type === 'income');
     const plannedIncome = hasRecurringIncome ? recurring.incomeCents : config.quickPlan.monthlyNetIncomeCents;
     let actualIncome = 0, actualExpense = 0;
@@ -253,18 +272,32 @@ const App = (() => {
     const fixedExpense = recurring.essentialExpenseCents + recurring.otherExpenseCents;
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const balances = getAccountBalances();
-    const emergencyReserveCents = Math.max(0, balances[config.dashboard.emergencyAccountId] || 0);
-    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth });
-    const emergencyGap = Math.max(0, config.quickPlan.monthlyEssentialExpenseCents * (config.quickPlan.emergencyTargetMonths ?? 6) - Math.max(0, balances[config.dashboard.emergencyAccountId] || 0));
-    const rawEmergencyMonthly = Math.ceil(emergencyGap / 12);
+    const emergencyAccountId = config.dashboard.emergencyAccountId;
+    const emergencyTargetCents = expenses.essentialCents * (config.quickPlan.emergencyTargetMonths ?? 6);
+    const emergencyBalanceCents = Math.max(0, balances[emergencyAccountId] || 0);
+    const emergencyGapCents = Math.max(0, emergencyTargetCents - emergencyBalanceCents);
+    const rawEmergencyMonthly = Math.ceil(emergencyGapCents / 12);
     const savingsFlow = recurring.items.find(f => f.type === 'saving');
-    const savingsAccountId = savingsFlow?.accountId || config.dashboard.emergencyAccountId;
-    const sameAccount = savingsAccountId === config.dashboard.emergencyAccountId;
+    const savingsAccountId = savingsFlow?.accountId || emergencyAccountId;
+    const sameAccount = savingsAccountId === emergencyAccountId;
     const emergencyMonthlyCents = sameAccount ? Math.max(rawEmergencyMonthly, recurring.fixedSavingCents) : rawEmergencyMonthly;
-    const committedSaving = sameAccount ? emergencyMonthlyCents : emergencyMonthlyCents + recurring.fixedSavingCents;
-    const recommendedSavingCents = Math.max(Math.ceil(plannedIncome * 0.20), committedSaving);
-    const savingBeyondEmergencyCents = Math.max(0, recommendedSavingCents - emergencyMonthlyCents);
-    return { ...assessed, recommendedSavingCents, plannedSavingsRate: plannedIncome > 0 ? recommendedSavingCents / plannedIncome : null, attainmentRate: recommendedSavingCents > 0 ? assessed.actualSavingsCents / recommendedSavingCents : null, dailyLivingCents: Math.floor(Math.max(0, plannedIncome - fixedExpense - recommendedSavingCents) / daysInMonth), emergencyMonthlyCents, savingBeyondEmergencyCents, savingsAccountId };
+    const goals = Planning.poolGoalSavings(selectedGoals(now), balances, { [emergencyAccountId]: emergencyTargetCents });
+    const goalMonthlyCents = goals.reduce((s, g) => s + g.monthlyRequiredCents, 0);
+    // 應儲蓄＝緊急預備金＋成本目標＋一般儲蓄，合計至少收入的 20%；固定儲蓄轉到其他帳戶時，一般儲蓄至少是那筆金額
+    const savingCents = Math.max(sameAccount ? 0 : recurring.fixedSavingCents, Math.ceil(plannedIncome * 0.20) - emergencyMonthlyCents - goalMonthlyCents, 0);
+    const recommendedSavingCents = emergencyMonthlyCents + goalMonthlyCents + savingCents;
+    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents });
+    const allocation = Planning.allocateMonthly({
+      incomeCents: plannedIncome, livingCents: expenses.livingCents, fixedExpenseCents: fixedExpense, emergencyGapCents,
+      emergencyMonthlyCents, savingCents, livingAccountId: config.dashboard.livingAccountId, fixedExpenseAccountId: config.dashboard.fixedExpenseAccountId,
+      emergencyAccountId, savingsAccountId, goals: goals.filter(g => !g.invalid)
+    });
+    return {
+      ...assessed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergencyBalanceCents, emergencyGapCents,
+      emergencyMonthlyCents, savingCents, savingsAccountId, goals, allocation,
+      // 月度餘裕＝收入扣掉固定支出、生活費與全部應儲蓄（含成本目標），負數表示計畫超支
+      monthlyFlexCents: plannedIncome - fixedExpense - expenses.livingCents - recommendedSavingCents
+    };
   };
   const recurringSummary = () => { syncStudentLoanFixedExpense(); syncMortgageFixedExpense(); return Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(flowLinked), config.insuranceRates); };
   const syncWageFromLinkedIncome = () => {
@@ -291,6 +324,8 @@ const App = (() => {
     const resumeYm = /^\d{4}-(0[1-9]|1[0-2])$/.test(marker || '') ? nextMonth(marker) : currentYm;
     const startYm = resumeYm < currentYm ? resumeYm : currentYm;
     let changed = false;
+    // 本月仍適用的預測帳目；其餘本月預測（項目已停用、刪除、取消連動或改成非繳款月）在迴圈後移除
+    const keepThisMonth = new Set();
     for (let ym = startYm; ym <= currentYm; ym = nextMonth(ym)) {
       const [entryYear, entryMonth] = ym.split('-').map(Number);
       const entryLastDay = new Date(entryYear, entryMonth, 0).getDate();
@@ -302,6 +337,7 @@ const App = (() => {
         const subsidyDay = Math.min(Math.max(1, Math.trunc(flow.housing?.subsidy?.dayOfMonth || 1)), entryLastDay);
         if (subsidyCents > 0 && !(ym === currentYm && now.getDate() < subsidyDay)) {
           const sid = `recurring-${flow.id}-subsidy-${ym}`;
+          keepThisMonth.add(sid);
           const subsidyEntry = {
             id: sid, recurringFlowId: flow.id, date: `${ym}-${String(subsidyDay).padStart(2, '0')}`,
             type: 'income', category: null, account: flow.accountId || config.accountProfiles[0]?.id || null,
@@ -334,12 +370,18 @@ const App = (() => {
           essential: isIncome ? null : flow.essential !== false, reimbursable: false, status: 'projected',
           note: housingDue ? `${flow.name || '租屋'}：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
         };
+        keepThisMonth.add(id);
         const existing = ledger.entries.find(e => e.id === id);
         if (existing?.status === 'realized') continue;
         if (existing) Object.assign(existing, entryData);
         else ledger.entries.push(entryData);
         changed = true;
       }
+    }
+    // 只清本月、由固定項目產生、仍是預測的帳目；已入帳的與過去月份一律保留
+    for (let i = ledger.entries.length - 1; i >= 0; i -= 1) {
+      const e = ledger.entries[i];
+      if (e.status === 'projected' && e.recurringFlowId && e.date?.startsWith(currentYm) && !keepThisMonth.has(e.id)) { ledger.entries.splice(i, 1); changed = true; }
     }
     if (config.recurringProjectionThroughMonth !== currentYm) {
       config.recurringProjectionThroughMonth = currentYm;
@@ -480,33 +522,15 @@ const App = (() => {
     if (!root) return;
     ensureAccountProfiles(); ensureDashboard();
     const q = config.quickPlan;
-    const recurring = recurringSummary();
     const balances = getAccountBalances();
-    const hasRecurringIncome = recurring.items.some(f => f.type === 'income');
-    const income = hasRecurringIncome ? recurring.incomeCents : q.monthlyNetIncomeCents;
-    const fixedExpense = recurring.essentialExpenseCents + recurring.otherExpenseCents;
-    const plannedLivingTotal = q.monthlyEssentialExpenseCents + q.monthlyOtherExpenseCents;
-    const basicLiving = Math.max(0, plannedLivingTotal - fixedExpense);
-    const emergencyBalance = Math.max(0, balances[config.dashboard.emergencyAccountId] || 0);
-    const emergencyGap = Math.max(0, q.monthlyEssentialExpenseCents * (q.emergencyTargetMonths ?? 6) - emergencyBalance);
     const savingsHealth = currentMonthSavingsHealth();
-    const monthlyFlex = income - Math.max(plannedLivingTotal, fixedExpense) - savingsHealth.recommendedSavingCents;
-    const goals = scenarios.filter(s => config.dashboard.scenarioSelections[s.scenarioId]).map(s => {
-      const accountId = config.dashboard.scenarioAccountMap[s.scenarioId] || config.accountProfiles[0]?.id;
-      const configuredMonth = config.dashboard.scenarioTargetMonths[s.scenarioId];
-      const targetMonth = Validation.isValidMonth(configuredMonth) ? configuredMonth : q.goalTargetMonth;
-      const months = Math.max(1, Planning.monthsBetween(new Date(), targetMonth));
-      const summary = scenarioSummary(s);
-      const target = summary.status === 'invalid' ? 0 : summary.targetCents;
-      const saved = Math.max(0, balances[accountId] || 0);
-      return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: target, savedCents: saved, gapCents: Math.max(0, target - saved), invalid: summary.status === 'invalid', error: summary.error || null };
-    });
-    const allocation = Planning.allocateMonthly({
-      incomeCents: income, livingCents: basicLiving, fixedExpenseCents: fixedExpense, emergencyGapCents: emergencyGap,
-      emergencyMonthlyCents: savingsHealth.emergencyMonthlyCents, savingCents: savingsHealth.savingBeyondEmergencyCents,
-      livingAccountId: config.dashboard.livingAccountId, fixedExpenseAccountId: config.dashboard.fixedExpenseAccountId,
-      emergencyAccountId: config.dashboard.emergencyAccountId, savingsAccountId: savingsHealth.savingsAccountId, goals
-    });
+    const recurring = recurringSummary();
+    const { hasRecurringIncome, goals, allocation } = savingsHealth;
+    const income = savingsHealth.incomeCents;
+    const fixedExpense = savingsHealth.fixedExpenseCents;
+    const emergencyBalance = savingsHealth.emergencyBalanceCents;
+    const emergencyGap = savingsHealth.emergencyGapCents;
+    const monthlyFlex = savingsHealth.monthlyFlexCents;
     const accountSelect = (value, onchange) => el('select', { onchange }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: value === a.id ? 'selected' : undefined })));
     const requiredSettings = el('details', { class: 'compact-settings' }, [
       el('summary', { text: '必備分配帳戶' }),
@@ -548,8 +572,8 @@ const App = (() => {
       { value: 'income', label: '收支｜月收入', amountCents: income, note: hasRecurringIncome ? '多份工作勞健保扣除後粗估合計' : '財務健檢收入' },
       { value: 'fixedExpense', label: '收支｜固定支出', amountCents: fixedExpense, note: '每月固定款項合計' },
       { value: 'recommendedSaving', label: '收支｜應儲蓄', amountCents: savingsHealth.recommendedSavingCents, note: `規劃儲蓄率 ${savingsHealth.plannedSavingsRate === null ? '—' : (savingsHealth.plannedSavingsRate * 100).toFixed(1) + '%'}` },
-      { value: 'dailyLiving', label: '收支｜每日生活費', amountCents: savingsHealth.dailyLivingCents, note: '扣除固定支出與應儲蓄' },
-      { value: 'monthlyFlex', label: '收支｜月度餘裕', amountCents: monthlyFlex, note: '收入扣除生活、固定支出與應儲蓄' },
+      { value: 'dailyLiving', label: '收支｜每日生活費', amountCents: savingsHealth.dailyLivingCents, note: '扣除固定支出與應儲蓄（含成本目標）' },
+      { value: 'monthlyFlex', label: '收支｜月度餘裕', amountCents: monthlyFlex, note: '收入扣除固定支出、生活費與應儲蓄（含成本目標）' },
       { value: 'actualSaving', label: '收支｜本月實際儲蓄', amountCents: savingsHealth.actualSavingsCents, note: savingsHealth.health.label },
       { value: 'actualSavingsRate', label: '比率｜本月儲蓄率', valueNumber: savingsHealth.actualSavingsRate, format: 'percent', note: savingsHealth.health.label },
       { value: 'attainmentRate', label: '比率｜儲蓄達成率', valueNumber: savingsHealth.attainmentRate, format: 'percent', note: `應儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}` },
@@ -661,6 +685,7 @@ const App = (() => {
     const q = config.quickPlan;
     renderAllocationDashboard();
     const recurringForHealth = recurringSummary();
+    const expensesForHealth = plannedExpenses(recurringForHealth);
     const hasRecurringIncome = recurringForHealth.items.some(f => f.type === 'income');
     const liquidBalances = getAccountBalances();
     const derivedLiquidAssets = config.accountProfiles.filter(a => isLiquidNature(a.nature)).reduce((sum, a) => sum + Math.max(0, liquidBalances[a.id] || 0), 0);
@@ -688,8 +713,8 @@ const App = (() => {
       birthYearField(),
       numField('緊急預備金目標（月數）', q.emergencyTargetMonths, (v) => { q.emergencyTargetMonths = Math.max(3, Math.min(18, Math.trunc(v))); IO.markDirty(); renderHealth(); }),
       hasRecurringIncome ? derivedField('每月勞健保扣除後收入粗估', recurringForHealth.incomeCents, '由固定收入自動帶入') : healthMoneyField('每月勞健保扣除後收入粗估（元）', 'monthlyNetIncomeCents'),
-      healthMoneyField('每月必要支出（元）', 'monthlyEssentialExpenseCents'),
-      healthMoneyField('每月其他支出（元）', 'monthlyOtherExpenseCents'),
+      expensesForHealth.derived ? derivedField('每月必要支出', expensesForHealth.essentialCents, '由標為必要的固定支出每月推估自動帶入') : healthMoneyField('每月必要支出（元）', 'monthlyEssentialExpenseCents'),
+      healthMoneyField(expensesForHealth.derived ? '固定支出以外的每月生活開銷（元）' : '每月其他支出（元）', 'monthlyOtherExpenseCents'),
       hasAccountAssets ? derivedField('可動用資產', derivedLiquidAssets, '由流動性帳戶餘額自動加總；緊急預備金另看指定帳戶') : healthMoneyField('可動用資產（元）', 'liquidAssetsCents'),
       goalSourceField,
       linkedGoal ? (linkedGoalInvalid ? el('p', { class: 'neg', text: '成本試算目前無法計算，請先修正情境設定。' }) : derivedField('成本試算目標總額', linkedGoalAmount, '由成本試算情境自動更新')) : healthMoneyField('如果今天完成，總共要花多少（元）', 'goalAmountTodayCents'),
@@ -708,7 +733,7 @@ const App = (() => {
       ])
     );
     const emergencyReserveCents = hasAccountAssets ? Math.max(0, liquidBalances[config.dashboard.emergencyAccountId] || 0) : q.liquidAssetsCents;
-    const effectivePlan = { ...q, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : q.inflationAnnualRate, monthlyNetIncomeCents: hasRecurringIncome ? recurringForHealth.incomeCents : q.monthlyNetIncomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
+    const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : q.inflationAnnualRate, monthlyNetIncomeCents: hasRecurringIncome ? recurringForHealth.incomeCents : q.monthlyNetIncomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
     const result = Planning.assess(effectivePlan);
     resultRoot.innerHTML = '';
     if (!result.ok) {

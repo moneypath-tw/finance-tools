@@ -39,21 +39,35 @@ const Planning = (() => {
       remaining -= allocated;
       rows.push({ key, label, requestedCents: requested, allocatedCents: allocated, shortfallCents: requested - allocated, accountId, required, ...extra });
     };
-    assign('living', '基本生活需求', livingCents, livingAccountId, true);
+    // 固定支出是已約定的款項（房租、保費、貸款），收入不足時要先付，再分生活費
     assign('fixed', '固定支出', fixedExpenseCents, fixedExpenseAccountId, true);
+    assign('living', '基本生活需求', livingCents, livingAccountId, true);
     assign('emergency', '緊急預備金', emergencyMonthlyCents ?? Math.ceil(Math.max(0, emergencyGapCents || 0) / 12), emergencyAccountId, true);
-    if (savingCents > 0) assign('saving', '固定儲蓄', savingCents, savingsAccountId, true);
+    if (savingCents > 0) assign('saving', '一般儲蓄', savingCents, savingsAccountId, true);
     [...goals].sort((a, b) => (a.months || Infinity) - (b.months || Infinity)).forEach(g => {
       const requested = g.monthlyRequiredCents ?? Math.ceil(Math.max(0, g.gapCents || 0) / Math.max(1, g.months || 1));
       assign(g.key, g.label, requested, g.accountId, false, g);
     });
     return { incomeCents: Math.round(incomeCents || 0), rows, unallocatedCents: remaining, totalAllocatedCents: rows.reduce((s, r) => s + r.allocatedCents, 0) };
   };
-  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth }) => {
+  // 成本目標的已存金額取自指定帳戶餘額；同帳戶先保留緊急預備金目標，再依期限先後分給各目標，同一筆錢不重複計算
+  const poolGoalSavings = (goals, balances, reservedByAccount = {}) => {
+    const pool = {};
+    return [...goals].sort((a, b) => (a.months || Infinity) - (b.months || Infinity)).map((g) => {
+      if (!(g.accountId in pool)) pool[g.accountId] = Math.max(0, Math.max(0, Math.round(balances[g.accountId] || 0)) - Math.max(0, Math.round(reservedByAccount[g.accountId] || 0)));
+      const target = g.invalid ? 0 : Math.max(0, Math.round(g.targetCents || 0));
+      const saved = Math.min(pool[g.accountId], target);
+      pool[g.accountId] -= saved;
+      const gap = target - saved;
+      return { ...g, targetCents: target, savedCents: saved, gapCents: gap, monthlyRequiredCents: Math.ceil(gap / Math.max(1, g.months || 1)) };
+    });
+  };
+  // recommendedSavingCents 由呼叫端算好（含緊急預備金與成本目標）時直接用，問題點與摘要卡才會看同一個應儲蓄
+  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents }) => {
     const income = Math.max(0, Math.round(incomeCents || 0));
     const fixedExpense = Math.max(0, Math.round(fixedExpenseCents || 0));
     const fixedSaving = Math.max(0, Math.round(fixedSavingCents || 0));
-    const recommendedSavingCents = Math.max(fixedSaving, Math.ceil(income * 0.20));
+    const recommendedSavingCents = Number.isFinite(plannedSavingCents) ? Math.max(0, Math.round(plannedSavingCents)) : Math.max(fixedSaving, Math.ceil(income * 0.20));
     const plannedSavingsRate = income > 0 ? recommendedSavingCents / income : null;
     const actualSavingsCents = Math.round((actualIncomeCents || 0) - Math.max(0, actualExpenseCents || 0));
     const actualSavingsRate = actualIncomeCents > 0 ? actualSavingsCents / actualIncomeCents : null;
@@ -127,5 +141,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, allocateMonthly, assessMonthlySavings, assess };
+  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, allocateMonthly, poolGoalSavings, assessMonthlySavings, assess };
 })();
