@@ -439,3 +439,25 @@ test('自訂情境編輯到一半仍可在重新載入時保留，不會讓整�
   scenarios.push({ ...custom });
   assert.equal(V.validateWorkspace(workspace, { scenarioContentChecks: false }).valid, false);
 });
+
+test('首頁指定帳戶被刪除時載入會改回第一個帳戶，不讓整份工作區被拒絕', () => {
+  const V = api.Validation;
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.accountProfiles = [{ id: 'a1', name: '活存', nature: 'checking', initialBalanceCents: 0 }];
+  config.dashboard.livingAccountId = 'deleted';
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) };
+  assert.equal(V.validateWorkspace(workspace).valid, false);
+  V.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  assert.equal(config.dashboard.livingAccountId, 'a1');
+  assert.equal(V.validateWorkspace(workspace).valid, true);
+});
+
+test('預設情境全部通過內容驗證（首頁摘要會把不合法情境標為無法計算）', () => {
+  for (const s of api.DEFAULT_SCENARIOS) assert.equal(api.Validation.validateScenario(s).errors.length, 0, s.scenarioId);
+});
+
+test('趨勢圖 SVG 會跳脫月份字串', () => {
+  const svg = api.Money.buildTrendChartSVG({ '2026-<img>': 100 }, {});
+  assert.ok(!svg.includes('<img>'));
+  assert.ok(svg.includes('&lt;img&gt;'));
+});

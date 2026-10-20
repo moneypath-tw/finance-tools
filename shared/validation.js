@@ -218,6 +218,7 @@ const Validation = (() => {
 
   // 載入前修復「可安全自動修正」的欄位，避免單一欄位讓整份工作區被拒絕：
   // 首頁情境設定指向已不存在的情境或空白月份 → 移除該筆（畫面會回退到健檢目標月份）；
+  // 首頁指定帳戶已不存在 → 改回第一個帳戶；
   // 快速健檢的不合法欄位 → 換回預設值。會直接修改 data，回傳修正筆數。
   const repairWorkspace = (data, defaults) => {
     let repaired = 0;
@@ -231,6 +232,12 @@ const Validation = (() => {
         if (scenarioIds.has(id) && (key !== 'scenarioTargetMonths' || isValidMonth(map[id]))) return;
         delete map[id]; repaired++;
       });
+    }
+    // 首頁指定帳戶被刪除時改回第一個帳戶（與 app.js 的 ensureDashboard 相同規則）
+    const accountIds = (data.config.accountProfiles || []).map(a => a?.id).filter(Boolean);
+    for (const key of ['livingAccountId', 'fixedExpenseAccountId', 'emergencyAccountId']) {
+      if (dashboard[key] === undefined || dashboard[key] === null || accountIds.includes(dashboard[key])) continue;
+      dashboard[key] = accountIds[0] ?? null; repaired++;
     }
     const repairFields = (target, fallback, errors) => errors.forEach(({ path }) => {
       if (!target || !fallback || !Object.prototype.hasOwnProperty.call(fallback, path)) return;

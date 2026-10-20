@@ -422,6 +422,8 @@ const Money = (() => {
   };
 
   // 純 SVG 趨勢圖：月度支出長條 + 薪資折線，無任何第三方套件依賴
+  // 輸出會被 innerHTML 插入，月份字串來自帳本日期，仍一律跳脫
+  const escapeXml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const buildTrendChartSVG = (monthlyExpenseTWD, monthlySalaryTWD) => {
     const months = [...new Set([...Object.keys(monthlyExpenseTWD), ...Object.keys(monthlySalaryTWD)])].sort();
     if (months.length === 0) return '<svg viewBox="0 0 400 160"></svg>';
@@ -436,7 +438,7 @@ const Money = (() => {
       const x = padding + i * stepX - barW / 2;
       const val = Math.abs(monthlyExpenseTWD[m] || 0);
       const y = scaleY(val);
-      return `<rect x="${x}" y="${y}" width="${barW}" height="${h - padding - y}" fill="var(--negative)" opacity="0.6"><title>${m} 支出 ${formatTWD(val)}</title></rect>`;
+      return `<rect x="${x}" y="${y}" width="${barW}" height="${h - padding - y}" fill="var(--negative)" opacity="0.6"><title>${escapeXml(m)} 支出 ${formatTWD(val)}</title></rect>`;
     }).join('');
 
     const points = months.map((m, i) => {
@@ -447,7 +449,7 @@ const Money = (() => {
 
     const labels = months.map((m, i) => {
       const x = padding + i * stepX;
-      return `<text x="${x}" y="${h - 4}" font-size="9" text-anchor="middle" fill="var(--ink-soft)">${m.slice(5)}</text>`;
+      return `<text x="${x}" y="${h - 4}" font-size="9" text-anchor="middle" fill="var(--ink-soft)">${escapeXml(m.slice(5))}</text>`;
     }).join('');
 
     return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">
