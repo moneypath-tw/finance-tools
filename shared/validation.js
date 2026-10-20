@@ -173,7 +173,19 @@ const Validation = (() => {
       if (!['income', 'expense', 'saving'].includes(f.type)) errors.push(error(`${p}.type`, 'INVALID_TYPE', '固定項目只能是收入、支出或儲蓄'));
       if (!integer(f.amountCents) || f.amountCents < 0) errors.push(error(`${p}.amountCents`, 'INVALID_MONEY', '固定金額必須是非負整數分'));
       if (!integer(f.dayOfMonth) || f.dayOfMonth < 1 || f.dayOfMonth > 31) errors.push(error(`${p}.dayOfMonth`, 'INVALID_DAY', '固定日期須介於 1–31 日'));
-      if (f.type === 'income' && (!finite(f.monthlyWorkHours) || f.monthlyWorkHours <= 0)) errors.push(error(`${p}.monthlyWorkHours`, 'INVALID_HOURS', '收入來源的月工時必須大於 0'));
+      if (f.type === 'income') {
+        const basis = f.payBasis === undefined ? 'monthly' : f.payBasis;
+        const nonNeg = (v) => finite(v) && v >= 0;
+        if (!['monthly', 'hourly', 'per_case'].includes(basis)) errors.push(error(`${p}.payBasis`, 'INVALID_PAY_BASIS', '計薪方式只能是月薪、時薪或按件'));
+        // 時薪與按件的本月工時可以是 0（當月沒排班或沒接案）；月薪需要正工時才能換算時薪
+        if (basis === 'monthly' ? (!finite(f.monthlyWorkHours) || f.monthlyWorkHours <= 0) : !nonNeg(f.monthlyWorkHours)) errors.push(error(`${p}.monthlyWorkHours`, 'INVALID_HOURS', '收入來源的月工時不正確'));
+        if ((basis === 'hourly' || (basis === 'per_case' && f.caseFeeMode !== 'fixed')) && (!integer(f.hourlyRateCents) || f.hourlyRateCents < 0)) errors.push(error(`${p}.hourlyRateCents`, 'INVALID_RATE', '時薪必須是非負整數分'));
+        if (basis === 'per_case') {
+          if (!nonNeg(f.caseCount)) errors.push(error(`${p}.caseCount`, 'INVALID_CASE_COUNT', '案件數不可為負'));
+          if (!finite(f.hoursPerCase) || f.hoursPerCase <= 0) errors.push(error(`${p}.hoursPerCase`, 'INVALID_HOURS', '每件時數必須大於 0'));
+          if (f.caseFeeMode === 'fixed' && (!integer(f.caseFeeCents) || f.caseFeeCents < 0)) errors.push(error(`${p}.caseFeeCents`, 'INVALID_MONEY', '每件報酬必須是非負整數分'));
+        }
+      }
       if (typeof f.accountId !== 'string' || !f.accountId) errors.push(error(`${p}.accountId`, 'MISSING_ACCOUNT', '固定項目必須指定帳戶'));
       if (f.type === 'saving' && (typeof f.fromAccountId !== 'string' || !f.fromAccountId || f.fromAccountId === f.accountId)) errors.push(error(p, 'INVALID_SAVING_TRANSFER', '固定儲蓄必須指定兩個不同帳戶'));
     });

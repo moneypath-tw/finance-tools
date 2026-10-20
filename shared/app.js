@@ -983,29 +983,142 @@ const App = (() => {
       el('p', { class: 'notice', text: '收入與支出都會計入指定帳戶；已有交易的帳戶不可直接刪除，以免餘額失去歸屬。' })
     ]);
     if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
-    const saveFlow = () => { materializeDueRecurringEntries(); IO.markDirty(); renderPersonalSettings(); renderLedger(); };
-    const flowRows = config.recurringCashFlows.map(flow => {
-      const isIncome = flow.type === 'income';
-      const isSaving = flow.type === 'saving';
+    // 收入的 amountCents／monthlyWorkHours 由計薪方式推得後寫回，帳本、健檢與工時反推都沿用同一數字
+    const syncIncomeFlow = (flow) => {
+      if (flow.type !== 'income') return;
+      const income = Money.deriveIncome(flow);
+      flow.amountCents = income.grossCents;
+      flow.monthlyWorkHours = income.monthlyWorkHours;
+    };
+    const saveFlow = () => { config.recurringCashFlows.forEach(syncIncomeFlow); materializeDueRecurringEntries(); IO.markDirty(); renderPersonalSettings(); renderLedger(); };
+    const flowTypeSelect = (flow) => el('div', { class: 'field' }, [el('label', { text: '類型' }), el('select', { onchange: (ev) => { flow.type = ev.target.value; flow.kind = flow.type === 'income' ? 'salary' : (flow.type === 'saving' ? 'fixed_saving' : 'fixed_expense'); saveFlow(); } }, [el('option', { value: 'income', text: '固定收入', selected: flow.type === 'income' ? 'selected' : undefined }), el('option', { value: 'expense', text: '固定支出', selected: flow.type === 'expense' ? 'selected' : undefined }), el('option', { value: 'saving', text: '固定儲蓄', selected: flow.type === 'saving' ? 'selected' : undefined })])]);
+    const accountSelect = (flow, label) => el('div', { class: 'field' }, [el('label', { text: label }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.accountId === a.id ? 'selected' : undefined, disabled: flow.type === 'saving' && a.id === flow.fromAccountId ? 'disabled' : undefined })))]);
+    // 大字、附單位與說明的數字欄位，給收入卡片用（長者也能一眼看懂要填什麼）
+    const incomeField = (label, unit, value, onchange, hint, step = 'any') => el('div', { class: 'field income-field' }, [
+      el('label', { text: label }),
+      el('div', { class: 'input-unit' }, [
+        el('input', { type: 'number', inputmode: 'decimal', min: '0', step, class: 'mono', value, onchange: (ev) => { const v = Number(ev.target.value); if (!(v >= 0)) return alert('請輸入 0 或以上的數字'); onchange(v); } }),
+        el('span', { text: unit })
+      ]),
+      hint ? el('small', { text: hint }) : null
+    ]);
+    const payBasisOptions = {
+      monthly: { label: '固定月薪', hint: '每月領差不多的薪水', kind: 'salary' },
+      hourly: { label: '按時薪計算', hint: '時薪固定，每月工時不同', kind: 'part_time' },
+      per_case: { label: '按件接案', hint: '每月接的案件數不同', kind: 'freelance' }
+    };
+    const switchPayBasis = (flow, basis) => {
+      const prev = Money.deriveIncome(flow);
+      // 收入分類仍是預設值時跟著換，使用者自己改過就不動
+      if (flow.kind === payBasisOptions[prev.payBasis].kind) flow.kind = payBasisOptions[basis].kind;
+      flow.payBasis = basis;
+      if (!(flow.hourlyRateCents > 0)) flow.hourlyRateCents = prev.hourlyRateCents;
+      if (basis === 'per_case') {
+        if (!(flow.hoursPerCase > 0)) flow.hoursPerCase = 1;
+        if (!(flow.caseCount >= 0)) flow.caseCount = 1;
+        if (!flow.caseFeeMode) flow.caseFeeMode = 'hourly';
+      }
+      if (basis === 'monthly' && prev.payBasis !== 'monthly') flow.amountCents = prev.grossCents;
+      // 時薪與接案收入每月變動，但勞健保依固定的投保級距扣，切換時預設改成固定級距
+      if (basis !== 'monthly' && flow.insuredSalaryFollowsGross !== false) {
+        flow.insuredSalaryFollowsGross = false;
+        if (!(flow.insuredSalaryCents > 0)) flow.insuredSalaryCents = prev.grossCents;
+      }
+      saveFlow();
+    };
+    const incomeCard = (flow) => {
       const summaryItem = recurringSummary().items.find(x => x.id === flow.id);
+      const income = Money.deriveIncome(flow);
+      const basis = income.payBasis;
+      const yuan = (cents) => Money.formatTWD(cents);
+      const hoursText = (h) => `${Number(h.toFixed(2)).toLocaleString()} 小時`;
+      const basisPicker = el('div', { class: 'basis-picker', role: 'radiogroup', 'aria-label': '收入怎麼算' }, Object.entries(payBasisOptions).map(([value, opt]) => el('label', { class: `basis-option${basis === value ? ' active' : ''}` }, [
+        el('input', { type: 'radio', name: `pay-basis-${flow.id}`, value, checked: basis === value ? 'checked' : undefined, onchange: () => switchPayBasis(flow, value) }),
+        el('strong', { text: opt.label }),
+        el('span', { text: opt.hint })
+      ])));
+      const basisFields = basis === 'hourly' ? [
+        incomeField('時薪', '元／小時', Money.toYuan(flow.hourlyRateCents || 0), (v) => { flow.hourlyRateCents = Money.toCents(v); saveFlow(); }, '固定不變的部分'),
+        incomeField('這個月工作時數', '小時', flow.monthlyWorkHours || 0, (v) => { flow.monthlyWorkHours = v; saveFlow(); }, '每月不同，月初或發薪前更新即可', '0.5')
+      ] : basis === 'per_case' ? [
+        incomeField('這個月接幾件', '件', flow.caseCount || 0, (v) => { flow.caseCount = v; saveFlow(); }, '每月不同，可填小數（如半件）', '0.5'),
+        incomeField('每件大約花幾小時', '小時', flow.hoursPerCase || 1, (v) => { if (!(v > 0)) return alert('每件時數必須大於 0'); flow.hoursPerCase = v; saveFlow(); }, '用來換算實際時薪', '0.5'),
+        el('div', { class: 'field income-field' }, [
+          el('label', { text: '案件怎麼計價' }),
+          el('select', { onchange: (ev) => { flow.caseFeeMode = ev.target.value; if (flow.caseFeeMode === 'fixed' && !(flow.caseFeeCents > 0)) flow.caseFeeCents = income.caseFeeCents; saveFlow(); } }, [
+            el('option', { value: 'hourly', text: '按案件時薪 × 時數', selected: flow.caseFeeMode !== 'fixed' ? 'selected' : undefined }),
+            el('option', { value: 'fixed', text: '每件固定價格', selected: flow.caseFeeMode === 'fixed' ? 'selected' : undefined })
+          ])
+        ]),
+        flow.caseFeeMode === 'fixed'
+          ? incomeField('每件報酬', '元／件', Money.toYuan(flow.caseFeeCents || 0), (v) => { flow.caseFeeCents = Money.toCents(v); saveFlow(); }, '稅前、扣手續費前的金額')
+          : incomeField('案件時薪', '元／小時', Money.toYuan(flow.hourlyRateCents || 0), (v) => { flow.hourlyRateCents = Money.toCents(v); saveFlow(); }, '固定不變的部分')
+      ] : [
+        incomeField('每月薪資（稅前）', '元', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(v); saveFlow(); }, '看薪資單上的「應發金額」'),
+        incomeField('每月大約工作時數', '小時', flow.monthlyWorkHours || 160, (v) => { if (!(v > 0)) return alert('月工時必須大於 0'); flow.monthlyWorkHours = v; saveFlow(); }, '一般全職約 160 小時，用來換算時薪', '0.5')
+      ];
+      const formula = basis === 'hourly'
+        ? `時薪 ${yuan(income.hourlyRateCents)} × ${hoursText(income.monthlyWorkHours)} ＝ 本月稅前 ${yuan(income.grossCents)}`
+        : basis === 'per_case'
+          ? `每件 ${yuan(income.caseFeeCents)}${flow.caseFeeMode === 'fixed' ? '' : `（${yuan(income.hourlyRateCents)} × ${hoursText(income.hoursPerCase)}）`} × ${Number(income.caseCount.toFixed(2)).toLocaleString()} 件 ＝ 本月稅前 ${yuan(income.grossCents)}`
+          : `月薪 ${yuan(income.grossCents)} ÷ ${hoursText(income.monthlyWorkHours)} ＝ 時薪約 ${yuan(income.hourlyRateCents)}`;
+      const payroll = summaryItem?.payroll;
+      const result = el('div', { class: 'income-result', 'aria-live': 'polite' }, [
+        el('p', { class: 'income-formula', text: formula }),
+        summaryItem ? el('p', { class: 'income-net' }, [
+          document.createTextNode('每月實際入帳約 '),
+          el('strong', { class: 'mono', text: yuan(summaryItem.netCents) })
+        ]) : el('p', { class: 'income-net', text: '目前未啟用，不計入每月收入' }),
+        payroll && payroll.laborFee + payroll.healthFee > 0 ? el('p', { class: 'income-sub', text: `已扣勞保 ${yuan(payroll.laborFee)}、健保 ${yuan(payroll.healthFee)}（依投保薪資 ${yuan(payroll.insuredSalaryCents)}）` }) : null,
+        basis !== 'monthly' && income.monthlyWorkHours > 0 ? el('p', { class: 'income-sub', text: `本月共工作 ${hoursText(income.monthlyWorkHours)}，實際時薪 ${yuan(income.hourlyRateCents)}` }) : null
+      ]);
+      const fixedBracket = flow.insuredSalaryFollowsGross === false;
+      const insurance = el('fieldset', { class: 'income-step' }, [
+        el('legend', { text: '③ 勞健保' }),
+        el('label', { class: 'big-check' }, [el('input', { type: 'checkbox', checked: flow.applyInsurance ? 'checked' : undefined, onchange: (ev) => { flow.applyInsurance = ev.target.checked; saveFlow(); } }), document.createTextNode(' 這份收入會從薪水扣勞健保（雇主幫我投保）')]),
+        flow.applyInsurance ? el('div', { class: 'bracket-choice' }, [
+          el('label', { class: 'big-check' }, [el('input', { type: 'radio', name: `bracket-${flow.id}`, checked: fixedBracket ? 'checked' : undefined, onchange: () => { flow.insuredSalaryFollowsGross = false; if (!(flow.insuredSalaryCents > 0)) flow.insuredSalaryCents = income.grossCents; saveFlow(); } }), document.createTextNode(' 投保金額固定（建議）')]),
+          el('label', { class: 'big-check' }, [el('input', { type: 'radio', name: `bracket-${flow.id}`, checked: fixedBracket ? undefined : 'checked', onchange: () => { flow.insuredSalaryFollowsGross = true; saveFlow(); } }), document.createTextNode(' 跟著每月收入變動')]),
+          fixedBracket ? incomeField('投保薪資級距', '元', Money.toYuan(flow.insuredSalaryCents || income.grossCents), (v) => { flow.insuredSalaryCents = Money.toCents(v); saveFlow(); }, '看薪資單或勞保異動通知上的「投保薪資」') : null
+        ]) : null,
+        el('p', { class: 'income-hint', text: flow.applyInsurance
+          ? '兼職或時薪收入每月不同，但勞健保是依固定的「投保薪資級距」扣，不是依當月收入。不確定金額請問雇主或查薪資單。'
+          : (basis === 'per_case' ? '接案通常由自己在工會或公所投保，不從案件款扣；若是這樣就不用勾。' : '沒勾選時，入帳金額 ＝ 稅前收入。') })
+      ]);
+      return el('div', { class: 'card income-card' }, [
+        el('div', { class: 'toolbar' }, [
+          el('label', { class: 'big-check' }, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, onchange: (ev) => { flow.active = ev.target.checked; saveFlow(); } }), document.createTextNode(' 啟用')]),
+          el('div', { class: 'field income-field' }, [el('label', { text: '收入名稱' }), el('input', { value: flow.name || '', placeholder: '例如：超商兼職', onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
+          flowTypeSelect(flow)
+        ]),
+        el('fieldset', { class: 'income-step' }, [el('legend', { text: '① 這份收入怎麼算？' }), basisPicker]),
+        el('fieldset', { class: 'income-step' }, [el('legend', { text: '② 填入數字' }), el('div', { class: 'income-fields' }, basisFields), result]),
+        insurance,
+        el('details', { class: 'income-step' }, [
+          el('summary', { text: '④ 入帳日期、帳戶與分類（可不改）' }),
+          el('div', { class: 'toolbar' }, [
+            numField('每月幾號入帳', flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
+            accountSelect(flow, '入帳帳戶'),
+            el('div', { class: 'field' }, [el('label', { text: '收入分類（記帳用）' }), el('select', { onchange: (ev) => { flow.kind = ev.target.value; saveFlow(); } }, Object.entries(recurringKinds).filter(([k]) => k !== 'fixed_expense').map(([value, text]) => el('option', { value, text, selected: flow.kind === value ? 'selected' : undefined })))])
+          ])
+        ]),
+        el('button', { class: 'btn small danger', text: '刪除這份收入', onclick: () => { config.recurringCashFlows = config.recurringCashFlows.filter(f => f.id !== flow.id); IO.markDirty(); renderPersonalSettings(); } })
+      ]);
+    };
+    const flowRows = config.recurringCashFlows.map(flow => {
+      if (flow.type === 'income') return incomeCard(flow);
+      const isSaving = flow.type === 'saving';
       return el('div', { class: 'card' }, [
         el('div', { class: 'toolbar' }, [
           el('label', {}, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.active = ev.target.checked; saveFlow(); } }), document.createTextNode(flow.systemManaged ? ' 依年齡自動啟用' : ' 啟用')]),
           el('div', { class: 'field' }, [el('label', { text: '名稱' }), el('input', { value: flow.name || '', disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
-          el('div', { class: 'field' }, [el('label', { text: '類型' }), el('select', { onchange: (ev) => { flow.type = ev.target.value; flow.kind = flow.type === 'income' ? 'salary' : (flow.type === 'saving' ? 'fixed_saving' : 'fixed_expense'); saveFlow(); } }, [el('option', { value: 'income', text: '固定收入', selected: isIncome ? 'selected' : undefined }), el('option', { value: 'expense', text: '固定支出', selected: flow.type === 'expense' ? 'selected' : undefined }), el('option', { value: 'saving', text: '固定儲蓄', selected: isSaving ? 'selected' : undefined })])]),
-          isIncome ? el('div', { class: 'field' }, [el('label', { text: '收入性質' }), el('select', { onchange: (ev) => { flow.kind = ev.target.value; saveFlow(); } }, Object.entries(recurringKinds).filter(([k]) => k !== 'fixed_expense').map(([value, text]) => el('option', { value, text, selected: flow.kind === value ? 'selected' : undefined })))]) : null,
-          numField(isIncome ? '月總工資／收入（元）' : (isSaving ? '每月儲蓄（元）' : '每月金額（元）'), Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
-          numField(isIncome ? '發薪日' : (isSaving ? '轉存日' : '扣款日'), flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
+          flowTypeSelect(flow),
+          numField(isSaving ? '每月儲蓄（元）' : '每月金額（元）', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
+          numField(isSaving ? '轉存日' : '扣款日', flow.dayOfMonth || 1, (v) => { flow.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); }),
           isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
-          el('div', { class: 'field' }, [el('label', { text: isSaving ? '儲蓄帳戶' : '入／扣款帳戶' }), el('select', { onchange: (ev) => { flow.accountId = ev.target.value; saveFlow(); } }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: flow.accountId === a.id ? 'selected' : undefined, disabled: isSaving && a.id === flow.fromAccountId ? 'disabled' : undefined })))])
+          accountSelect(flow, isSaving ? '儲蓄帳戶' : '扣款帳戶')
         ]),
-        isIncome ? el('div', { class: 'toolbar' }, [
-          numField('每月工時', flow.monthlyWorkHours || 160, (v) => { if (v > 0) { flow.monthlyWorkHours = v; saveFlow(); } }),
-          el('label', {}, [el('input', { type: 'checkbox', checked: flow.applyInsurance ? 'checked' : undefined, onchange: (ev) => { flow.applyInsurance = ev.target.checked; saveFlow(); } }), document.createTextNode(' 此收入扣勞健保')]),
-          flow.applyInsurance ? el('label', {}, [el('input', { type: 'checkbox', checked: flow.insuredSalaryFollowsGross !== false ? 'checked' : undefined, onchange: (ev) => { flow.insuredSalaryFollowsGross = ev.target.checked; saveFlow(); } }), document.createTextNode(' 投保薪資同此收入')]) : null,
-          flow.applyInsurance && flow.insuredSalaryFollowsGross === false ? numField('投保薪資（元）', Money.toYuan(flow.insuredSalaryCents || flow.amountCents || 0), (v) => { flow.insuredSalaryCents = Money.toCents(v); saveFlow(); }) : null,
-          summaryItem ? el('p', { class: 'notice', text: `自動時薪 ${Money.formatTWD(summaryItem.payroll.hourlyRateCents)}；本項每月實入 ${Money.formatTWD(summaryItem.netCents)}` }) : null
-        ]) : isSaving ? el('p', { class: 'linked-note', text: '固定儲蓄會建立帳戶間轉帳，不列入收入或支出。' }) : el('label', {}, [el('input', { type: 'checkbox', checked: flow.essential !== false ? 'checked' : undefined, onchange: (ev) => { flow.essential = ev.target.checked; saveFlow(); } }), document.createTextNode(' 必要固定支出')]),
+        isSaving ? el('p', { class: 'linked-note', text: '固定儲蓄會建立帳戶間轉帳，不列入收入或支出。' }) : el('label', {}, [el('input', { type: 'checkbox', checked: flow.essential !== false ? 'checked' : undefined, onchange: (ev) => { flow.essential = ev.target.checked; saveFlow(); } }), document.createTextNode(' 必要固定支出')]),
         el('button', { class: 'btn small danger', text: flow.systemManaged ? `由${flow.systemManaged === 'mortgage' ? '房貸' : '學貸'}設定管理` : '刪除固定項目', disabled: flow.systemManaged ? 'disabled' : undefined, onclick: () => { config.recurringCashFlows = config.recurringCashFlows.filter(f => f.id !== flow.id); IO.markDirty(); renderPersonalSettings(); } })
       ]);
     });
@@ -1034,7 +1147,11 @@ const App = (() => {
       ]),
       ...flowRows,
       el('div', { class: 'toolbar' }, [
-        el('button', { class: 'btn small', text: '＋新增收入來源', onclick: () => { config.recurringCashFlows.push({ id: createEntryId(), name: '新收入', type: 'income', kind: 'salary', amountCents: 0, dayOfMonth: 5, accountId: config.accountProfiles[0]?.id, monthlyWorkHours: 160, applyInsurance: true, insuredSalaryFollowsGross: true, active: true }); IO.markDirty(); renderPersonalSettings(); } }),
+        ...[['monthly', '＋月薪收入', '正職薪水'], ['hourly', '＋時薪兼職', '兼職'], ['per_case', '＋接案收入', '接案']].map(([basis, text, name]) => el('button', { class: 'btn small', text, onclick: () => {
+          const base = { id: createEntryId(), name, type: 'income', kind: payBasisOptions[basis].kind, payBasis: basis, amountCents: 0, dayOfMonth: 5, accountId: config.accountProfiles[0]?.id, monthlyWorkHours: basis === 'monthly' ? 160 : 0, applyInsurance: basis !== 'per_case', insuredSalaryFollowsGross: basis === 'monthly', insuredSalaryCents: 0, active: true };
+          config.recurringCashFlows.push(basis === 'monthly' ? base : { ...base, hourlyRateCents: 0, ...(basis === 'per_case' ? { caseCount: 0, hoursPerCase: 1, caseFeeMode: 'hourly' } : {}) });
+          IO.markDirty(); renderPersonalSettings();
+        } })),
         el('button', { class: 'btn small', text: '＋新增固定支出', onclick: () => { config.recurringCashFlows.push({ id: createEntryId(), name: '新固定支出', type: 'expense', kind: 'fixed_expense', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0]?.id, essential: true, active: true }); IO.markDirty(); renderPersonalSettings(); } }),
         el('button', { class: 'btn small', text: '＋新增固定儲蓄', onclick: () => { const from = config.accountProfiles[0]?.id; const to = ensureSavingsAccount(from); config.recurringCashFlows.push({ id: createEntryId(), name: '固定儲蓄', type: 'saving', kind: 'fixed_saving', amountCents: 0, dayOfMonth: 6, fromAccountId: from, accountId: to, active: true }); IO.markDirty(); renderPersonalSettings(); renderLedgerForm(); } })
       ]),

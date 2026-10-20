@@ -93,15 +93,47 @@ const Money = (() => {
     const payroll = grossToNet(grossMonthlyCents, insured, rates);
     return { ...payroll, gross: grossMonthlyCents, insuredSalaryCents: insured, hourlyRateCents: Math.round(grossMonthlyCents / monthlyWorkHours) };
   };
+  // 收入計薪方式：固定的是月薪或時薪與投保級距，每月變動的是工時或案件數
+  //   monthly：月薪固定，時薪 = 月薪 ÷ 月工時
+  //   hourly：月總收入 = 時薪 × 本月工時
+  //   per_case：月總收入 = 案件數 × 每件報酬；每件報酬 = 案件時薪 × 每件時數，或固定每件價
+  const INCOME_PAY_BASES = ['monthly', 'hourly', 'per_case'];
+  const deriveIncome = (flow) => {
+    const pos = (v) => (Number(v) > 0 ? Number(v) : 0);
+    const payBasis = INCOME_PAY_BASES.includes(flow?.payBasis) ? flow.payBasis : 'monthly';
+    if (payBasis === 'hourly') {
+      const hourlyRateCents = Math.round(pos(flow.hourlyRateCents));
+      const monthlyWorkHours = pos(flow.monthlyWorkHours);
+      return { payBasis, grossCents: Math.round(hourlyRateCents * monthlyWorkHours), monthlyWorkHours, hourlyRateCents };
+    }
+    if (payBasis === 'per_case') {
+      const caseCount = pos(flow.caseCount);
+      const hoursPerCase = pos(flow.hoursPerCase);
+      const caseFeeCents = flow.caseFeeMode === 'fixed' ? Math.round(pos(flow.caseFeeCents)) : Math.round(pos(flow.hourlyRateCents) * hoursPerCase);
+      return {
+        payBasis, caseCount, hoursPerCase, caseFeeCents,
+        grossCents: Math.round(caseCount * caseFeeCents),
+        monthlyWorkHours: caseCount * hoursPerCase,
+        hourlyRateCents: hoursPerCase > 0 ? Math.round(caseFeeCents / hoursPerCase) : 0
+      };
+    }
+    const grossCents = Math.abs(Number(flow?.amountCents) || 0);
+    const monthlyWorkHours = pos(flow?.monthlyWorkHours) || 160;
+    return { payBasis, grossCents, monthlyWorkHours, hourlyRateCents: Math.round(grossCents / monthlyWorkHours) };
+  };
+  // 投保薪資是固定級距；只有勾選「跟著實際收入」才隨月總收入變動
+  const insuredSalaryOf = (flow, grossCents) => (flow.insuredSalaryFollowsGross !== false ? grossCents : (Number(flow.insuredSalaryCents) || grossCents));
   const calcRecurringMonthly = (flows, rates) => {
     const items = (Array.isArray(flows) ? flows : []).filter(f => f.active !== false).map((f) => {
-      const amount = Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'income') {
-        const hours = Number(f.monthlyWorkHours) > 0 ? Number(f.monthlyWorkHours) : 160;
-        const insured = f.insuredSalaryFollowsGross !== false ? amount : (Number(f.insuredSalaryCents) || amount);
-        const payroll = f.applyInsurance && amount > 0 ? calcPayroll(amount, hours, insured, rates) : { gross: amount, net: amount, laborFee: 0, healthFee: 0, hourlyRateCents: Math.round(amount / hours), insuredSalaryCents: insured };
-        return { ...f, grossCents: amount, netCents: payroll.net, payroll };
+        const income = deriveIncome(f);
+        const amount = income.grossCents;
+        const insured = insuredSalaryOf(f, amount);
+        const fees = f.applyInsurance && amount > 0 ? grossToNet(amount, insured, rates) : { net: amount, laborFee: 0, healthFee: 0 };
+        const payroll = { ...fees, gross: amount, hourlyRateCents: income.hourlyRateCents, insuredSalaryCents: insured };
+        return { ...f, grossCents: amount, netCents: payroll.net, payroll, income };
       }
+      const amount = Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'saving') return { ...f, grossCents: amount, netCents: 0, payroll: null };
       return { ...f, grossCents: amount, netCents: -amount, payroll: null };
     });
@@ -113,14 +145,16 @@ const Money = (() => {
   };
   const wageSettingsFromIncome = (flow) => {
     if (!flow || flow.type !== 'income') throw new TypeError('必須選擇有效的固定收入來源');
-    const monthlyWorkHours = Number(flow.monthlyWorkHours) > 0 ? Number(flow.monthlyWorkHours) : 160;
-    const grossMonthlySalaryCents = Math.abs(Number(flow.amountCents) || 0);
+    const income = deriveIncome(flow);
+    // 工時反推需要正工時；本月工時為 0（如當月沒接案）時以每件時數或 160 小時代入，時薪仍以計薪方式為準
+    const monthlyWorkHours = income.monthlyWorkHours > 0 ? income.monthlyWorkHours : (income.hoursPerCase || 160);
+    const grossMonthlySalaryCents = income.grossCents > 0 ? income.grossCents : Math.round(income.hourlyRateCents * monthlyWorkHours);
     const insuredSalaryFollowsGross = flow.insuredSalaryFollowsGross !== false;
     return {
       grossMonthlySalaryCents, monthlyWorkHours, applyInsurance: !!flow.applyInsurance,
       insuredSalaryFollowsGross,
-      insuredSalaryCents: insuredSalaryFollowsGross ? grossMonthlySalaryCents : (Number(flow.insuredSalaryCents) || grossMonthlySalaryCents),
-      baseRateCentsPerHour: Math.round(grossMonthlySalaryCents / monthlyWorkHours)
+      insuredSalaryCents: insuredSalaryOf(flow, grossMonthlySalaryCents),
+      baseRateCentsPerHour: income.hourlyRateCents || Math.round(grossMonthlySalaryCents / monthlyWorkHours)
     };
   };
 
@@ -461,6 +495,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, calcRecurringMonthly, wageSettingsFromIncome, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

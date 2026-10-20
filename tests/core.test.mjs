@@ -159,6 +159,49 @@ test('工時反推可直接沿用固定收入的工資、工時與保險設定',
   assert.equal(linked.insuredSalaryCents, 4800000);
 });
 
+test('時薪兼職：月總收入 = 時薪 × 工時，勞健保依固定投保級距', () => {
+  const rates = api.DEFAULT_CONFIG.insuranceRates;
+  const flow = { id: 'pt', type: 'income', payBasis: 'hourly', hourlyRateCents: 19600, monthlyWorkHours: 80, amountCents: 1568000, applyInsurance: true, insuredSalaryFollowsGross: false, insuredSalaryCents: 1110000, dayOfMonth: 5, accountId: 'bank' };
+  const income = api.Money.deriveIncome(flow);
+  assert.equal(income.grossCents, 1568000);
+  assert.equal(income.hourlyRateCents, 19600);
+  const item = api.Money.calcRecurringMonthly([flow], rates).items[0];
+  const fees = api.Money.grossToNet(1568000, 1110000, rates);
+  assert.equal(item.netCents, fees.net);
+  // 工時加倍，保費不變（級距固定）
+  const doubled = api.Money.calcRecurringMonthly([{ ...flow, monthlyWorkHours: 160 }], rates).items[0];
+  assert.equal(doubled.payroll.laborFee, item.payroll.laborFee);
+  assert.equal(doubled.grossCents, 3136000);
+  assert.equal(api.Validation.validateRecurringFlows([flow]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...flow, monthlyWorkHours: 0 }]).valid, true);
+});
+
+test('接案：月總收入 = 案件數 × 每件報酬，可按案件時薪或固定每件價', () => {
+  const byHour = { id: 'fl', type: 'income', payBasis: 'per_case', caseCount: 4, hoursPerCase: 3, caseFeeMode: 'hourly', hourlyRateCents: 100000, monthlyWorkHours: 0, amountCents: 0, applyInsurance: false, dayOfMonth: 15, accountId: 'bank' };
+  const a = api.Money.deriveIncome(byHour);
+  assert.equal(a.caseFeeCents, 300000);
+  assert.equal(a.grossCents, 1200000);
+  assert.equal(a.monthlyWorkHours, 12);
+  const fixed = { ...byHour, caseFeeMode: 'fixed', caseFeeCents: 500000, hourlyRateCents: undefined };
+  const b = api.Money.deriveIncome(fixed);
+  assert.equal(b.grossCents, 2000000);
+  assert.equal(b.hourlyRateCents, 166667);
+  assert.equal(api.Money.calcRecurringMonthly([fixed], api.DEFAULT_CONFIG.insuranceRates).incomeCents, 2000000);
+  assert.equal(api.Validation.validateRecurringFlows([byHour]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([fixed]).valid, true);
+  assert.equal(api.Validation.validateRecurringFlows([{ ...byHour, hoursPerCase: 0 }]).valid, false);
+  // 當月沒接案時工時反推仍有正工時與時薪
+  const wage = api.Money.wageSettingsFromIncome({ ...byHour, caseCount: 0 });
+  assert.equal(wage.baseRateCentsPerHour, 100000);
+  assert.ok(wage.monthlyWorkHours > 0 && wage.grossMonthlySalaryCents > 0);
+});
+
+test('未設定計薪方式的舊資料仍視為固定月薪', () => {
+  const legacy = { type: 'income', amountCents: 4800000, monthlyWorkHours: 120 };
+  assert.deepEqual({ ...api.Money.deriveIncome(legacy) }, { payBasis: 'monthly', grossCents: 4800000, monthlyWorkHours: 120, hourlyRateCents: 40000 });
+  assert.equal(api.Validation.validateRecurringFlows([{ ...legacy, id: 'x', dayOfMonth: 5, accountId: 'bank', monthlyWorkHours: 0 }]).valid, false);
+});
+
 test('多帳戶分配先滿足生活、固定支出與緊急預備金', () => {
   const result = api.Planning.allocateMonthly({
     incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyGapCents: 1200000,
