@@ -83,9 +83,13 @@ const Planning = (() => {
   };
   // 分配表「狀態」：依本期已過天數與實際帳務（已入帳的帳目、實際餘額）判斷每個用途是否跟上進度，並給下一步建議
   //   fixed：{ dueTotalCents, paidCents, balanceCents, accountName }  本期還沒扣的固定支出要由帳戶餘額撐住
-  //   living：{ spentCents, balanceCents, accountName }            已花 vs 依天數比例的進度，剩餘每日可花
-  //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, sharedWithIncome, accountName }  發薪後應先轉入
+  //   living：{ spentCents, spareCents, balanceCents, accountName } 已花 vs 依天數比例的進度，剩餘每日可花
+  //           spareCents＝分配完沒有用途的錢；每日可花跟摘要卡「每日生活費」一樣算進來，花超預算但沒超過它只算留意
+  //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, projectedInCents, sharedWithIncome, accountName }  發薪後應先轉入
+  //           projectedInCents＝本期固定儲蓄的預測轉帳（帳本還沒確認入帳）；夠的話只提醒確認，不判不足
+  //   facts.noData：沒有任何已入帳帳目、帳戶餘額也都是 0 → 還沒開始記帳，不判斷進度（不然新使用者一打開就全紅）
   const allocationStatus = (row, cycle, facts = {}) => {
+    if (facts.noData) return { level: 'none', text: '尚未記帳或填寫帳戶餘額，暫不判斷進度' };
     const out = (level, text) => ({ level, text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text });
     const target = row.allocatedCents;
     if (row.key === 'fixed') {
@@ -98,21 +102,25 @@ const Planning = (() => {
     }
     if (row.key === 'living') {
       const spent = Math.max(0, facts.spentCents || 0);
+      const spendable = target + Math.max(0, facts.spareCents || 0);
       const expected = Math.round(target * cycle.ratio);
       // 每日可花取整數元並無條件捨去，不高估能花的錢
-      const perDay = Math.floor(Math.max(0, target - spent) / Math.max(1, cycle.daysLeft) / 100) * 100;
+      const perDay = Math.floor(Math.max(0, spendable - spent) / Math.max(1, cycle.daysLeft) / 100) * 100;
       const progress = `第 ${cycle.elapsedDays}／${cycle.totalDays} 天，已花 ${fmt(spent)}（進度 ${fmt(expected)}）`;
-      if (spent > target) return out('short', `${progress}，已超出本期生活費 ${fmt(spent - target)}`);
-      const over = spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '';
+      if (spent > spendable) return out('short', `${progress}，已超出本期可花用 ${fmt(spent - spendable)}`);
+      const over = spent > target ? `，超出生活費預算 ${fmt(spent - target)}，已動用未分配的錢` : (spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '');
       const lowBalance = (facts.balanceCents ?? Infinity) < target - spent ? `；${facts.accountName}餘額只剩 ${fmt(Math.max(0, facts.balanceCents))}，不夠剩下的生活費` : '';
       return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`);
     }
-    if (target <= 0) return out(row.shortfallCents > 0 ? 'short' : 'ok', '本期不需提撥');
-    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出已存多少；建議改搭配獨立帳戶`);
+    if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
+    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`);
     const moved = Math.max(0, facts.movedInCents || 0);
     if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
+    const projected = Math.max(0, facts.projectedInCents || 0);
+    if (moved + projected >= target) return out('watch', `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}；轉帳後到帳本把預測帳目標為已入帳`);
     if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`);
-    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}`);
+    const pendingNote = projected > 0 ? `（其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認）` : '';
+    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`);
   };
   // 成本目標的已存金額取自指定帳戶餘額；同帳戶先保留緊急預備金目標，再依期限先後分給各目標，同一筆錢不重複計算
   const poolGoalSavings = (goals, balances, reservedByAccount = {}) => {
@@ -127,7 +135,8 @@ const Planning = (() => {
     });
   };
   // recommendedSavingCents 由呼叫端算好（含緊急預備金與成本目標）時直接用，問題點與摘要卡才會看同一個應儲蓄
-  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents }) => {
+  // spendableCents（可選）＝分配表的生活費＋未分配的錢；有給時每日生活費用它，跟分配表與生活費狀態同一個數字
+  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents, spendableCents }) => {
     const income = Math.max(0, Math.round(incomeCents || 0));
     const fixedExpense = Math.max(0, Math.round(fixedExpenseCents || 0));
     const fixedSaving = Math.max(0, Math.round(fixedSavingCents || 0));
@@ -138,7 +147,9 @@ const Planning = (() => {
     const actualSavingsCents = Math.round((actualIncomeCents || 0) - Math.max(0, actualExpenseCents || 0));
     const actualSavingsRate = actualIncomeCents > 0 ? actualSavingsCents / actualIncomeCents : null;
     const attainmentRate = recommendedSavingCents > 0 ? actualSavingsCents / recommendedSavingCents : null;
-    const dailyLivingCents = Math.floor(Math.max(0, income - fixedExpense - recommendedSavingCents) / Math.max(1, daysInMonth || 30));
+    const days = Math.max(1, daysInMonth || 30);
+    const livingSpaceCents = Math.max(0, income - fixedExpense - recommendedSavingCents);
+    const dailyLivingCents = Math.floor((Number.isFinite(spendableCents) ? Math.max(0, spendableCents) : livingSpaceCents) / days);
     let health = { level: 'unknown', label: '資料不足' };
     const issues = [];
     const strengths = [];
@@ -153,13 +164,13 @@ const Planning = (() => {
     if (actualSavingsCents < 0) issues.push('本月支出已高於收入');
     else if (actualSavingsRate !== null && actualSavingsRate < bands.low) issues.push(`本月儲蓄率低於 ${Math.round(bands.low * 100)}%，緩衝不足`);
     else if (actualSavingsRate !== null && actualSavingsRate < PLANNING_RULES.savingsRateTarget) issues.push(`本月儲蓄率尚未達到 ${targetPct} 規劃基準`);
-    if (dailyLivingCents <= 0 && income > 0) issues.push('扣除固定支出與應儲蓄後，已無每日生活費空間');
+    if (livingSpaceCents <= 0 && income > 0) issues.push('扣除固定支出與應儲蓄後，已無每日生活費空間');
     if (attainmentRate !== null && attainmentRate < 1) issues.push('本月儲蓄尚未達成建議金額');
     if (actualIncomeCents > 0 && actualSavingsCents >= 0) strengths.push('本月收入仍高於或等於支出，現金流維持非負');
     if (actualSavingsRate !== null && actualSavingsRate >= PLANNING_RULES.savingsRateTarget) strengths.push(`本月儲蓄率 ${(actualSavingsRate * 100).toFixed(1)}%，已達 ${targetPct} 規劃基準`);
     if (attainmentRate !== null && attainmentRate >= 1) strengths.push('本月實際儲蓄已達成建議金額');
     if (fixedSaving > 0) strengths.push('已建立固定儲蓄安排，降低遺漏儲蓄的機會');
-    if (dailyLivingCents > 0 && income > 0) strengths.push('依目前規劃，扣除固定支出與應儲蓄後仍保有生活費空間');
+    if (livingSpaceCents > 0 && income > 0) strengths.push('依目前規劃，扣除固定支出與應儲蓄後仍保有生活費空間');
     return { recommendedSavingCents, plannedSavingsRate, actualSavingsCents, actualSavingsRate, attainmentRate, dailyLivingCents, health, issues, strengths };
   };
 
@@ -204,9 +215,11 @@ const Planning = (() => {
     if (monthlySurplus < 0) risks.push({ severity: 'high', code: 'NEGATIVE_CASHFLOW', text: '目前每月收支為負數' });
     if (emergencyMonths !== null && emergencyMonths < PLANNING_RULES.emergencyMonths.min) risks.push({ severity: 'high', code: 'LOW_EMERGENCY', text: `緊急預備金僅可支應 ${emergencyMonths.toFixed(1)} 個月必要支出` });
     else if (emergencyMonths !== null && emergencyMonths < emergencyTargetMonths) risks.push({ severity: 'medium', code: 'EMERGENCY_BELOW_TARGET', text: `緊急預備金未達 ${emergencyTargetMonths} 個月目標，仍差 ${fmt(emergencyGap)}` });
-    if (!Number.isFinite(contributionLoad) || contributionLoad > 1) risks.push({ severity: 'high', code: 'GOAL_INFEASIBLE', text: '目前月結餘不足以在期限內完成目標' });
-    else if (contributionLoad > 0.8) risks.push({ severity: 'medium', code: 'GOAL_TIGHT', text: '目標提撥占月結餘超過 80%，緩衝有限' });
-    if (!scenarios.find(s => s.key === 'stress').feasible) risks.push({ severity: 'medium', code: 'INCOME_STRESS', text: '收入下降 20% 且零報酬時，目標無法如期完成' });
+    // 沒設主要目標（金額 0）時不出現目標相關風險；收支為負已由 NEGATIVE_CASHFLOW 提醒
+    const hasGoal = p.goalAmountTodayCents > 0;
+    if (hasGoal && (!Number.isFinite(contributionLoad) || contributionLoad > 1)) risks.push({ severity: 'high', code: 'GOAL_INFEASIBLE', text: '目前月結餘不足以在期限內完成目標' });
+    else if (hasGoal && contributionLoad > 0.8) risks.push({ severity: 'medium', code: 'GOAL_TIGHT', text: '目標提撥占月結餘超過 80%，緩衝有限' });
+    if (hasGoal && !scenarios.find(s => s.key === 'stress').feasible) risks.push({ severity: 'medium', code: 'INCOME_STRESS', text: '收入下降 20% 且零報酬時，目標無法如期完成' });
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };

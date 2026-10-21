@@ -281,6 +281,11 @@ const Validation = (() => {
       target[path] = structuredClone(fallback[path]); repaired++;
     });
     if (data.config.quickPlan) repairFields(data.config.quickPlan, defaults?.quickPlan, validateQuickPlan(data.config.quickPlan).errors);
+    // 月薪收入缺月工時（舊版或手改的存檔）：計算本來就以 160 小時代入，補上同一個值，不讓整份工作區被拒
+    (Array.isArray(data.config.recurringCashFlows) ? data.config.recurringCashFlows : []).forEach((f) => {
+      if (!f || f.type !== 'income' || (f.payBasis ?? 'monthly') !== 'monthly' || (finite(f.monthlyWorkHours) && f.monthlyWorkHours > 0)) return;
+      f.monthlyWorkHours = 160; repaired++;
+    });
     const rates = data.config.inflationRates;
     if (rates && typeof rates === 'object') Object.keys(rates).forEach((key) => {
       if (validRate(rates[key])) return;

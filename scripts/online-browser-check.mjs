@@ -274,6 +274,26 @@ try {
     await send('Emulation.clearDeviceMetricsOverride');
   }
 
+  // 4b. homepage must not present samples or templates as the user's own situation (2026-10-22 review):
+  //     a first visit showed a 300,000 goal, template loans and a red 不足 the user never set up
+  const homeText = `(() => { const vis = (sel) => [...document.querySelectorAll(sel)].filter(x => x.offsetParent !== null).map(x => x.innerText).join('\\n'); const yuan = (t) => Number(String(t).replace(/[^0-9-]/g, '')); const cards = Object.fromEntries([...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].map(c => [c.querySelector('h3').textContent, c.querySelector('.dashboard-mini-value').textContent])); const most = [...document.querySelectorAll('#health-results .summary-block')].find(b => b.querySelector('h3').textContent === '每月最多可存'); return { text: vis('#panel-health'), cards, most: most ? yuan(most.querySelector('.big').textContent) : null, sum: yuan(cards['應儲蓄']) + yuan(cards['月度餘裕']) }; })()`;
+  await go(`${base}/README.md`);
+  await evaluate(`localStorage.clear(); true`);
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-view-mode=simple]').click(); true`);
+  const fresh = await evaluate(homeText);
+  check('first visit: sample numbers labelled, no phantom goal, no template loans, status not judged',
+    fresh.text.includes('範例數字') && /主要儲蓄目標\s+未設定/.test(fresh.text) && !/\d+ 年 \d+ 月主要儲蓄目標/.test(fresh.text) && !fresh.text.includes('貸款規劃') && fresh.cards['分配狀態'] === '尚無資料',
+    JSON.stringify({ cards: fresh.cards }));
+  check('health 每月最多可存 = 應儲蓄 + 月度餘裕 on the cards above', fresh.most !== null && fresh.most === fresh.sum, JSON.stringify(fresh));
+  // a save from before the 不設定 option, still holding the untouched sample goal, opens with no goal
+  await go(`${base}/README.md`);
+  const legacyGoalConfig = { ...sampleConfig, quickPlan: { ...structuredClone(sampleConfig.quickPlan || {}), goalScenarioId: 'manual', goalAmountTodayCents: 30000000, goalTargetMonth: '2028-12' } };
+  await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify({ ...envelope, config: legacyGoalConfig }))}); true`);
+  await go(`${base}/index.html`);
+  const legacyGoal = await evaluate(homeText);
+  check('legacy untouched sample goal migrated to 不設定', /主要儲蓄目標\s+未設定/.test(legacyGoal.text) && !legacyGoal.text.includes('目標無法如期'), legacyGoal.text.slice(0, 300));
+
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);

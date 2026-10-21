@@ -874,3 +874,55 @@ test('不使用會被 CSP 擋下的行內樣式', () => {
     assert.doesNotMatch(src, /\sstyle=["'\]|<style[\s>]/, rel);
   }
 });
+
+// 2026-10-22 首頁審查：同一頁的數字要出自同一套分配，不能把範例值或沒資料的狀態當成使用者的結論
+test('分配狀態：沒有任何帳務資料時不判斷進度；固定儲蓄的預測轉帳只提醒確認', () => {
+  const cycle = { elapsedDays: 18, totalDays: 31, daysLeft: 14, ratio: 18 / 31 };
+  const row = (key, allocated) => ({ key, allocatedCents: allocated, requestedCents: allocated, shortfallCents: 0 });
+  const S = (r, f) => api.Planning.allocationStatus(r, cycle, { accountName: '儲蓄帳戶', ...f });
+  assert.equal(S(row('emergency', 700000), { noData: true }).level, 'none');
+  assert.equal(S(row('living', 1200000), { noData: true, spentCents: 0 }).level, 'none');
+  assert.equal(S(row('saving', 500000), { movedInCents: 0, projectedInCents: 500000 }).level, 'watch');
+  const partial = S(row('emergency', 700000), { movedInCents: 0, projectedInCents: 500000 });
+  assert.equal(partial.level, 'short');
+  assert.match(partial.text, /仍差 7,000元.*預計轉入 5,000元/);
+});
+
+test('分配狀態：生活費的每日可花把未分配的錢算進來，超出預算但沒超過可花用只算留意', () => {
+  const cycle = { elapsedDays: 18, totalDays: 31, daysLeft: 14, ratio: 18 / 31 };
+  const living = { key: 'living', allocatedCents: 1200000, requestedCents: 1200000, shortfallCents: 0 };
+  const S = (f) => api.Planning.allocationStatus(living, cycle, { accountName: '薪轉帳戶', ...f });
+  assert.match(S({ spentCents: 850000, spareCents: 994300 }).text, /每日可花 960元/); // (12,000+9,943−8,500)/14
+  assert.equal(S({ spentCents: 1500000, spareCents: 994300 }).level, 'watch');
+  assert.equal(S({ spentCents: 2300000, spareCents: 994300 }).level, 'short');
+});
+
+test('每日生活費有給可花用金額時跟分配表同一個數字', () => {
+  const r = api.Planning.assessMonthlySavings({ incomeCents: 3300000, fixedExpenseCents: 0, fixedSavingCents: 0, actualIncomeCents: 0, actualExpenseCents: 0, daysInMonth: 31, recommendedSavingCents: 900000, spendableCents: 2500000 });
+  assert.equal(r.dailyLivingCents, Math.floor(2500000 / 31));
+});
+
+test('健檢沒設主要目標時不出現目標相關風險', () => {
+  const plan = { ...structuredClone(api.DEFAULT_CONFIG.quickPlan), goalAmountTodayCents: 0, monthlyNetIncomeCents: 2000000 };
+  const codes = api.Planning.assess(plan).risks.map(r => r.code);
+  assert.ok(!codes.includes('GOAL_INFEASIBLE') && !codes.includes('INCOME_STRESS') && !codes.includes('GOAL_TIGHT'), codes.join());
+  assert.ok(codes.includes('NEGATIVE_CASHFLOW'));
+  assert.equal(api.DEFAULT_CONFIG.quickPlan.goalScenarioId, 'none');
+});
+
+test('月薪收入缺月工時時載入前補 160 小時，不讓整份工作區被拒', () => {
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.recurringCashFlows = [{ id: 'sal', name: '薪資', type: 'income', kind: 'salary', amountCents: 4500000, dayOfMonth: 5, accountId: 'bank' }];
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) };
+  assert.equal(api.Validation.validateWorkspace(workspace).valid, false);
+  api.Validation.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  assert.equal(config.recurringCashFlows[0].monthlyWorkHours, 160);
+  assert.equal(api.Validation.validateWorkspace(workspace, { scenarioContentChecks: false }).valid, true);
+});
+
+test('分配狀態：收入付完前面用途後沒剩時直接說無法提撥，不出現「本期不需提撥」', () => {
+  const cycle = { elapsedDays: 10, totalDays: 30, daysLeft: 21, ratio: 1 / 3 };
+  const s = api.Planning.allocationStatus({ key: 'emergency', allocatedCents: 0, requestedCents: 700000, shortfallCents: 700000 }, cycle, { accountName: '儲蓄帳戶' });
+  assert.equal(s.level, 'short');
+  assert.ok(!s.text.includes('不需提撥') && s.text.includes('無法提撥'), s.text);
+});

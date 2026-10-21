@@ -32,6 +32,14 @@ const App = (() => {
     const legacyRate = sourceConfig.quickPlan?.inflationAnnualRate;
     if (sourceConfig.inflationRates?.TW === undefined && Number.isFinite(legacyRate) && legacyRate !== 0.0191) nextConfig.inflationRates.TW = legacyRate;
     delete nextConfig.quickPlan.inflationAnnualRate;
+    // 2026-10-22 前沒有「不設定」：從沒改過的範例目標（自填 30 萬、2028-12）會在首頁變成使用者沒設過的目標與風險
+    // 舊存檔沒有 goalScenarioId 時當時的預設是自填；自填金額改過的照舊保留
+    const legacyGoal = sourceConfig.quickPlan || {};
+    // goalNoneOption 標記存檔已有「不設定」選項，之後使用者自己選回範例值的自填目標不會再被改掉
+    if (!legacyGoal.goalNoneOption && (legacyGoal.goalScenarioId ?? 'manual') === 'manual') {
+      const untouched = (legacyGoal.goalAmountTodayCents ?? 30000000) === 30000000 && (legacyGoal.goalTargetMonth ?? '2028-12') === '2028-12' && (legacyGoal.goalDeadlineMode ?? 'month') === 'month';
+      nextConfig.quickPlan.goalScenarioId = untouched ? 'none' : 'manual';
+    }
     for (const key of ['inflationMultipliers', 'budgetLimitsCents']) delete nextConfig[key];
     return nextConfig;
   };
@@ -146,6 +154,9 @@ const App = (() => {
     const first = config.accountProfiles[0]?.id || null;
     config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {} });
     for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
+    // 選進分配的成本目標要有自己的月份；沒有時會跟著健檢目標月份變，改健檢日期會悄悄改動分配（2026-10-22 紅隊）。
+    // 補上目前實際使用的月份，數字不變、之後兩者分開
+    for (const [id, on] of Object.entries(config.dashboard.scenarioSelections)) if (on && !Validation.isValidMonth(config.dashboard.scenarioTargetMonths[id]) && Validation.isValidMonth(config.quickPlan?.goalTargetMonth)) config.dashboard.scenarioTargetMonths[id] = config.quickPlan.goalTargetMonth;
     const valid = (id) => config.accountProfiles.some(a => a.id === id);
     for (const { key, field, fallback } of ALLOCATION_PURPOSES) {
       if (valid(config.dashboard[field])) continue;
@@ -333,7 +344,10 @@ const App = (() => {
     const targetMonth = scenarioTargetMonth(s);
     const months = Math.max(1, Planning.monthsBetween(now, targetMonth));
     const summary = scenarioSummary(s);
-    return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: summary.status === 'invalid' ? 0 : summary.targetCents, invalid: summary.status === 'invalid', error: summary.error || null };
+    // 目標月份已過不能照算（會變成本月要一次存完），排除並請使用者改月份
+    const overdue = targetMonth < `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const invalid = summary.status === 'invalid' || overdue;
+    return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: invalid ? 0 : summary.targetCents, invalid, overdue, error: overdue ? '目標月份已過' : (summary.error || null) };
   });
   // 分配表各列的「狀態」：發薪日取金額最大的固定收入；只看已入帳（非預測）的帳目與實際餘額
   const allocationStatuses = (health, now = new Date()) => {
@@ -367,16 +381,25 @@ const App = (() => {
       if (!(accountId in movedPool)) movedPool[accountId] = ledger.entries.filter(e => e.type === 'transfer' && inCycle(e)).reduce((s, e) => s + (e.toAccount === accountId ? twd(e) : 0) - (e.fromAccount === accountId ? twd(e) : 0), 0);
       return movedPool[accountId];
     };
+    // 固定儲蓄的預測轉帳（本期內、帳本尚未確認）：同樣依分配順序分給同帳戶的用途
+    const projectedPool = {};
+    const projectedInto = (accountId) => {
+      if (!(accountId in projectedPool)) projectedPool[accountId] = ledger.entries.filter(e => e.type === 'transfer' && e.status === 'projected' && e.recurringFlowId && e.toAccount === accountId && e.date >= cycle.start && e.date < cycle.next).reduce((s, e) => s + twd(e), 0);
+      return projectedPool[accountId];
+    };
+    const noData = !ledger.entries.some(e => e.status !== 'projected' && e.type !== 'wishlist') && !Object.values(balances).some(Boolean);
     const statuses = {};
     for (const row of health.allocation.rows) {
-      const base = { accountName: accountName(row.accountId), balanceCents: balances[row.accountId] || 0 };
+      const base = { accountName: accountName(row.accountId), balanceCents: balances[row.accountId] || 0, noData };
       let facts = base;
       if (row.key === 'fixed') facts = { ...base, dueTotalCents, paidCents };
-      else if (row.key === 'living') facts = { ...base, spentCents };
+      else if (row.key === 'living') facts = { ...base, spentCents, spareCents: health.allocation.unallocatedCents };
       else {
         const movedInCents = Math.max(0, Math.min(movedInto(row.accountId), row.allocatedCents));
         movedPool[row.accountId] -= movedInCents;
-        facts = { ...base, movedInCents, sharedWithIncome: incomeAccounts.has(row.accountId) };
+        const projectedInCents = Math.max(0, Math.min(projectedInto(row.accountId), row.allocatedCents - movedInCents));
+        projectedPool[row.accountId] -= projectedInCents;
+        facts = { ...base, movedInCents, projectedInCents, sharedWithIncome: incomeAccounts.has(row.accountId) };
       }
       statuses[row.key] = Planning.allocationStatus(row, cycle, facts);
     }
@@ -408,17 +431,25 @@ const App = (() => {
     const sameAccount = (savingsFlow?.accountId || emergencyAccountId) === emergencyAccountId;
     const savingsAccountId = config.dashboard.savingAccountId || emergencyAccountId;
     const emergencyMonthlyCents = sameAccount ? Math.max(rawEmergencyMonthly, recurring.fixedSavingCents) : rawEmergencyMonthly;
-    const goals = Planning.poolGoalSavings(selectedGoals(now), balances, { [emergencyAccountId]: emergencyTargetCents });
+    // 帳戶裡要付本月固定支出與生活費的錢不能算成目標已存（薪轉帳戶的錢不是旅費）；緊急預備金目標也先保留
+    const reserved = {};
+    const reserve = (accountId, cents) => { reserved[accountId] = (reserved[accountId] || 0) + Math.max(0, cents || 0); };
+    reserve(emergencyAccountId, emergencyTargetCents);
+    reserve(config.dashboard.fixedExpenseAccountId, fixedExpense);
+    reserve(config.dashboard.livingAccountId, expenses.livingCents);
+    const goals = Planning.poolGoalSavings(selectedGoals(now), balances, reserved);
     const goalMonthlyCents = goals.reduce((s, g) => s + g.monthlyRequiredCents, 0);
     // 應儲蓄＝緊急預備金＋成本目標＋一般儲蓄，合計至少達儲蓄率基準；固定儲蓄轉到其他帳戶時，一般儲蓄至少是那筆金額
     const savingCents = Math.max(sameAccount ? 0 : recurring.fixedSavingCents, Math.ceil(plannedIncome * PLANNING_RULES.savingsRateTarget) - emergencyMonthlyCents - goalMonthlyCents, 0);
     const recommendedSavingCents = emergencyMonthlyCents + goalMonthlyCents + savingCents;
-    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents });
     const allocation = Planning.allocateMonthly({
       incomeCents: plannedIncome, livingCents: expenses.livingCents, fixedExpenseCents: fixedExpense,
       emergencyMonthlyCents, savingCents, livingAccountId: config.dashboard.livingAccountId, fixedExpenseAccountId: config.dashboard.fixedExpenseAccountId,
       emergencyAccountId, savingsAccountId, goals: goals.filter(g => !g.invalid)
     });
+    // 每日生活費＝分配表給生活費的錢＋分配完沒有用途的錢，跟分配表、生活費狀態是同一個數字
+    const spendableCents = (allocation.rows.find(r => r.key === 'living')?.allocatedCents || 0) + allocation.unallocatedCents;
+    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents, spendableCents });
     return {
       ...assessed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
       emergencyMonthlyCents, savingCents, savingsAccountId, goals, allocation,
@@ -651,13 +682,14 @@ const App = (() => {
     const balances = getAccountBalances();
     const savingsHealth = currentMonthSavingsHealth();
     const recurring = recurringSummary();
-    const { hasRecurringIncome, goals, allocation } = savingsHealth;
+    const { hasRecurringIncome, goals, allocation, expenses } = savingsHealth;
     const income = savingsHealth.incomeCents;
     const fixedExpense = savingsHealth.fixedExpenseCents;
     const emergencyBalance = savingsHealth.emergencyBalanceCents;
     const emergencyGap = savingsHealth.emergencyGapCents;
     const monthlyFlex = savingsHealth.monthlyFlexCents;
     const progress = allocationStatuses(savingsHealth);
+    const fundedSavingCents = allocation.rows.filter(r => r.key !== 'fixed' && r.key !== 'living').reduce((s, r) => s + r.allocatedCents, 0);
     const accountSelect = (value, onchange) => el('select', { onchange }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name, selected: value === a.id ? 'selected' : undefined })));
     const requiredSettings = el('details', { class: 'compact-settings' }, [
       el('summary', { text: '必備分配帳戶' }),
@@ -674,7 +706,7 @@ const App = (() => {
         const accountId = config.dashboard.scenarioAccountMap[s.scenarioId] || config.accountProfiles[0]?.id;
         const targetMonth = scenarioTargetMonth(s);
         return el('div', { class: 'goal-picker' }, [
-          el('label', {}, [el('input', { type: 'checkbox', checked: selected ? 'checked' : undefined, onchange: e => { config.dashboard.scenarioSelections[s.scenarioId] = e.target.checked; IO.markDirty(); renderAllocationDashboard(); } }), document.createTextNode(` ${s.label}`)]),
+          el('label', {}, [el('input', { type: 'checkbox', checked: selected ? 'checked' : undefined, onchange: e => { config.dashboard.scenarioSelections[s.scenarioId] = e.target.checked; if (e.target.checked && !Validation.isValidMonth(config.dashboard.scenarioTargetMonths[s.scenarioId])) config.dashboard.scenarioTargetMonths[s.scenarioId] = targetMonth; IO.markDirty(); renderAllocationDashboard(); } }), document.createTextNode(` ${s.label}`)]),
           selected ? accountSelect(accountId, e => { config.dashboard.scenarioAccountMap[s.scenarioId] = e.target.value; IO.markDirty(); renderAllocationDashboard(); }) : null,
           selected ? el('input', { type: 'month', value: targetMonth, onchange: e => { if (Validation.isValidMonth(e.target.value)) config.dashboard.scenarioTargetMonths[s.scenarioId] = e.target.value; else delete config.dashboard.scenarioTargetMonths[s.scenarioId]; IO.markDirty(); renderAllocationDashboard(); } }) : null
         ]);
@@ -684,7 +716,7 @@ const App = (() => {
       const scenario = scenarios.find(s => s.scenarioId === goal.key);
       const items = scenario?.items || scenario?.itemTemplate || [];
       return el('details', { class: 'compact-settings', 'data-collapse-id': `selected-goal-${goal.key}` }, [
-        el('summary', { text: goal.invalid ? goal.label + '（試算錯誤，未納入分配）' : goal.label + '清單・尚需 ' + Money.formatTWD(goal.gapCents) }),
+        el('summary', { class: goal.invalid ? 'neg' : undefined, text: goal.overdue ? `${goal.label}（目標月份 ${goal.targetMonth} 已過，未納入分配；請在編輯模式「選擇成本目標」改月份）` : (goal.invalid ? goal.label + '（試算錯誤，未納入分配）' : goal.label + '清單・尚需 ' + Money.formatTWD(goal.gapCents)) }),
         items.length ? el('table', {}, [el('tbody', {}, items.map(item => el('tr', {}, [el('td', { text: item.label }), el('td', { class: 'mono', text: Money.formatTWD(item.kind === 'discount' ? -item.amountCents : item.amountCents) })])))]) : el('p', { class: 'notice', text: '此試算為固定公式型，詳細參數請至成本試算頁調整。' })
       ]);
     })) : el('div', { class: 'selected-goals' });
@@ -697,9 +729,10 @@ const App = (() => {
     const sourceDefinitions = [
       { value: 'income', label: '收支｜月收入', amountCents: income, note: hasRecurringIncome ? '多份工作勞健保扣除後粗估合計' : '財務健檢收入' },
       { value: 'fixedExpense', label: '收支｜固定支出', amountCents: fixedExpense, note: '每月固定款項合計' },
-      { value: 'recommendedSaving', label: '收支｜應儲蓄', amountCents: savingsHealth.recommendedSavingCents, note: `規劃儲蓄率 ${savingsHealth.plannedSavingsRate === null ? '—' : (savingsHealth.plannedSavingsRate * 100).toFixed(1) + '%'}` },
-      { value: 'dailyLiving', label: '收支｜每日生活費', amountCents: savingsHealth.dailyLivingCents, note: '扣除固定支出與應儲蓄（含成本目標）' },
-      { value: 'monthlyFlex', label: '收支｜月度餘裕', amountCents: monthlyFlex, note: '收入扣除固定支出、生活費與應儲蓄（含成本目標）' },
+      // 收入付完固定支出與生活費後不夠存時要講出實際存得到多少，不能只顯示規劃比率
+      { value: 'recommendedSaving', label: '收支｜應儲蓄', amountCents: savingsHealth.recommendedSavingCents, note: `${fundedSavingCents < savingsHealth.recommendedSavingCents ? `收入只夠存 ${Money.formatTWD(fundedSavingCents)}・` : ''}規劃儲蓄率 ${savingsHealth.plannedSavingsRate === null ? '—' : (savingsHealth.plannedSavingsRate * 100).toFixed(1) + '%'}` },
+      { value: 'dailyLiving', label: '收支｜每日生活費', amountCents: savingsHealth.dailyLivingCents, note: `${allocation.unallocatedCents > 0 ? `生活費 ${Money.formatTWD(expenses.livingCents)}＋未分配 ${Money.formatTWD(allocation.unallocatedCents)}` : '生活費預算'}，本月計畫平均；實際剩多少看分配狀態` },
+      { value: 'monthlyFlex', label: '收支｜月度餘裕', amountCents: monthlyFlex, note: monthlyFlex < 0 ? '收入不夠付完支出與應儲蓄' : '付完支出、存完應儲蓄後還剩' },
       { value: 'actualSaving', label: '收支｜本月實際儲蓄', amountCents: savingsHealth.actualSavingsCents, note: savingsHealth.health.label },
       { value: 'actualSavingsRate', label: '比率｜本月儲蓄率', valueNumber: savingsHealth.actualSavingsRate, format: 'percent', note: savingsHealth.health.label },
       { value: 'attainmentRate', label: '比率｜儲蓄達成率', valueNumber: savingsHealth.attainmentRate, format: 'percent', note: `應儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}` },
@@ -721,14 +754,15 @@ const App = (() => {
       );
     });
     // 狀態卡沿用分配表的判斷；整體狀態取最差的一列，說明列出要處理的用途
-    const levelText = { ok: '正常', watch: '留意', short: '不足' };
+    const levelText = { ok: '正常', watch: '留意', short: '不足', none: '尚無資料' };
     const levelRank = { ok: 0, watch: 1, short: 2 };
     const statusRows = allocation.rows.map(row => ({ row, status: progress.statuses[row.key] }));
     const worst = statusRows.reduce((max, s) => Math.max(max, levelRank[s.status.level] ?? 0), 0);
     const flagged = statusRows.filter(s => (levelRank[s.status.level] ?? 0) > 0);
+    const noStatusData = statusRows.length > 0 && statusRows.every(s => s.status.level === 'none');
     sourceDefinitions.push({
-      value: 'allocationStatus', label: '分配｜整體狀態', format: 'status', level: Object.keys(levelRank)[worst],
-      note: flagged.length ? flagged.map(s => `${s.row.label}${levelText[s.status.level]}`).join('、') : `${statusRows.length} 項分配皆正常`
+      value: 'allocationStatus', label: '分配｜整體狀態', format: 'status', level: noStatusData ? 'none' : Object.keys(levelRank)[worst],
+      note: noStatusData ? '記帳或填帳戶餘額後開始追蹤' : (flagged.length ? flagged.map(s => `${s.row.label}${levelText[s.status.level]}`).join('、') : `${statusRows.length} 項分配皆正常`)
     });
     statusRows.forEach(({ row, status }) => sourceDefinitions.push({ value: `allocation:${row.key}:status`, label: `分配｜${row.label}・狀態`, format: 'status', level: status.level, note: status.text }));
     goals.forEach(goal => sourceDefinitions.push(
@@ -788,21 +822,41 @@ const App = (() => {
         $('#scenario-select').value = currentScenarioId; renderEstimator();
         document.querySelector('#panel-estimator')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
-    const loanOverview = el('section', { class: 'loan-overview-home' }, [
-      el('div', { class: 'section-heading' }, [el('h3', { text: '貸款規劃' }), el('p', { class: 'notice', text: '集中查看房貸與學貸；詳細參數只在成本試算調整。' })]),
-      studentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
-      mortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
+    // 貸款情境是內建範本，每個人都有；只有連動成固定支出或選為成本目標時才是「你的貸款」，否則首頁不列金額
+    const loanInUse = (scenario, settings) => !!scenario && (!!settings?.includeAsFixedExpense || !!config.dashboard.scenarioSelections[scenario.scenarioId]);
+    const showStudentLoan = loanInUse(studentLoanScenario, studentLoanSettings);
+    const showMortgage = loanInUse(mortgageScenario, mortgageSettings);
+    const loanOverview = el('section', { class: `loan-overview-home${showStudentLoan || showMortgage ? '' : ' editor-only'}` }, [
+      el('div', { class: 'section-heading' }, [el('h3', { text: '貸款規劃' }), el('p', { class: 'notice', text: showStudentLoan || showMortgage ? '集中查看房貸與學貸；詳細參數只在成本試算調整。' : '尚未設定貸款。有房貸或學貸時，到成本試算勾選「自動納入帳本固定支出」，這裡就會顯示月繳與狀態。' })]),
+      !showStudentLoan && !showMortgage ? el('div', { class: 'toolbar' }, [
+        studentLoanScenario ? el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') }) : null,
+        mortgageScenario ? el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') }) : null
+      ]) : null,
+      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
+      showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
+    // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
+    const estimateNotice = hasRecurringIncome ? null : el('div', { class: 'estimate-notice' }, [
+      el('p', { text: `收入 ${Money.formatTWD(income)} 與支出是「進階財務健檢」的估計值，沒改過就是範例數字。到帳本設定固定收入與支出後，這裡會改用你的實際設定。` }),
+      el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); $('#personal-settings')?.scrollIntoView({ block: 'start' }); } })
+    ]);
+    // 結論模式看不到分配表，要做的事直接列出來（編輯模式由分配表的狀態欄呈現，不重複）
+    const todoList = flagged.length ? el('div', { class: 'allocation-todo simple-only' }, [
+      el('h3', { text: '本期待辦' }),
+      el('ul', {}, flagged.map(({ row, status }) => el('li', { class: `status-${status.level}` }, [el('strong', { text: `${row.label}：` }), document.createTextNode(status.text)])))
+    ]) : null;
     root.innerHTML = '';
     root.append(
+      ...(estimateNotice ? [estimateNotice] : []),
       el('div', { class: 'dashboard-summary' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可切換至編輯模式重新勾選。' })]),
+      ...(todoList ? [todoList] : []),
       renderSummaryCardSettings(),
       loanOverview,
       el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${progress.cycle.next.slice(5).replace('-', '/')} 前（${progress.payday ? `依「${progress.payday.name}」每月 ${progress.payday.day} 日發薪` : '尚未設定固定收入，以每月 1 日起算'}）・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天（${Math.round(progress.cycle.ratio * 100)}%）；狀態只看已入帳的帳目與實際餘額` }),
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'allocation-table' }, [
         el('thead', {}, [el('tr', {}, [el('th', { text: '用途' }), el('th', { text: '搭配帳戶' }), el('th', { text: '每月需要' }), el('th', { text: '建議分配' }), el('th', { text: '狀態' })])]),
         el('tbody', {}, allocation.rows.map(r => el('tr', { class: r.shortfallCents > 0 ? 'allocation-short' : '' }, [
-          el('td', {}, [document.createTextNode(r.label), r.required ? el('span', { class: 'badge', text: '必備' }) : null, !r.required ? el('div', { class: 'notice', text: `目標 ${Money.formatTWD(r.targetCents)}・帳戶已有 ${Money.formatTWD(r.savedCents)}・${r.targetMonth}` }) : null]),
+          el('td', {}, [document.createTextNode(r.label), r.required ? el('span', { class: 'badge', text: '必備' }) : null, !r.required ? el('div', { class: 'notice', text: `目標 ${Money.formatTWD(r.targetCents)}・帳戶已有 ${Money.formatTWD(r.savedCents)}（已扣同帳戶本月支出與緊急預備金）・${r.targetMonth}` }) : null]),
           el('td', { text: accountName(r.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(r.requestedCents) }),
           el('td', { class: 'mono', text: Money.formatTWD(r.allocatedCents) }),
           el('td', { class: `allocation-status status-${progress.statuses[r.key].level}`, text: progress.statuses[r.key].text })
@@ -833,17 +887,19 @@ const App = (() => {
     ageDeadlineDate.setMonth(ageDeadlineDate.getMonth() + Math.max(1, Math.ceil((q.goalTargetAge - q.currentAge) * 12)));
     const ageTargetMonth = `${ageDeadlineDate.getFullYear()}-${String(ageDeadlineDate.getMonth() + 1).padStart(2, '0')}`;
     const effectiveTargetMonth = q.goalDeadlineMode === 'age' ? ageTargetMonth : q.goalTargetMonth;
-    if (q.goalScenarioId !== 'manual' && !scenarios.some(s => s.scenarioId === q.goalScenarioId)) q.goalScenarioId = 'manual';
+    if (!['none', 'manual'].includes(q.goalScenarioId) && !scenarios.some(s => s.scenarioId === q.goalScenarioId)) q.goalScenarioId = 'none';
     const linkedGoal = scenarios.find(s => s.scenarioId === q.goalScenarioId);
-    const linkedGoalAmount = linkedGoal ? scenarioTargetCents(linkedGoal) : q.goalAmountTodayCents;
+    const noGoal = q.goalScenarioId === 'none';
+    const linkedGoalAmount = linkedGoal ? scenarioTargetCents(linkedGoal) : (noGoal ? 0 : q.goalAmountTodayCents);
     const linkedGoalInvalid = !!linkedGoal && linkedGoalAmount === null;
     const goalSourceField = el('div', { class: 'field wide' }, [
       el('label', { text: '主要儲蓄目標來源' }),
       el('select', { onchange: e => { q.goalScenarioId = e.target.value; IO.markDirty(); renderHealth(); } }, [
+        el('option', { value: 'none', text: '不設定（只看資金分配）', selected: noGoal ? 'selected' : undefined }),
         el('option', { value: 'manual', text: '自行輸入金額', selected: q.goalScenarioId === 'manual' ? 'selected' : undefined }),
         ...scenarios.map(s => el('option', { value: s.scenarioId, text: `連動成本試算・${s.label}`, selected: q.goalScenarioId === s.scenarioId ? 'selected' : undefined }))
       ]),
-      el('small', { class: 'notice', text: linkedGoal ? '直接引用成本試算的目標總額；該頁更新後同步重算，不重複加計通膨。' : '先填「如果今天完成，總共要花多少」；系統再推算完成月份需要準備的總額。' })
+      el('small', { class: 'notice', text: linkedGoal ? '直接引用成本試算的目標總額；該頁更新後同步重算，不重複加計通膨。' : (noGoal ? '不另外設目標；首頁資金分配勾選的成本目標照常計算。' : '先填「如果今天完成，總共要花多少」；系統再推算完成月份需要準備的總額。') })
     ]);
     form.append(
       birthYearField(),
@@ -854,12 +910,12 @@ const App = (() => {
       derivedField('緊急預備金計算基數（不扣補助）', expensesForHealth.emergencyBaseCents, expensesForHealth.derived ? '必要固定支出（租屋補助前）＋每月生活開銷；補助可能停發，不拿來降低預備金' : '每月必要支出'),
       hasAccountAssets ? derivedField('可動用資產', derivedLiquidAssets, '由流動性帳戶餘額自動加總；緊急預備金另看指定帳戶') : healthMoneyField('可動用資產（元）', 'liquidAssetsCents'),
       goalSourceField,
-      linkedGoal ? (linkedGoalInvalid ? el('p', { class: 'neg', text: '成本試算目前無法計算，請先修正情境設定。' }) : derivedField('成本試算目標總額', linkedGoalAmount, '由成本試算情境自動更新')) : healthMoneyField('如果今天完成，總共要花多少（元）', 'goalAmountTodayCents'),
-      el('div', { class: 'field' }, [el('label', { text: '完成期限標準' }), el('select', { onchange: e => { q.goalDeadlineMode = e.target.value; IO.markDirty(); renderHealth(); } }, [
+      noGoal ? empty() : linkedGoal ? (linkedGoalInvalid ? el('p', { class: 'neg', text: '成本試算目前無法計算，請先修正情境設定。' }) : derivedField('成本試算目標總額', linkedGoalAmount, '由成本試算情境自動更新')) : healthMoneyField('如果今天完成，總共要花多少（元）', 'goalAmountTodayCents'),
+      noGoal ? empty() : el('div', { class: 'field' }, [el('label', { text: '完成期限標準' }), el('select', { onchange: e => { q.goalDeadlineMode = e.target.value; IO.markDirty(); renderHealth(); } }, [
         el('option', { value: 'month', text: '希望完成月份', selected: q.goalDeadlineMode === 'month' ? 'selected' : undefined }),
         el('option', { value: 'age', text: '希望完成年齡', selected: q.goalDeadlineMode === 'age' ? 'selected' : undefined })
       ])]),
-      q.goalDeadlineMode === 'month'
+      noGoal ? empty() : q.goalDeadlineMode === 'month'
         ? el('div', { class: 'field' }, [el('label', { text: '希望完成月份' }), el('input', { type: 'month', value: q.goalTargetMonth, onchange: (e) => { if (Validation.isValidMonth(e.target.value)) q.goalTargetMonth = e.target.value; IO.markDirty(); renderHealth(); } })])
         : el('div', { class: 'field' }, [el('label', { text: '希望完成年齡' }), el('input', { type: 'number', min: String(Math.ceil(q.currentAge + 1)), max: '120', step: '1', value: q.goalTargetAge, onchange: e => { q.goalTargetAge = Math.min(120, Math.max(Math.ceil(q.currentAge + 1), Number(e.target.value))); IO.markDirty(); renderHealth(); } }), el('small', { class: 'notice', text: `依目前 ${q.currentAge} 歲推算，約為 ${ageTargetMonth.replace('-', ' 年 ')} 月` })]),
       el('details', {}, [
@@ -872,6 +928,7 @@ const App = (() => {
     const emergencyReserveCents = hasAccountAssets ? Math.max(0, liquidBalances[config.dashboard.emergencyAccountId] || 0) : q.liquidAssetsCents;
     const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, emergencyBaseCents: expensesForHealth.emergencyBaseCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : config.inflationRates.TW, monthlyNetIncomeCents: planForHealth.incomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
     const result = Planning.assess(effectivePlan);
+    const allocationNow = currentMonthSavingsHealth();
     resultRoot.innerHTML = '';
     if (!result.ok) {
       resultRoot.append(el('h3', { text: '請修正輸入' }), el('ul', {}, result.errors.map(e => el('li', { class: 'neg', text: e.message }))));
@@ -881,15 +938,16 @@ const App = (() => {
     const [goalYear, goalMonth] = String(effectiveTargetMonth || '').split('-');
     const goalDeadlineLabel = goalYear && goalMonth ? `${goalYear} 年 ${Number(goalMonth)} 月主要儲蓄目標` : '主要儲蓄目標';
     resultRoot.append(
-      el('h3', { text: '健檢結果' }),
       el('div', { class: 'health-grid' }, [
-        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '每月結餘' }), el('p', { class: 'mono big', text: Money.formatTWD(result.monthlySurplus) }), el('p', { text: `儲蓄率 ${pct(result.savingsRate)}` })]),
+        // 跟摘要卡「應儲蓄／月度餘裕」不同：這裡是還沒分配儲蓄前，收入扣掉支出最多能存多少
+        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '每月最多可存' }), el('p', { class: `mono big${result.monthlySurplus < 0 ? ' neg' : ''}`, text: Money.formatTWD(result.monthlySurplus) }), el('p', { text: `收入扣固定支出與生活費・占收入 ${pct(result.savingsRate)}（建議至少 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）` }), el('p', { class: 'notice', text: `＝上方應儲蓄 ${Money.formatTWD(allocationNow.recommendedSavingCents)}＋月度餘裕 ${Money.formatTWD(allocationNow.monthlyFlexCents)}` })]),
         el('div', { class: 'summary-block highlight' }, [el('h3', { text: '緊急預備金' }), el('p', { class: 'mono big', text: result.emergencyMonths === null ? '無法計算' : `${result.emergencyMonths.toFixed(1)} 個月` }), el('p', { text: `距 ${result.emergencyTargetMonths} 個月目標差 ${Money.formatTWD(result.emergencyGap)}` })]),
-        el('div', { class: 'summary-block highlight' }, [el('h3', { text: linkedGoal ? `${linkedGoal.label}・需準備總額` : goalDeadlineLabel }), el('p', { class: 'mono big', text: Money.formatTWD(result.futureGoal) }), el('p', { text: `${linkedGoal ? '直接引用成本試算結果' : '由今天的總花費按通膨推算'}・每月至少準備 ${Money.formatTWD(result.monthlyGoalContribution)}` })]),
-        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '實質報酬假設' }), el('p', { class: 'mono big', text: pct(result.realAnnualReturnRate) }), el('p', { text: '由名目報酬扣除通膨影響' })])
+        noGoal ? null : el('div', { class: 'summary-block highlight' }, [el('h3', { text: linkedGoal ? `${linkedGoal.label}・需準備總額` : goalDeadlineLabel }), el('p', { class: 'mono big', text: Money.formatTWD(result.futureGoal) }), el('p', { class: result.monthsToGoal <= 0 ? 'neg' : undefined, text: result.monthsToGoal <= 0 ? `期限 ${effectiveTargetMonth} 已到或已過：要一次備齊 ${Money.formatTWD(result.monthlyGoalContribution)}，請確認完成月份` : `${linkedGoal ? '直接引用成本試算結果' : '由今天的總花費按通膨推算'}・每月至少準備 ${Money.formatTWD(result.monthlyGoalContribution)}` })]),
+        noGoal ? el('div', { class: 'summary-block highlight' }, [el('h3', { text: '主要儲蓄目標' }), el('p', { class: 'mono big', text: '未設定' }), el('p', { text: '可在編輯模式的「進階財務健檢與假設」設定；資金分配勾選的成本目標照常計算' })]) : null,
+        el('div', { class: 'summary-block highlight editor-only' }, [el('h3', { text: '實質報酬假設' }), el('p', { class: 'mono big', text: pct(result.realAnnualReturnRate) }), el('p', { text: '由名目報酬扣除通膨影響' })])
       ]),
-      el('h3', { class: 'editor-only', text: '固定情境' }),
-      el('table', { class: 'editor-only' }, [
+      noGoal ? empty() : el('h3', { class: 'editor-only', text: '固定情境' }),
+      noGoal ? empty() : el('table', { class: 'editor-only' }, [
         el('thead', {}, [el('tr', {}, [el('th', { text: '情境' }), el('th', { text: '通膨後目標' }), el('th', { text: '月結餘' }), el('th', { text: '每月所需' }), el('th', { text: '結果' })])]),
         el('tbody', {}, result.scenarios.map(s => el('tr', {}, [el('td', { text: s.label }), el('td', { class: 'mono', text: Money.formatTWD(s.futureGoalCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlySurplusCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlyRequiredCents) }), el('td', { class: s.feasible ? '' : 'neg', text: s.feasible ? '可行' : '無法如期' })])))
       ]),
@@ -2073,7 +2131,7 @@ const App = (() => {
       delete config.dashboard.scenarioSelections[scenario.scenarioId];
       delete config.dashboard.scenarioAccountMap[scenario.scenarioId];
       delete config.dashboard.scenarioTargetMonths[scenario.scenarioId];
-      if (config.quickPlan.goalScenarioId === scenario.scenarioId) config.quickPlan.goalScenarioId = 'manual';
+      if (config.quickPlan.goalScenarioId === scenario.scenarioId) config.quickPlan.goalScenarioId = 'none';
       currentScenarioId = scenarios[0]?.scenarioId; compareMode = false;
       renderScenarioSelector(); renderEstimator(); renderHealth(); IO.markDirty();
     });

@@ -56,7 +56,9 @@ const DEFAULT_CONFIG = {
     monthlyEssentialExpenseCents: 1800000,
     monthlyOtherExpenseCents: 700000,
     liquidAssetsCents: 5000000,
-    goalScenarioId: 'manual',
+    // 'none'＝不設定主要目標；'manual'＝自填金額；其他＝連動該成本試算情境
+    goalScenarioId: 'none',
+    goalNoneOption: true,
     emergencyTargetMonths: PLANNING_RULES.emergencyMonths.default,
     goalAmountTodayCents: 30000000,
     goalDeadlineMode: 'month',

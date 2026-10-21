@@ -242,6 +242,16 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .allocation-status { font-size: 0.86rem; line-height: 1.5; }
 .allocation-status.status-short { color: var(--negative); }
 .allocation-status.status-watch { color: var(--over-limit); }
+.allocation-status.status-none { color: var(--ink-soft); }
+.estimate-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #EADFC8; border-radius: 10px; background: #FCF9F2; font-size: 0.88rem; }
+.estimate-notice p { margin: 0; flex: 1 1 280px; }
+.allocation-todo { margin: 12px 0; }
+.allocation-todo h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.allocation-todo ul { margin: 0; padding-left: 1.2em; font-size: 0.88rem; }
+.allocation-todo li { margin: 4px 0; }
+.allocation-todo li.status-short { color: var(--negative); }
+.allocation-todo li.status-watch { color: var(--over-limit); }
+body[data-view-mode="detailed"] .simple-only { display: none !important; }
 .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
 .health-critical, .health-risk { color: var(--negative); }
 .health-watch { color: var(--over-limit); }
