@@ -476,3 +476,4 @@ tbody tr:last-child td { border-bottom: 0; }
   .dashboard-mini-card { padding: 12px; }
   th, td { padding: 9px 8px; }
 }
+.trend-chart { width: 100%; height: auto; }

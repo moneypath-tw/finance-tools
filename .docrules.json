@@ -1,9 +1,0 @@
-{
-  "rules": {
-    "dated_header": {
-      "include": [
-        "docs/*.md"
-      ]
-    }
-  }
-}

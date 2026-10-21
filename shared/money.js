@@ -72,11 +72,14 @@ const Money = (() => {
     return Math.max(0, costs - discounts);
   };
 
-  // 反推驗證後的通膨公式：inflated = total * multiplier（單次直接相乘，非複利、不需要年數）
-  // 驗證依據：買房 20,001,143 × 1.58 = 31,601,806（原表數字一致）
-  //           買地自建 12,940,676 × 1.58 = 20,446,268（原表數字一致）
-  //           旅費 55,300 × 1.3 = 71,890（原表數字一致）
-  const applyInflation = (totalCents, multiplier) => Math.round(totalCents * multiplier);
+  // 通膨一律複利：今日金額 ×(1＋年通膨率)^(月數÷12)，與首頁健檢的 Planning.futureValue 同一公式
+  // 年通膨率取使用者覆寫的 config.inflationRates，沒有就用 reference-data.js 的官方預測
+  const inflationRateOf = (config, key) => {
+    const rate = config?.inflationRates?.[key];
+    return Number.isFinite(rate) ? rate : (REFERENCE_DATA.inflation[key]?.annualRate ?? 0);
+  };
+  const inflationFactor = (annualRate, months) => Math.pow(1 + annualRate, Math.max(0, months) / 12);
+  const applyInflation = (totalCents, factor) => Math.round(totalCents * factor);
 
   // 勞健保正推／反推：互為反函式，費率由使用者自填（不內建會過期的官方分級表）
   const grossToNet = (grossMonthlyCents, insuredSalaryCents, rates) => {
@@ -143,9 +146,11 @@ const Money = (() => {
     });
     const incomeCents = items.filter(f => f.type === 'income').reduce((s, f) => s + f.netCents, 0);
     const essentialExpenseCents = items.filter(f => f.type === 'expense' && f.essential !== false).reduce((s, f) => s + f.grossCents, 0);
+    // 未扣租屋補助的必要支出：緊急預備金用這個，補助可能停發，不能拿來降低預備金
+    const essentialExpenseGrossCents = items.filter(f => f.type === 'expense' && f.essential !== false).reduce((s, f) => s + (f.housingCalc ? f.housingCalc.grossMonthlyCents : f.grossCents), 0);
     const otherExpenseCents = items.filter(f => f.type === 'expense' && f.essential === false).reduce((s, f) => s + f.grossCents, 0);
     const fixedSavingCents = items.filter(f => f.type === 'saving').reduce((s, f) => s + f.grossCents, 0);
-    return { items, incomeCents, essentialExpenseCents, otherExpenseCents, fixedSavingCents, monthlySavingsCents: incomeCents - essentialExpenseCents - otherExpenseCents };
+    return { items, incomeCents, essentialExpenseCents, essentialExpenseGrossCents, otherExpenseCents, fixedSavingCents };
   };
   const wageSettingsFromIncome = (flow) => {
     if (!flow || flow.type !== 'income') throw new TypeError('必須選擇有效的固定收入來源');
@@ -280,10 +285,12 @@ const Money = (() => {
     return diff >= 0 && diff % cycle === 0 ? monthlyCents * cycle : 0;
   };
 
-  // 一次性情境（買房／買地自建／旅費／喪葬）
-  const calcOneTimeScenario = (scenario, config) => {
+  // 一次性情境（買房／買地自建／旅費／喪葬）；horizonMonths＝距目標月份的月數，由呼叫端依首頁目標月份算好
+  const inflationText = (scenario, config, horizonMonths, factor) =>
+    `通膨後總額 = 總額 ×(1＋${scenario.inflationKey} 年通膨率 ${(inflationRateOf(config, scenario.inflationKey) * 100).toFixed(2)}%)^(${horizonMonths} 個月 ÷ 12) = 總額 × ${factor.toFixed(4)}`;
+  const calcOneTimeScenario = (scenario, config, horizonMonths = 0) => {
     const total = sumItems(scenario.items);
-    const multiplier = scenario.inflationKey ? (config.inflationMultipliers[scenario.inflationKey] ?? 1) : 1;
+    const multiplier = scenario.applyInflation ? inflationFactor(inflationRateOf(config, scenario.inflationKey), horizonMonths) : 1;
     const inflated = scenario.applyInflation ? applyInflation(total, multiplier) : total;
     const afterLoan = (scenario.loanAmountCents !== undefined && scenario.loanAmountCents !== null)
       ? total - scenario.loanAmountCents
@@ -296,28 +303,26 @@ const Money = (() => {
       : null;
 
     const formulaText = scenario.applyInflation
-      ? `通膨後總額 = 總額 × ${scenario.inflationKey}通膨倍數(${multiplier})\n` +
-        `           = ${formatTWD(total)} × ${multiplier}\n` +
-        `           = ${formatTWD(inflated)}`
+      ? `${inflationText(scenario, config, horizonMonths, multiplier)}\n           = ${formatTWD(total)} × ${multiplier.toFixed(4)} = ${formatTWD(inflated)}`
       : `總額 = 各項目加總 = ${formatTWD(total)}（此情境未套用通膨）`;
 
     return { total, inflated, afterLoan, inflatedAfterLoan, gap, multiplier, formulaText };
   };
 
-  // 養老金情境：總額 = 每月生活費 × 12 × (身故年齡－退休年齡)，可選套用通膨倍數
-  const calcRetirementFundScenario = (scenario, config) => {
+  // 養老金情境：總額 = 每月生活費 × 12 × (身故年齡－退休年齡)，可選複利通膨到退休年齡
+  const calcRetirementFundScenario = (scenario, config, horizonMonths = 0) => {
     const retirementYears = scenario.deathAge - scenario.retireAge;
-    const baseTotal = scenario.monthlyLivingCostCents * 12 * retirementYears;
-    const multiplier = scenario.inflationKey ? (config.inflationMultipliers[scenario.inflationKey] ?? 1) : 1;
+    const baseTotal = (scenario.monthlyLivingCostCents || 0) * 12 * retirementYears;
+    const multiplier = scenario.applyInflation ? inflationFactor(inflationRateOf(config, scenario.inflationKey), horizonMonths) : 1;
     const inflated = scenario.applyInflation ? applyInflation(baseTotal, multiplier) : baseTotal;
     const gap = inflated - (scenario.currentSavedCents || 0);
     const formulaText =
       `退休後年數 = 身故年齡(${scenario.deathAge}) － 退休年齡(${scenario.retireAge}) = ${retirementYears} 年\n` +
       `養老所需總額 = 每月生活費 × 12 × 退休後年數\n` +
-      `            = ${formatTWD(scenario.monthlyLivingCostCents)} × 12 × ${retirementYears}\n` +
+      `            = ${formatTWD(scenario.monthlyLivingCostCents || 0)} × 12 × ${retirementYears}\n` +
       `            = ${formatTWD(baseTotal)}` +
       (scenario.applyInflation
-        ? `\n通膨後總額 = ${formatTWD(baseTotal)} × ${multiplier} = ${formatTWD(inflated)}`
+        ? `\n${inflationText(scenario, config, horizonMonths, multiplier)} = ${formatTWD(inflated)}`
         : '') +
       `\n差額 = 通膨後總額 － 目前已存 = ${formatTWD(inflated)} － ${formatTWD(scenario.currentSavedCents || 0)} = ${formatTWD(gap)}`;
     return { retirementYears, baseTotal, inflated, gap, multiplier, formulaText };
@@ -341,6 +346,9 @@ const Money = (() => {
     return Math.round(annualExpense / (r - g));
   };
 
+  // 其他目標與緊急預備金：連動模式由 app.js 帶入 otherGoalsCents／emergencyFundCents；手動模式緊急預備金＝目前月支出 × 月數
+  const fireGoalsBeyondRetirement = (scenario) => (scenario.otherGoalsCents ?? ((scenario.buyHouseGoalCents || 0) + (scenario.studyAbroadFundCents || 0)))
+    + (scenario.emergencyFundCents ?? scenario.currentMonthlyExpenseCents * scenario.emergencyFundMonths);
   const calcFireScenario = (scenario, config) => {
     const validation = Validation.validateScenario(scenario);
     if (!validation.valid) throw new RangeError(validation.errors.map(e => e.message).join('；'));
@@ -351,9 +359,8 @@ const Money = (() => {
     const retirementRate = scenario.postRetirementAnnualReturnRate;
     const retirementInflationRate = scenario.retirementInflationAnnualRate ?? 0;
     const retirementAssetTarget = calcRetirementAssetTarget(annualRetirementExpense, retirementYears, retirementRate, retirementInflationRate, retirementFundingModel);
-    const emergencyFundTotal = scenario.currentMonthlyExpenseCents * scenario.emergencyFundMonths;
-    const totalNeededBeforeRetire = retirementAssetTarget + scenario.buyHouseGoalCents
-      + scenario.studyAbroadFundCents + emergencyFundTotal;
+    const emergencyFundTotal = scenario.emergencyFundCents ?? scenario.currentMonthlyExpenseCents * scenario.emergencyFundMonths;
+    const totalNeededBeforeRetire = retirementAssetTarget + fireGoalsBeyondRetirement(scenario);
     const totalFundingGap = totalNeededBeforeRetire - scenario.totalSavedCents;
     const totalExpenseBeforeRetire = scenario.currentMonthlyExpenseCents * 12 * workingYearsLeft;
     const totalIncomeNeeded = totalFundingGap + totalExpenseBeforeRetire;
@@ -373,14 +380,6 @@ const Money = (() => {
       : null;
     const nextYearTargetSalary = Math.round(scenario.currentMonthlySalaryCents * (1 + scenario.assumedSalaryGrowthRate));
 
-    // 月薪分配：一律以「勞健保扣除後淨薪」為基準分配，因為勞健保是先扣才發薪，
-    // 稅前月薪你根本拿不到那筆錢，用稅前金額分配會高估實際可運用的錢。
-    const allocationBaseNet = currentSalaryNet;
-    const allocation = Object.entries(scenario.allocationPercents).map(([label, pct]) => ({
-      label, pct, amountCents: Math.round(allocationBaseNet * pct)
-    }));
-    const allocationSumPct = Object.values(scenario.allocationPercents).reduce((s, p) => s + p, 0);
-
     let solvedRetireAge = null;
     if (scenario.retireAgeSolveMode === 'given_growth_rate') {
       solvedRetireAge = solveFireRetireAge(scenario, config);
@@ -393,7 +392,7 @@ const Money = (() => {
     const formulaText =
       retirementFormulaText +
       `            = ${formatTWD(retirementAssetTarget)}\n` +
-      `退休前總需求資金 = 退休資產目標 + 買房目標 + 留學預備金 + 緊急儲備金總額\n` +
+      `退休前總需求資金 = 退休資產目標 + 其他目標 + 緊急預備金\n` +
       `              = ${formatTWD(totalNeededBeforeRetire)}\n` +
       `尚欠總資金缺口 = 退休前總需求資金 － 目前已存 = ${formatTWD(totalFundingGap)}\n` +
       `往後總收入需求 = 尚欠總資金缺口 + 退休前總支出預估 = ${formatTWD(totalIncomeNeeded)}\n` +
@@ -403,21 +402,18 @@ const Money = (() => {
         : '') +
       (impliedCAGR !== null
         ? `理論所需年成長率 ≈ ${(impliedCAGR * 100).toFixed(2)}%（供對照，實際採用你設定的 ${(scenario.assumedSalaryGrowthRate * 100).toFixed(0)}%）\n`
-        : `理論所需年成長率：無法計算（目前月薪換算成稅後淨薪後為負數，代表你填的「投保薪資」比實際月薪高很多，請檢查這兩個欄位是否合理）\n`) +
-      `月薪分配基準 = 勞健保扣除後淨薪 = ${formatTWD(allocationBaseNet)}（分配是以「實際到手的錢」計算，不是稅前月薪，因為勞健保先扣才發薪，稅前金額你根本拿不到）` +
-      (Math.abs(allocationSumPct - 1) > 0.001 ? `\n目前分配比例加總為 ${(allocationSumPct * 100).toFixed(1)}%，不等於 100%，請調整` : '');
+        : `理論所需年成長率：無法計算（目前月薪換算成稅後淨薪後為負數，代表你填的「投保薪資」比實際月薪高很多，請檢查這兩個欄位是否合理）\n`);
 
     return {
       workingYearsLeft, retirementYears, retirementAssetTarget, emergencyFundTotal,
       totalNeededBeforeRetire, totalFundingGap, totalExpenseBeforeRetire,
       requiredAvgMonthlySalary: requiredAvgMonthlySalaryDisplay, requiredAvgMonthlySalaryNet,
-      impliedCAGR, nextYearTargetSalary, allocation, allocationBaseNet, allocationSumPct,
-      solvedRetireAge, formulaText
+      impliedCAGR, nextYearTargetSalary, solvedRetireAge, formulaText
     };
   };
 
   // 反推「幾歲能退休」：以月度現金流累積，薪資先轉為淨薪、扣除生活費後投入，
-  // 並要求資產同時覆蓋退休資產、買房、留學與緊急預備金，避免和主試算口徑不一致。
+  // 並要求資產同時覆蓋退休資產、其他目標與緊急預備金，避免和主試算口徑不一致。
   const solveFireRetireAge = (scenario, config) => {
     let accumulated = scenario.totalSavedCents;
     let grossOrNetSalary = scenario.currentMonthlySalaryCents;
@@ -437,8 +433,7 @@ const Money = (() => {
       const retirementRate = scenario.postRetirementAnnualReturnRate;
       const retirementInflationRate = scenario.retirementInflationAnnualRate ?? 0;
       const retirementTarget = calcRetirementAssetTarget(annualRetirementExpense, retirementYears, retirementRate, retirementInflationRate, scenario.retirementFundingModel || 'perpetuity');
-      const emergency = scenario.currentMonthlyExpenseCents * scenario.emergencyFundMonths;
-      const fullTarget = retirementTarget + scenario.buyHouseGoalCents + scenario.studyAbroadFundCents + emergency;
+      const fullTarget = retirementTarget + fireGoalsBeyondRetirement(scenario);
       if (accumulated >= fullTarget) return Math.ceil(age * 10) / 10;
     }
     return null; // 70 歲前都達不到
@@ -468,7 +463,8 @@ const Money = (() => {
   const calcStudentLoanRepayment = (principalCents, borrowedSemesters, repayment, currentAge) => {
     const principal = Math.max(0, Math.round(Number(principalCents) || 0));
     const semesters = Math.max(1, Math.trunc(Number(borrowedSemesters) || 1));
-    const multiplier = repayment.termPlan === 'low_income' ? 2 : (repayment.termPlan === 'extended' ? 1.5 : 1);
+    const ref = REFERENCE_DATA.twStudentLoan;
+    const multiplier = repayment.termPlan === 'low_income' ? ref.lowIncomeTermMultiplier : (repayment.termPlan === 'extended' ? ref.extendedTermMultiplier : 1);
     const termMonths = Math.max(12, Math.round(semesters * 12 * multiplier));
     const annualRate = Math.max(0, Number(repayment.annualRate) || 0);
     const monthlyRate = annualRate / 12;
@@ -529,12 +525,13 @@ const Money = (() => {
     return { targetTWD, effectiveTarget, baseUnits, chain, altChain };
   };
 
-  // 工時反推＋存款版雙提示（成本試算/願望清單各項目下方的「自動提示」都呼叫這個，唯讀顯示、不寫回資料）
-  const calcAchievabilityHint = (amountCents, currency, rateToTWD, wageScenario, config) => {
+  // 工時反推＋存款版雙提示（成本試算各項目下方的「自動提示」都呼叫這個，唯讀顯示、不寫回資料）
+  // savingsCapacityCents＝每月可存，由 app.js 依帳本推算（收入－固定支出－生活開銷），與首頁同一口徑
+  const calcAchievabilityHint = (amountCents, currency, rateToTWD, wageScenario, config, savingsCapacityCents) => {
     const twd = toTWDCents(amountCents, currency, rateToTWD);
     const wage = calcWageReverse({ ...wageScenario, targetAmountCents: twd, currency: 'TWD', rateToTWD: 1 }, config);
-    const monthsViaSaving = config.personalBaseline.monthlySavingsCapacityCents > 0
-      ? Math.ceil(Math.max(0, twd) / config.personalBaseline.monthlySavingsCapacityCents)
+    const monthsViaSaving = savingsCapacityCents > 0
+      ? Math.ceil(Math.max(0, twd) / savingsCapacityCents)
       : null;
     const ageAtCompletion = monthsViaSaving !== null
       ? Math.round((config.personalBaseline.currentAge + monthsViaSaving / 12) * 10) / 10
@@ -567,13 +564,13 @@ const Money = (() => {
     return { type, totalCents, targetCents, rawGapCents, gapCents: Math.max(0, rawGapCents), surplusCents: Math.max(0, -rawGapCents), status: targetCents > 0 ? 'planned' : (totalCents > 0 ? 'funded' : 'empty'), detail: result };
   };
 
-  const calcScenario = (scenario, config) => {
+  const calcScenario = (scenario, config, { horizonMonths = 0 } = {}) => {
     const type = getScenarioType(scenario);
     if (type === 'periods') return calcPeriodScenario(scenario);
-    if (type === 'retirement_fund') return calcRetirementFundScenario(scenario, config);
+    if (type === 'retirement_fund') return calcRetirementFundScenario(scenario, config, horizonMonths);
     if (type === 'fire') return calcFireScenario(scenario, config);
     if (type !== 'items') throw new RangeError(`不支援的試算類型：${type}`);
-    return calcOneTimeScenario(scenario, config);
+    return calcOneTimeScenario(scenario, config, horizonMonths);
   };
 
   // 純 SVG 趨勢圖：月度支出長條 + 薪資折線，無任何第三方套件依賴
@@ -607,7 +604,7 @@ const Money = (() => {
       return `<text x="${x}" y="${h - 4}" font-size="9" text-anchor="middle" fill="var(--ink-soft)">${escapeXml(m.slice(5))}</text>`;
     }).join('');
 
-    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">
+    return `<svg viewBox="0 0 ${w} ${h}" class="trend-chart">
       ${bars}
       <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/>
       ${labels}
@@ -615,7 +612,7 @@ const Money = (() => {
   };
 
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, applyInflation,
+    toCents, toYuan, formatMoney, formatTWD, toTWDCents, groupSum, calcExpenseAverages, sumItems, inflationRateOf, inflationFactor,
     getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

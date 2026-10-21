@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "inflationMultipliers": { "TW": 1.58, "JP": 1.3, "EU": 1.291 },
-  "exchangeRates": { "JPY_TWD": 0.21 },
   "categories": ["餐飲", "交通", "娛樂", "其他"],
-  "accounts": ["示範帳戶A", "示範帳戶B"],
-  "budgetLimitsCents": { "餐飲": 200000, "交通": 50000 },
+  "accountProfiles": [
+    { "id": "demo-a", "name": "示範帳戶A", "nature": "checking", "initialBalanceCents": 0 },
+    { "id": "demo-b", "name": "示範帳戶B", "nature": "savings", "initialBalanceCents": 0 }
+  ],
   "lastUpdated": null
 }

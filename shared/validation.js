@@ -14,6 +14,7 @@ const Validation = (() => {
   };
   const isValidMonth = (value) => typeof value === 'string' && monthPattern.test(value);
 
+  const validRate = (r) => finite(r) && r > -1 && r <= 0.20;
   const validateQuickPlan = (p) => {
     const errors = [];
     if (!integer(p.currentAge) || p.currentAge < 0 || p.currentAge > 120) errors.push(error('currentAge', 'OUT_OF_RANGE', '目前年齡須為 0–120 的整數'));
@@ -21,8 +22,10 @@ const Validation = (() => {
       if (!finite(p[key]) || p[key] < 0) errors.push(error(key, 'INVALID_MONEY', `${key} 必須是大於或等於 0 的有限金額`));
     }
     if (!isValidMonth(p.goalTargetMonth)) errors.push(error('goalTargetMonth', 'INVALID_MONTH', '目標月份必須是 YYYY-MM'));
-    if (!finite(p.inflationAnnualRate) || p.inflationAnnualRate <= -1 || p.inflationAnnualRate > 0.20) errors.push(error('inflationAnnualRate', 'OUT_OF_RANGE', '年通膨率須大於 −100% 且不高於 20%'));
-    if (p.emergencyTargetMonths !== undefined && (!finite(p.emergencyTargetMonths) || p.emergencyTargetMonths < 3 || p.emergencyTargetMonths > 18)) errors.push(error('emergencyTargetMonths', 'OUT_OF_RANGE', '緊急預備金目標須介於 3–18 個月'));
+    // 年通膨率存在 config.inflationRates；健檢呼叫 Planning.assess 時才帶入 inflationAnnualRate
+    if (p.inflationAnnualRate !== undefined && !validRate(p.inflationAnnualRate)) errors.push(error('inflationAnnualRate', 'OUT_OF_RANGE', '年通膨率須大於 −100% 且不高於 20%'));
+    const em = PLANNING_RULES.emergencyMonths;
+    if (p.emergencyTargetMonths !== undefined && (!finite(p.emergencyTargetMonths) || p.emergencyTargetMonths < em.min || p.emergencyTargetMonths > em.max)) errors.push(error('emergencyTargetMonths', 'OUT_OF_RANGE', `緊急預備金目標須介於 ${em.min}–${em.max} 個月`));
     if (p.emergencyReserveCents !== undefined && (!finite(p.emergencyReserveCents) || p.emergencyReserveCents < 0)) errors.push(error('emergencyReserveCents', 'INVALID_MONEY', '指定緊急預備金必須是非負有限金額'));
     if (!finite(p.nominalReturnAnnualRate) || p.nominalReturnAnnualRate <= -1 || p.nominalReturnAnnualRate > 0.50) errors.push(error('nominalReturnAnnualRate', 'OUT_OF_RANGE', '名目年報酬率須大於 −100% 且不高於 50%'));
     return { valid: errors.length === 0, errors, warnings: [] };
@@ -92,7 +95,8 @@ const Validation = (() => {
     }
     if (s.calcType === 'retirement_fund') {
       if (!integer(s.currentAge) || !integer(s.retireAge) || !integer(s.deathAge) || !(s.currentAge < s.retireAge && s.retireAge < s.deathAge)) errors.push(error(path, 'AGE_ORDER', '養老金必須符合目前年齡 < 退休年齡 < 預期壽命'));
-      if (!finite(s.monthlyLivingCostCents) || s.monthlyLivingCostCents < 0) errors.push(error(`${path}.monthlyLivingCostCents`, 'INVALID_MONEY', '每月生活費必須是非負有限金額'));
+      // null＝尚未填寫，app.js 第一次開啟時帶入目前每月支出
+      if (s.monthlyLivingCostCents !== null && (!finite(s.monthlyLivingCostCents) || s.monthlyLivingCostCents < 0)) errors.push(error(`${path}.monthlyLivingCostCents`, 'INVALID_MONEY', '每月生活費必須是非負有限金額'));
     }
     if (s.calcType === 'periods') {
       if (!Array.isArray(s.itemTemplate) || !Array.isArray(s.periods)) errors.push(error(path, 'INVALID_PERIODS', '期別情境缺少範本或期別陣列'));
@@ -111,7 +115,7 @@ const Validation = (() => {
     }
     if (s.calcType === 'fire') {
       if (!integer(s.startAge) || !integer(s.retireAge) || !integer(s.deathAge)) errors.push(error(path, 'INVALID_AGE', 'FIRE 年齡必須是整數'));
-      else if (!(s.startAge < s.retireAge && s.retireAge < s.deathAge)) errors.push(error(path, 'AGE_ORDER', '必須符合開始工作年齡 < 退休年齡 < 預期壽命'));
+      else if (!(s.startAge < s.retireAge && s.retireAge < s.deathAge)) errors.push(error(path, 'AGE_ORDER', '必須符合目前年齡 < 退休年齡 < 預期壽命'));
       if (!finite(s.postRetirementAnnualReturnRate) || s.postRetirementAnnualReturnRate < 0 || s.postRetirementAnnualReturnRate > 0.20) errors.push(error(`${path}.postRetirementAnnualReturnRate`, 'INVALID_RATE', '退休後年化報酬率須介於 0%–20%'));
       if (!['perpetuity', 'finite'].includes(s.retirementFundingModel || 'perpetuity')) errors.push(error(path + '.retirementFundingModel', 'INVALID_MODEL', 'Invalid retirement funding model'));
       if (s.retirementInflationAnnualRate !== undefined && (!finite(s.retirementInflationAnnualRate) || s.retirementInflationAnnualRate < 0 || s.retirementInflationAnnualRate > 0.20)) errors.push(error(path + '.retirementInflationAnnualRate', 'INVALID_RATE', '退休後通膨率須介於 0%–20%'));
@@ -122,11 +126,11 @@ const Validation = (() => {
       // 數學上不可能永續的財務獨立目標金額（2026-09-11全倉庫稽核發現）。
       const effectiveRetirementInflationRate = s.retirementInflationAnnualRate ?? 0;
       if ((s.retirementFundingModel || 'perpetuity') === 'perpetuity' && s.postRetirementAnnualReturnRate <= effectiveRetirementInflationRate) errors.push(error(path + '.retirementInflationAnnualRate', 'UNSUSTAINABLE_WITHDRAWAL', '永續模型要求退休後報酬率高於退休後通膨率'));
-      const fireMoneyFields = ["currentMonthlySalaryCents", "currentMonthlyExpenseCents", "retirementMonthlyExpenseCents", "totalSavedCents", "buyHouseGoalCents", "studyAbroadFundCents", "insuredSalaryCents"];
+      const fireMoneyFields = ["currentMonthlySalaryCents", "currentMonthlyExpenseCents", "retirementMonthlyExpenseCents", "totalSavedCents", "insuredSalaryCents"];
       fireMoneyFields.forEach((key) => { if (!finite(s[key]) || s[key] < 0) errors.push(error(`${path}.${key}`, "INVALID_MONEY", `${key} 必須是非負有限金額`)); });
+      // 選填：其他目標、緊急預備金（連動帶入）與改版前的買房／留學目標
+      ["otherGoalsCents", "emergencyFundCents", "buyHouseGoalCents", "studyAbroadFundCents"].forEach((key) => { if (s[key] !== undefined && (!finite(s[key]) || s[key] < 0)) errors.push(error(`${path}.${key}`, "INVALID_MONEY", `${key} 必須是非負有限金額`)); });
       if (!finite(s.emergencyFundMonths) || s.emergencyFundMonths < 0 || s.emergencyFundMonths > 120) errors.push(error(`${path}.emergencyFundMonths`, "INVALID_TERM", "FIRE 緊急預備金月數須介於 0–120 個月"));
-      if (!s.allocationPercents || typeof s.allocationPercents !== "object" || Array.isArray(s.allocationPercents)) errors.push(error(`${path}.allocationPercents`, "INVALID_ALLOCATION", "薪資分配比例格式不合法"));
-      else Object.entries(s.allocationPercents).forEach(([key, pct]) => { if (!finite(pct) || pct < 0 || pct > 1) errors.push(error(`${path}.allocationPercents.${key}`, "INVALID_ALLOCATION", "每項薪資分配比例須介於 0%–100%")); });
       if (!finite(s.assumedSalaryGrowthRate) || s.assumedSalaryGrowthRate <= -1 || s.assumedSalaryGrowthRate > 0.50) errors.push(error(`${path}.assumedSalaryGrowthRate`, 'INVALID_RATE', '薪資成長率須大於 −100% 且不高於 50%'));
       const preRetirementRate = s.preRetirementAnnualReturnRate ?? 0;
       if (!finite(preRetirementRate) || preRetirementRate < 0 || preRetirementRate > 0.50) errors.push(error(`${path}.preRetirementAnnualReturnRate`, 'INVALID_RATE', '退休前年報酬率須介於 0%–50%'));
@@ -216,6 +220,7 @@ const Validation = (() => {
     const errors = [];
     if (!data || typeof data !== "object" || !data.config || !data.ledger || !Array.isArray(data.scenarios)) return { valid: false, errors: [error("", "INVALID_WORKSPACE", "工作區缺少設定、帳本或情境")], warnings: [] };
     errors.push(...validateQuickPlan(data.config.quickPlan || {}).errors);
+    Object.entries(data.config.inflationRates || {}).forEach(([key, rate]) => { if (!validRate(rate)) errors.push(error(`config.inflationRates.${key}`, 'OUT_OF_RANGE', '年通膨率須大於 −100% 且不高於 20%')); });
     errors.push(...validateLedger(data.ledger).errors);
     errors.push(...validateScenarios({ scenarios: data.scenarios }, { contentChecks: scenarioContentChecks }).errors);
     const profiles = Array.isArray(data.config.accountProfiles) ? data.config.accountProfiles : [];
@@ -276,6 +281,12 @@ const Validation = (() => {
       target[path] = structuredClone(fallback[path]); repaired++;
     });
     if (data.config.quickPlan) repairFields(data.config.quickPlan, defaults?.quickPlan, validateQuickPlan(data.config.quickPlan).errors);
+    const rates = data.config.inflationRates;
+    if (rates && typeof rates === 'object') Object.keys(rates).forEach((key) => {
+      if (validRate(rates[key])) return;
+      if (defaults?.inflationRates && key in defaults.inflationRates) rates[key] = defaults.inflationRates[key]; else delete rates[key];
+      repaired++;
+    });
     return repaired;
   };
 

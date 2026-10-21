@@ -1,7 +1,7 @@
 profile: web-platform
 display_name: "財務｜理財試算｜個人理財工具"
 AI_REQUIRED: false
-offline_check: "npm run check && bash scripts/check-no-real-data.sh"
+offline_check: "npm test && bash scripts/check-no-real-data.sh"
 run_command: "see README for the documented build or static preview command"
 rollback: "restore the recorded Git commit or deployment"
 owner: "repository maintainer"

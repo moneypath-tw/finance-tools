@@ -135,12 +135,19 @@ try {
   const legacyFlow = { id: 'legacy-job', name: '正職', type: 'income', kind: 'salary', amountCents: 3300000, monthlyWorkHours: 160, dayOfMonth: 5, accountId: 'probe-0', applyInsurance: true, insuredSalaryFollowsGross: true, active: true };
   // summary cards saved before the 分配狀態 card existed (2026-10-21): the new built-in card must be appended on load
   const legacyCards = [['income', 'income', '月收入'], ['fixed-expense', 'fixedExpense', '固定支出'], ['recommended-saving', 'recommendedSaving', '應儲蓄'], ['daily-living', 'dailyLiving', '每日生活費'], ['monthly-flex', 'monthlyFlex', '月度餘裕']].map(([id, source, label]) => ({ id, source, label, visible: true, builtIn: true }));
-  const withFlow = { ...envelope, config: { ...sampleConfig, accountProfiles: sampleConfig.accounts.map((name, i) => ({ id: `probe-${i}`, name, nature: 'checking', initialBalanceCents: 0 })), recurringCashFlows: [legacyFlow], dashboard: { summaryCards: legacyCards } } };
+  // config fields saved before 2026-10-21: fixed inflation multipliers, the 11.5% labor rate without employment
+  // insurance, and quickPlan.inflationAnnualRate; loading must migrate them, not keep or crash on them
+  const legacyConfig = { inflationMultipliers: { TW: 1.58, JP: 1.3, EU: 1.291 }, accounts: ['舊帳戶'], budgetLimitsCents: { 食: 1 },
+    insuranceRates: { laborInsuranceRate: 0.115, laborInsurancePersonalShare: 0.2, healthInsuranceRate: 0.0517, healthInsurancePersonalShare: 0.3, note: '佔位' },
+    quickPlan: { inflationAnnualRate: 0.025 } };
+  const withFlow = { ...envelope, config: { ...sampleConfig, ...legacyConfig, accountProfiles: sampleConfig.accountProfiles.map((a, i) => ({ ...a, id: `probe-${i}` })), recurringCashFlows: [legacyFlow], dashboard: { summaryCards: legacyCards } } };
   await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify(withFlow))}); true`);
   events.length = 0;
   await go(`${base}/index.html`);
   await evaluate(`document.querySelector('[data-tab=ledger]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); true`);
   const savedFlows = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.recurringCashFlows`);
+  const migrated = await evaluate(`(() => { const c = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config; return { multipliers: 'inflationMultipliers' in c, accounts: 'accounts' in c, limits: 'budgetLimitsCents' in c, labor: c.insuranceRates.laborInsuranceRate, note: 'note' in c.insuranceRates, tw: c.inflationRates?.TW, legacyRate: 'inflationAnnualRate' in (c.quickPlan || {}) }; })()`);
+  check('legacy config fields migrated on load', migrated && !migrated.multipliers && !migrated.accounts && !migrated.limits && !migrated.note && !migrated.legacyRate && migrated.labor === 0.125 && migrated.tw === 0.025, JSON.stringify(migrated));
   const legacyText = await evaluate(`document.querySelector('#personal-settings .flow-card .income-formula')?.textContent || ''`);
   check('legacy monthly income still shown as monthly salary', legacyText.includes('33,000') && legacyText.includes('160'), legacyText);
   const incomeInput = (card, label) => `[...document.querySelectorAll('#personal-settings .flow-card')][${card}]?.querySelector('.field input[data-probe=${JSON.stringify(label)}]')`;

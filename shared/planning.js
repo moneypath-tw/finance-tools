@@ -30,7 +30,19 @@ const Planning = (() => {
     }
     return null;
   };
-  const allocateMonthly = ({ incomeCents, livingCents, fixedExpenseCents, emergencyGapCents, emergencyMonthlyCents, savingCents = 0, livingAccountId, fixedExpenseAccountId, emergencyAccountId, savingsAccountId, goals = [] }) => {
+  const fmt = (c) => `${Math.round(c / 100).toLocaleString('en-US')}元`;
+  // 緊急預備金的唯一算法：首頁分配、進階健檢與 FIRE 連動都用這裡。
+  // baseMonthlyCents＝未扣任何補助的必要固定支出＋基本生活需求（由 app.js 的 plannedExpenses 提供）
+  const emergencyFund = ({ baseMonthlyCents, months, balanceCents }) => {
+    const rule = PLANNING_RULES.emergencyMonths;
+    const targetMonths = Number.isFinite(months) ? Math.min(rule.max, Math.max(rule.min, months)) : rule.default;
+    const base = Math.max(0, Math.round(baseMonthlyCents || 0));
+    const balance = Math.max(0, Math.round(balanceCents || 0));
+    const targetCents = base * targetMonths;
+    const gapCents = Math.max(0, targetCents - balance);
+    return { baseMonthlyCents: base, targetMonths, targetCents, balanceCents: balance, gapCents, coverageMonths: base > 0 ? balance / base : null, monthlyCents: Math.ceil(gapCents / PLANNING_RULES.emergencyFillMonths) };
+  };
+  const allocateMonthly = ({ incomeCents, livingCents, fixedExpenseCents, emergencyMonthlyCents, savingCents = 0, livingAccountId, fixedExpenseAccountId, emergencyAccountId, savingsAccountId, goals = [] }) => {
     let remaining = Math.max(0, Math.round(incomeCents || 0));
     const rows = [];
     const assign = (key, label, requestedCents, accountId, required, extra = {}) => {
@@ -48,7 +60,7 @@ const Planning = (() => {
     // 固定支出是已約定的款項（房租、保費、貸款），收入不足時要先付，再分生活費
     assign('fixed', label('fixed'), fixedExpenseCents, fixedExpenseAccountId, true);
     assign('living', label('living'), livingCents, livingAccountId, true);
-    assign('emergency', label('emergency'), emergencyMonthlyCents ?? Math.ceil(Math.max(0, emergencyGapCents || 0) / 12), emergencyAccountId, true);
+    assign('emergency', label('emergency'), emergencyMonthlyCents, emergencyAccountId, true);
     if (savingCents > 0) assign('saving', label('saving'), savingCents, savingsAccountId, true);
     [...goals].sort((a, b) => (a.months || Infinity) - (b.months || Infinity)).forEach(g => {
       const requested = g.monthlyRequiredCents ?? Math.ceil(Math.max(0, g.gapCents || 0) / Math.max(1, g.months || 1));
@@ -74,7 +86,6 @@ const Planning = (() => {
   //   living：{ spentCents, balanceCents, accountName }            已花 vs 依天數比例的進度，剩餘每日可花
   //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, sharedWithIncome, accountName }  發薪後應先轉入
   const allocationStatus = (row, cycle, facts = {}) => {
-    const fmt = (c) => `${Math.round(c / 100).toLocaleString('en-US')}元`;
     const out = (level, text) => ({ level, text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text });
     const target = row.allocatedCents;
     if (row.key === 'fixed') {
@@ -120,7 +131,9 @@ const Planning = (() => {
     const income = Math.max(0, Math.round(incomeCents || 0));
     const fixedExpense = Math.max(0, Math.round(fixedExpenseCents || 0));
     const fixedSaving = Math.max(0, Math.round(fixedSavingCents || 0));
-    const recommendedSavingCents = Number.isFinite(plannedSavingCents) ? Math.max(0, Math.round(plannedSavingCents)) : Math.max(fixedSaving, Math.ceil(income * 0.20));
+    const bands = PLANNING_RULES.savingsRateBands;
+    const targetPct = `${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%`;
+    const recommendedSavingCents = Number.isFinite(plannedSavingCents) ? Math.max(0, Math.round(plannedSavingCents)) : Math.max(fixedSaving, Math.ceil(income * PLANNING_RULES.savingsRateTarget));
     const plannedSavingsRate = income > 0 ? recommendedSavingCents / income : null;
     const actualSavingsCents = Math.round((actualIncomeCents || 0) - Math.max(0, actualExpenseCents || 0));
     const actualSavingsRate = actualIncomeCents > 0 ? actualSavingsCents / actualIncomeCents : null;
@@ -131,36 +144,39 @@ const Planning = (() => {
     const strengths = [];
     if (actualSavingsRate !== null) {
       if (actualSavingsRate < 0) health = { level: 'critical', label: '收支失衡' };
-      else if (actualSavingsRate < 0.10) health = { level: 'risk', label: '偏低' };
-      else if (actualSavingsRate < 0.20) health = { level: 'watch', label: '待改善' };
-      else if (actualSavingsRate <= 0.40) health = { level: 'healthy', label: '健康' };
+      else if (actualSavingsRate < bands.low) health = { level: 'risk', label: '偏低' };
+      else if (actualSavingsRate < bands.healthy) health = { level: 'watch', label: '待改善' };
+      else if (actualSavingsRate <= bands.strong) health = { level: 'healthy', label: '健康' };
       else health = { level: 'strong', label: '充足' };
     }
     if (income <= 0) issues.push('尚無本月收入，無法判斷儲蓄率');
     if (actualSavingsCents < 0) issues.push('本月支出已高於收入');
-    else if (actualSavingsRate !== null && actualSavingsRate < 0.10) issues.push('本月儲蓄率低於 10%，緩衝不足');
-    else if (actualSavingsRate !== null && actualSavingsRate < 0.20) issues.push('本月儲蓄率尚未達到 20% 規劃基準');
+    else if (actualSavingsRate !== null && actualSavingsRate < bands.low) issues.push(`本月儲蓄率低於 ${Math.round(bands.low * 100)}%，緩衝不足`);
+    else if (actualSavingsRate !== null && actualSavingsRate < PLANNING_RULES.savingsRateTarget) issues.push(`本月儲蓄率尚未達到 ${targetPct} 規劃基準`);
     if (dailyLivingCents <= 0 && income > 0) issues.push('扣除固定支出與應儲蓄後，已無每日生活費空間');
     if (attainmentRate !== null && attainmentRate < 1) issues.push('本月儲蓄尚未達成建議金額');
     if (actualIncomeCents > 0 && actualSavingsCents >= 0) strengths.push('本月收入仍高於或等於支出，現金流維持非負');
-    if (actualSavingsRate !== null && actualSavingsRate >= 0.20) strengths.push(`本月儲蓄率 ${(actualSavingsRate * 100).toFixed(1)}%，已達 20% 規劃基準`);
+    if (actualSavingsRate !== null && actualSavingsRate >= PLANNING_RULES.savingsRateTarget) strengths.push(`本月儲蓄率 ${(actualSavingsRate * 100).toFixed(1)}%，已達 ${targetPct} 規劃基準`);
     if (attainmentRate !== null && attainmentRate >= 1) strengths.push('本月實際儲蓄已達成建議金額');
     if (fixedSaving > 0) strengths.push('已建立固定儲蓄安排，降低遺漏儲蓄的機會');
     if (dailyLivingCents > 0 && income > 0) strengths.push('依目前規劃，扣除固定支出與應儲蓄後仍保有生活費空間');
     return { recommendedSavingCents, plannedSavingsRate, actualSavingsCents, actualSavingsRate, attainmentRate, dailyLivingCents, health, issues, strengths };
   };
 
-  const assess = (p, now = new Date()) => {
+  const assess = (input, now = new Date()) => {
+    // 未指定通膨率時用台灣官方預測（app.js 會帶入使用者在 inflationRates.TW 的覆寫值）
+    const p = { ...input, inflationAnnualRate: input.inflationAnnualRate ?? REFERENCE_DATA.inflation.TW.annualRate };
     const checked = Validation.validateQuickPlan(p);
     if (!checked.valid) return { ok: false, errors: checked.errors };
     const monthlyExpense = p.monthlyEssentialExpenseCents + p.monthlyOtherExpenseCents;
     const monthlySurplus = p.monthlyNetIncomeCents - monthlyExpense;
     const savingsRate = p.monthlyNetIncomeCents > 0 ? monthlySurplus / p.monthlyNetIncomeCents : null;
-    const emergencyReserveCents = Number.isFinite(p.emergencyReserveCents) ? Math.max(0, p.emergencyReserveCents) : p.liquidAssetsCents;
-    const emergencyMonths = p.monthlyEssentialExpenseCents > 0 ? emergencyReserveCents / p.monthlyEssentialExpenseCents : null;
-    const emergencyTargetMonths = Number.isFinite(p.emergencyTargetMonths) ? p.emergencyTargetMonths : 6;
-    const emergencyTarget = p.monthlyEssentialExpenseCents * emergencyTargetMonths;
-    const emergencyGap = Math.max(0, emergencyTarget - emergencyReserveCents);
+    const emergency = emergencyFund({
+      baseMonthlyCents: Number.isFinite(p.emergencyBaseCents) ? p.emergencyBaseCents : p.monthlyEssentialExpenseCents,
+      months: p.emergencyTargetMonths,
+      balanceCents: Number.isFinite(p.emergencyReserveCents) ? p.emergencyReserveCents : p.liquidAssetsCents
+    });
+    const { balanceCents: emergencyReserveCents, coverageMonths: emergencyMonths, targetMonths: emergencyTargetMonths, targetCents: emergencyTarget, gapCents: emergencyGap } = emergency;
     // 緊急預備金不可同時充當目標本金；只有超過設定目標月數必要支出的部分可投入主要目標。
     const goalStartingAssets = Math.max(0, p.liquidAssetsCents - emergencyTarget);
     const months = monthsBetween(now, p.goalTargetMonth);
@@ -186,13 +202,13 @@ const Planning = (() => {
 
     const risks = [];
     if (monthlySurplus < 0) risks.push({ severity: 'high', code: 'NEGATIVE_CASHFLOW', text: '目前每月收支為負數' });
-    if (emergencyMonths !== null && emergencyMonths < 3) risks.push({ severity: 'high', code: 'LOW_EMERGENCY', text: `緊急預備金僅可支應 ${emergencyMonths.toFixed(1)} 個月必要支出` });
-    else if (emergencyMonths !== null && emergencyMonths < emergencyTargetMonths) risks.push({ severity: 'medium', code: 'EMERGENCY_BELOW_TARGET', text: `緊急預備金未達 ${emergencyTargetMonths} 個月目標，仍差 ${emergencyGap} 分` });
+    if (emergencyMonths !== null && emergencyMonths < PLANNING_RULES.emergencyMonths.min) risks.push({ severity: 'high', code: 'LOW_EMERGENCY', text: `緊急預備金僅可支應 ${emergencyMonths.toFixed(1)} 個月必要支出` });
+    else if (emergencyMonths !== null && emergencyMonths < emergencyTargetMonths) risks.push({ severity: 'medium', code: 'EMERGENCY_BELOW_TARGET', text: `緊急預備金未達 ${emergencyTargetMonths} 個月目標，仍差 ${fmt(emergencyGap)}` });
     if (!Number.isFinite(contributionLoad) || contributionLoad > 1) risks.push({ severity: 'high', code: 'GOAL_INFEASIBLE', text: '目前月結餘不足以在期限內完成目標' });
     else if (contributionLoad > 0.8) risks.push({ severity: 'medium', code: 'GOAL_TIGHT', text: '目標提撥占月結餘超過 80%，緩衝有限' });
     if (!scenarios.find(s => s.key === 'stress').feasible) risks.push({ severity: 'medium', code: 'INCOME_STRESS', text: '收入下降 20% 且零報酬時，目標無法如期完成' });
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, allocateMonthly, payCycle, allocationStatus, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, allocateMonthly, payCycle, allocationStatus, poolGoalSavings, assessMonthlySavings, assess };
 })();

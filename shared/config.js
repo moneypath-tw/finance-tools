@@ -1,15 +1,21 @@
-// config.js — 預設設定值（反推自原 Google Sheet，供首次使用與後續滾動修正）
-// 所有金額單位為「分」（cents）。標記 [反推] 的數字是從原表數字互相核對後還原，已驗證公式一致；
-// 標記 [待確認] 的部分原表結構有合併儲存格疑慮，先給合理預設，之後可直接在畫面上調整。
-// v8 更新：不再有共用匯率表，改成每筆帳目/情境自帶 currency + rateToTWD 手動輸入。
+// config.js — 預設設定值與本工具自訂的規劃規則；外部制度數字一律讀 reference-data.js，這裡不重寫。
+// 所有金額單位為「分」（cents）。情境的項目金額只是起始範例，使用者可在畫面上調整。
+// 匯率不設共用表：每筆帳目／情境自帶 currency + rateToTWD 手動輸入。
+
+// 本工具的規劃規則（不是官方規定）：儲蓄率基準與健康分級、緊急預備金月數範圍與補足期間
+const PLANNING_RULES = {
+  savingsRateTarget: 0.20,
+  savingsRateBands: { low: 0.10, healthy: 0.20, strong: 0.40 },
+  emergencyMonths: { default: 6, min: 3, max: 18 },
+  emergencyFillMonths: 12
+};
 
 const DEFAULT_CONFIG = {
   schemaVersion: 2,
   ui: { viewMode: 'simple', activeTab: 'health', currentScenarioId: 'buy_house', expandedDetails: [] },
-  // [反推] TW/JP/EU 通膨倍數：驗證方式為「總額 × 倍數 = 原表通膨後總額」，三個情境交叉核對皆吻合
-  inflationMultipliers: { TW: 1.58, JP: 1.3, EU: 1.291 },
+  // 各地區年通膨率；預設取官方預測，使用者可覆寫。成本試算依目標月份複利換算
+  inflationRates: Object.fromEntries(Object.entries(REFERENCE_DATA.inflation).map(([k, v]) => [k, v.annualRate])),
   categories: ['食', '超商', '飲料', '手續費', '娛', '居家', '行', '學用', '3C'],
-  accounts: ['華南', '遠東', '狗狗', '聯邦', '王道', '台新', '現金', '郵局', '元大', '玉山', '合作'],
   accountProfiles: [
     { id: 'cash', name: '現金', nature: 'cash', initialBalanceCents: 0 },
     { id: 'bank', name: '主要銀行', nature: 'checking', initialBalanceCents: 0 }
@@ -31,20 +37,14 @@ const DEFAULT_CONFIG = {
       { id: 'allocation-status', source: 'allocationStatus', label: '分配狀態', visible: true, builtIn: true }
     ]
   },
-  // [反推] 原表「目標上限」列
-  budgetLimitsCents: {
-    食: 200000, 超商: 10000, 飲料: 0, 手續費: 1500,
-    娛: 0, 居家: 10000, 行: 20000, 學用: 30000, '3C': 60000
-  },
-  // 佔位示意值，非反推結果，請至勞保局/健保署官網核對最新費率與自己的投保薪資後修改
+  // 受僱者個人負擔的勞保（含就業保險）與健保；預設取 reference-data.js 的官方費率
   insuranceRates: {
-    laborInsuranceRate: 0.115,
-    laborInsurancePersonalShare: 0.20,
-    healthInsuranceRate: 0.0517,
-    healthInsurancePersonalShare: 0.30,
-    note: '佔位示意值，請至勞保局/健保署官網核對最新費率後自行修改'
+    laborInsuranceRate: REFERENCE_DATA.twLaborInsurance.ordinaryRate + REFERENCE_DATA.twLaborInsurance.employmentRate,
+    laborInsurancePersonalShare: REFERENCE_DATA.twLaborInsurance.personalShare,
+    healthInsuranceRate: REFERENCE_DATA.twHealthInsurance.rate,
+    healthInsurancePersonalShare: REFERENCE_DATA.twHealthInsurance.personalShare
   },
-  // 用於「存款版」工時反推提示（跟工時反推引擎的費率設定無關，只用來算存錢版的達成月數/年齡）
+  // monthlySavingsCapacityCents 只在沒有固定出入帳時手填；有固定出入帳時由帳本推算
   personalBaseline: {
     birthYear: 2004,
     currentAge: 22,
@@ -57,12 +57,11 @@ const DEFAULT_CONFIG = {
     monthlyOtherExpenseCents: 700000,
     liquidAssetsCents: 5000000,
     goalScenarioId: 'manual',
-    emergencyTargetMonths: 6,
+    emergencyTargetMonths: PLANNING_RULES.emergencyMonths.default,
     goalAmountTodayCents: 30000000,
     goalDeadlineMode: 'month',
     goalTargetMonth: '2028-12',
     goalTargetAge: 30,
-    inflationAnnualRate: REFERENCE_DATA.twInflation.annualRate,
     nominalReturnAnnualRate: 0.05
   },
   lastUpdated: null
@@ -79,7 +78,7 @@ const ALLOCATION_PURPOSES = [
   { key: 'saving', label: '一般儲蓄', field: 'savingAccountId', fallback: 'emergencyAccountId' }
 ];
 
-// [反推] 買房費用情境：數字取自原表「買房費用（估計）」欄，公式已用「通膨後總額」「貸後金額」交叉驗證
+// 買房費用情境：項目金額為起始範例；通膨依目標月份與 inflationRates 複利換算
 const SCENARIO_BUY_HOUSE = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -105,8 +104,6 @@ const SCENARIO_BUY_HOUSE = {
     { label: '貸款設定規費', amountCents: 1260000 },
     { label: '保險費', amountCents: 200000 }
   ],
-  downPaymentCurrentCents: 8937400,
-  downPaymentRequiredCents: 750000000,
   loanAmountCents: 1050000000,
   mortgage: {
     purchaseAge: 30, annualRate: 0.0337, termYears: 30, graceYears: 0,
@@ -116,7 +113,7 @@ const SCENARIO_BUY_HOUSE = {
   }
 };
 
-// [反推] 買地自建費用情境，項目與買房情境不同，但共用同一套計算引擎
+// 買地自建費用情境，項目與買房情境不同，但共用同一套計算引擎
 const SCENARIO_SELF_BUILD = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -144,12 +141,10 @@ const SCENARIO_SELF_BUILD = {
     { label: '貸款設定規費', amountCents: 72000 },
     { label: '保險費', amountCents: 200000 }
   ],
-  downPaymentCurrentCents: 8937400,
-  downPaymentRequiredCents: 70000000,
   loanAmountCents: 460000000
 };
 
-// [反推] 旅費情境：機票/民宿一次性 + 交通/伙食/娛樂為每日×10天加總，套用日本通膨倍數
+// 旅費情境：機票/民宿一次性 + 交通/伙食/娛樂為每日×10天加總，套用日本通膨率
 const SCENARIO_TRIP_BUDGET = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -168,9 +163,7 @@ const SCENARIO_TRIP_BUDGET = {
   ]
 };
 
-// [待確認] 學貸情境：學期總結公式已反推驗證（學雜費總額+電腦網路通訊費+平安保險費，語言教學費不計入），
-// 但「學年總結」跨學期加總的排列方式原表有合併儲存格疑慮，此處先以 8 學期逐期呈現，
-// 待你對照原表確認學年加總的實際分組方式後再調整。
+// 學貸情境：每學期 學雜費＋電腦網路通訊費＋平安保險費－減免，8 學期逐期呈現
 const SCENARIO_STUDENT_LOAN = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -204,7 +197,7 @@ const SCENARIO_STUDENT_LOAN = {
   }
 };
 
-// [反推＋驗證] 喪葬費情境：項目加總與原表「預估喪葬所需總額」56,000 完全吻合
+// 喪葬費情境：項目金額為起始範例
 const SCENARIO_FUNERAL = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -214,16 +207,15 @@ const SCENARIO_FUNERAL = {
   label: '喪葬費用試算',
   applyInflation: false,
   items: [
-    { label: '樹灑葬（歸思園/大坑樹灑葬區）', amountCents: 600000 },
+    { label: '樹葬／灑葬', amountCents: 600000 },
     { label: '葬儀社行情價', amountCents: 5000000 }
   ],
   // 目前已為此項目存下的金額，請自行填入；差額 = 總額 － 已存
   currentSavedCents: 0
 };
 
-// [反推＋驗證] 養老金情境：公式為「每月生活費 × 12 × 退休後餘命年數」，可選是否套用通膨倍數
-// 驗證方式：此為標準精算估算法，非原表逐格覆刻（原表己估/均估兩欄用了較複雜的複利成長試算，
-// 無法從錯位表格完全還原），採用透明、可核對的簡化公式，你可在畫面上直接調整任一輸入值。
+// 養老金情境：每月生活費 × 12 × 退休後年數，通膨複利換算到退休年齡
+// monthlyLivingCostCents 為 null 時，第一次開啟會帶入目前每月支出（固定支出＋生活開銷）
 const SCENARIO_ELDERCARE_FUND = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -234,17 +226,16 @@ const SCENARIO_ELDERCARE_FUND = {
   currentAge: 19,
   retireAge: 60,
   deathAge: 85,
-  monthlyLivingCostCents: 190100,
+  monthlyLivingCostCents: null,
   applyInflation: true,
   inflationKey: 'TW',
   // 目前已提撥的養老金存款，請自行填入
-  currentSavedCents: 0,
-  referenceNote: '參考數值：台中單人 111 年平均每月生活費約 18,566 元（僅供對照，不影響計算）'
+  currentSavedCents: 0
 };
 
-// [反推＋驗證] FIRE／退休財務獨立試算：以下每一步公式都已對照原表數字逐項核對，完全吻合
-// 例：退休資產目標=年支出/報酬率、退休前總需求資金=退休資產目標+買房目標+留學金+緊急儲備、
-//     往後應有月薪=(資金缺口+退休前總支出)/(剩餘工作月數)
+// FIRE／退休財務獨立試算：退休前總需求資金＝退休資產目標＋其他目標＋緊急預備金，
+// 往後應有月薪＝(資金缺口＋退休前總支出)／剩餘工作月數。
+// linkLedger 開啟時，目前年齡、月薪、月支出、已存資產、其他目標與緊急預備金都由帳本與首頁帶入（app.js 的 linkScenario）
 const SCENARIO_FIRE = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -260,10 +251,11 @@ const SCENARIO_FIRE = {
   retirementMonthlyExpenseCents: 5000000,
   postRetirementAnnualReturnRate: 0.05,
   retirementFundingModel: 'perpetuity',
-  retirementInflationAnnualRate: REFERENCE_DATA.twInflation.annualRate,
-  buyHouseGoalCents: 3000000000,
-  studyAbroadFundCents: 300000000,
-  emergencyFundMonths: 12,
+  retirementInflationAnnualRate: REFERENCE_DATA.inflation.TW.annualRate,
+  linkLedger: true,
+  // 手動模式才用：除退休以外、退休前要備妥的其他目標總額，以及緊急預備金月數（× 目前月支出）
+  otherGoalsCents: 0,
+  emergencyFundMonths: PLANNING_RULES.emergencyMonths.default,
   totalSavedCents: 4344100,
   // v8 新增：薪資是稅前(gross)或稅後(net)，影響是否套用勞健保換算
   salaryType: 'gross',
@@ -274,19 +266,7 @@ const SCENARIO_FIRE = {
   // 旁邊會同時顯示「理論上需要的年成長率」供對照，兩者不一致很正常，代表現實與理想的落差
   assumedSalaryGrowthRate: 0.2,
   // 退休前累積資產所用的名目年報酬假設；反推退休年齡會按月複利並納入生活費與全部目標。
-  preRetirementAnnualReturnRate: 0.05,
-  // 目前月薪的分配比例（總和須為 1.0），用來看目前薪水打算怎麼分配運用
-  allocationPercents: {
-    '投資提撥（FIRE 基金）': 0.20,
-    '留學儲備金': 0.10,
-    '緊急儲備金提撥': 0.05,
-    '住宿支出': 0.25,
-    '自煮伙食費': 0.10,
-    '外食/社交餐飲': 0.10,
-    '水電/通訊/保險': 0.10,
-    '娛樂支出': 0.05,
-    '額外活動資金': 0.05
-  }
+  preRetirementAnnualReturnRate: 0.05
 };
 
 const DEFAULT_SCENARIOS = [

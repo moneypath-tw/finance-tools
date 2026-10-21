@@ -1,5 +1,5 @@
 {
   "status": [
-    {"label": "語法與測試", "command": "npm run check"}
+    {"label": "語法與測試", "command": "npm test"}
   ]
 }
