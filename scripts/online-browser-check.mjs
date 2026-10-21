@@ -11,11 +11,15 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.md': 'text/plain; charset=utf-8' };
+// deployed[rel] = text simulates a new deploy of that file without touching the working tree
+const deployed = {};
 const server = http.createServer((req, res) => {
   const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'index.html';
   const file = path.resolve(root, rel);
   if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end(); return; }
-  res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+  // same freshness as GitHub Pages, so a stale HTTP cache after a deploy shows up here too
+  res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'max-age=600' });
+  if (deployed[rel] !== undefined) { res.end(deployed[rel]); return; }
   fs.createReadStream(file).pipe(res);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -73,6 +77,16 @@ try {
   const offlineOk = await evaluate(`!!document.querySelector('#panel-health') && typeof App === 'object' && document.querySelector('#allocation-dashboard').children.length > 0`);
   check('offline reload renders the app', offlineOk);
   await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+
+  // 3b. a deploy within max-age must reach the next reload (2026-10-21: the page kept old code after #21 went live)
+  const probe = `// deploy-probe ${Date.now()}`;
+  deployed['shared/sw-register.js'] = fs.readFileSync(path.join(root, 'shared/sw-register.js'), 'utf8') + `\n${probe}\n`;
+  // leave for another site first so the renderer's in-memory copy is gone, like reopening the tab later
+  await go(base.replace('localhost', '127.0.0.1') + '/README.md');
+  await go(`${base}/index.html`);
+  const servedAfterDeploy = await evaluate(`caches.match('shared/sw-register.js', { ignoreSearch: true }).then(r => r ? r.text() : '')`);
+  check('reload right after a deploy loads the new file, not the HTTP-cached one', servedAfterDeploy.includes(probe));
+  delete deployed['shared/sw-register.js'];
 
   // 4. estimator: type into every number field like a person (real key events), press Enter, reload.
   //    2026-10-20: mortgage / student-loan fields snapped back to defaults because a helper replaced

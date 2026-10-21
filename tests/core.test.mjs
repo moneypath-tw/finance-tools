@@ -754,6 +754,9 @@ test('離線快取只處理本站 GET，不快取跨站或錯誤回應', () => {
   const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
   assert.match(sw, /request\.method !== 'GET' \|\| new URL\(request\.url\)\.origin !== self\.location\.origin/);
   assert.match(sw, /response\.ok && response\.type === 'basic'/);
+  // 部署後立即生效：網路請求與預快取都不能拿瀏覽器 HTTP 快取（瀏覽器實測另有實際部署檢查）
+  assert.match(sw, /fetch\(request\.url, \{ cache: 'no-cache' \}\)/);
+  assert.match(sw, /new Request\(url, \{ cache: 'reload' \}\)/);
   assert.ok(!/localStorage|indexedDB/.test(sw.replace(/^\/\/.*$/gm, '')));
 });
 
