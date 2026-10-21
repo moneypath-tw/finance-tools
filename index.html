@@ -39,8 +39,18 @@
   <section id="panel-health" class="tab-panel active">
     <div class="card dashboard-card">
       <h2>本月資金分配</h2>
-      <p class="notice">自動沿用固定出入帳、帳戶餘額與成本試算；只需選擇要納入的目標及搭配帳戶。緊急預備金目標預設為 6 個月（可調整 3–18 個月），缺口預設分 12 個月補足。</p>
+      <p class="notice editor-only">自動沿用固定出入帳、帳戶餘額與成本試算；只需選擇要納入的目標及搭配帳戶。緊急預備金目標預設為 6 個月（可調整 3–18 個月），缺口預設分 12 個月補足。</p>
       <div id="allocation-dashboard"></div>
+    </div>
+    <!-- 結論緊接在本月分配之後；自訂目標與進階假設是設定入口，放後面 -->
+    <div class="card conclusion-card">
+      <h2>財務健檢結論</h2>
+      <div id="health-results"></div>
+    </div>
+    <div class="card goal-management-card">
+      <h3>自訂目標</h3>
+      <p class="notice">想新增旅行、裝修、進修或其他目標？先建立成本情境，再回首頁選入資金分配。</p>
+      <button type="button" class="btn small" id="open-goal-manager">新增或管理目標</button>
     </div>
     <div class="card editor-only">
       <details>
@@ -48,15 +58,6 @@
       <p class="notice">全部以今日幣值規劃；不必先匯入帳本。結果是情境估算，不構成投資建議。</p>
       <div id="health-form"></div>
       </details>
-    </div>
-    <div class="card goal-management-card">
-      <h3>自訂目標</h3>
-      <p class="notice">想新增旅行、裝修、進修或其他目標？先建立成本情境，再回首頁選入資金分配。</p>
-      <button type="button" class="btn small" id="open-goal-manager">新增或管理目標</button>
-    </div>
-    <div class="card conclusion-card">
-      <h2>財務健檢結論</h2>
-      <div id="health-results"></div>
     </div>
   </section>
 
