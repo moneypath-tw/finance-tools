@@ -286,6 +286,14 @@ const Validation = (() => {
       if (!f || f.type !== 'income' || (f.payBasis ?? 'monthly') !== 'monthly' || (finite(f.monthlyWorkHours) && f.monthlyWorkHours > 0)) return;
       f.monthlyWorkHours = 160; repaired++;
     });
+    // 固定儲蓄轉出、轉入同一帳戶（舊版下拉選單沒擋）：改成另一個帳戶並先停用，
+    // 讓使用者確認轉出帳戶後再啟用；不猜測就讓錢開始搬，也不讓整份工作區被拒
+    (Array.isArray(data.config.recurringCashFlows) ? data.config.recurringCashFlows : []).forEach((f) => {
+      if (!f || f.type !== 'saving' || (typeof f.fromAccountId === 'string' && f.fromAccountId && f.fromAccountId !== f.accountId)) return;
+      const other = accountIds.find(id => id !== f.accountId);
+      if (!other) return;
+      f.fromAccountId = other; f.active = false; f.repairNote = '轉出與轉入原本是同一個帳戶，已暫停；請確認轉出帳戶後再勾選啟用'; repaired++;
+    });
     const rates = data.config.inflationRates;
     if (rates && typeof rates === 'object') Object.keys(rates).forEach((key) => {
       if (validRate(rates[key])) return;

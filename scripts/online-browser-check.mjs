@@ -294,6 +294,34 @@ try {
   const legacyGoal = await evaluate(homeText);
   check('legacy untouched sample goal migrated to 不設定', /主要儲蓄目標\s+未設定/.test(legacyGoal.text) && !legacyGoal.text.includes('目標無法如期'), legacyGoal.text.slice(0, 300));
 
+  // 4c. projected ledger entries must be confirmable (2026-10-22: no button existed, so salary never reached the
+  //     balance and rent stayed "unpaid" forever); a same-account fixed saving from an old save must not reject
+  //     the whole workspace; negative balances and an investment emergency account are called out
+  await go(`${base}/README.md`);
+  const ym = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+  const confirmConfig = { ...sampleConfig,
+    accountProfiles: [{ id: 'acc-bank', name: '薪轉', nature: 'checking', initialBalanceCents: 0 }, { id: 'acc-inv', name: '證券', nature: 'investment', initialBalanceCents: 10000000 }],
+    recurringCashFlows: [
+      { id: 'job', name: '正職', type: 'income', kind: 'salary', payBasis: 'monthly', amountCents: 4500000, monthlyWorkHours: 160, dayOfMonth: 1, accountId: 'acc-bank', applyInsurance: false, active: true },
+      { id: 'rent', name: '房租', type: 'expense', kind: 'fixed_expense', amountCents: 1200000, dayOfMonth: 1, accountId: 'acc-bank', essential: true, active: true },
+      { id: 'sv', name: '存錢', type: 'saving', kind: 'fixed_saving', amountCents: 500000, dayOfMonth: 1, fromAccountId: 'acc-bank', accountId: 'acc-bank', active: true }],
+    dashboard: { emergencyAccountId: 'acc-inv', livingAccountId: 'acc-bank', fixedExpenseAccountId: 'acc-bank' } };
+  const confirmLedger = { schemaVersion: 1, entries: [{ id: 'spent', date: `${ym}-01`, type: 'expense', category: '食', account: 'acc-bank', currency: 'TWD', rateToTWD: 1, amountCents: -300000, essential: true, reimbursable: false, status: 'realized', note: '' }] };
+  await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify({ ...envelope, config: confirmConfig, ledger: confirmLedger }))}); localStorage.removeItem('finance-tools.workspace.rejected'); true`);
+  await go(`${base}/index.html`);
+  const statusNote = `[...document.querySelectorAll('.dashboard-summary .summary-block')].find(b => b.querySelector('h3')?.textContent === '分配狀態')?.innerText || ''`;
+  const loaded = await evaluate(`({ rejected: localStorage.getItem('finance-tools.workspace.rejected'), text: document.body.innerText, saving: JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.recurringCashFlows.find(f => f.id === 'sv') })`);
+  check('same-account fixed saving from an old save: loads, paused with a note', !loaded.rejected && loaded.saving?.active === false && loaded.saving?.fromAccountId === 'acc-inv' && !!loaded.saving?.repairNote, JSON.stringify(loaded.saving));
+  check('negative balance and investment emergency account are called out', /薪轉餘額是 -?\D?3,000/.test(loaded.text) && loaded.text.includes('不算可動用資金'), loaded.text.slice(0, 400));
+  const confirmRow = (id, yuan) => evaluate(`(() => { const tr = document.querySelector('#ledger-table-body tr[data-entry-id=${JSON.stringify(id)}]'); const btn = [...(tr?.querySelectorAll('button') || [])].find(b => b.textContent === '確認入帳'); if (!btn) return false; ${yuan ? `tr.querySelector('.confirm-amount').value = '${yuan}';` : ''} btn.click(); return true; })()`);
+  const confirmedSalary = await confirmRow(`recurring-job-${ym}`);
+  const afterSalary = await evaluate(statusNote);
+  check('confirming salary leaves rent as 待確認入帳, not 餘額不足', confirmedSalary && afterSalary.includes('固定支出待確認入帳'), afterSalary);
+  const confirmedRent = await confirmRow(`recurring-rent-${ym}`, '12500');
+  await go(`${base}/index.html`);
+  const rentAfter = await evaluate(`(() => { const all = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.filter(e => e.id === 'recurring-rent-${ym}'); return { n: all.length, status: all[0]?.status, cents: all[0]?.amountCents, note: all[0]?.note, card: ${statusNote} }; })()`);
+  check('rent confirmed at the actual 12,500 survives reload once, fixed row no longer flagged', confirmedRent && rentAfter.n === 1 && rentAfter.status === 'realized' && rentAfter.cents === -1250000 && !rentAfter.note.includes('預測') && !rentAfter.card.includes('固定支出'), JSON.stringify(rentAfter));
+
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);

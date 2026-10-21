@@ -333,11 +333,29 @@ const App = (() => {
     const savingsCapacityCents = recurring.items.length ? incomeCents - spendingCents : config.personalBaseline.monthlySavingsCapacityCents;
     return { recurring, expenses, hasRecurringIncome, incomeCents, fixedExpenseCents, spendingCents, savingsCapacityCents };
   };
-  const emergencyPlan = (plan = monthlyPlan()) => Planning.emergencyFund({
+  const emergencyPlan = (plan = monthlyPlan(), balanceCents = getAccountBalances()[config.dashboard.emergencyAccountId]) => Planning.emergencyFund({
     baseMonthlyCents: plan.expenses.emergencyBaseCents,
     months: config.quickPlan.emergencyTargetMonths,
-    balanceCents: getAccountBalances()[config.dashboard.emergencyAccountId]
+    balanceCents
   });
+  // 本期＝主要收入（金額最大的固定收入）發薪日到下次發薪前
+  const currentPayCycle = (now = new Date(), recurring = recurringSummary()) => {
+    const mainIncome = recurring.items.filter(f => f.type === 'income').sort((a, b) => (b.netCents || 0) - (a.netCents || 0))[0];
+    return { mainIncome, cycle: Planning.payCycle(now, mainIncome?.dayOfMonth || 1) };
+  };
+  // 帳戶在本期開始時的餘額：扣掉本期已入帳的轉入、加回轉出。
+  // 每月建議提撥要用它算，不然本期轉入越多、建議額跟著變小，狀態會自己驗證自己（2026-10-22 紅隊 #8）
+  const balanceAtCycleStart = (accountId, cycle, balances = getAccountBalances()) => {
+    let cents = balances[accountId] || 0;
+    for (const e of ledger.entries) {
+      if (e.type !== 'transfer' || e.status === 'projected' || !(e.date >= cycle.start && e.date <= cycle.today)) continue;
+      let amount;
+      try { amount = Math.abs(Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD)); } catch { continue; }
+      if (e.toAccount === accountId) cents -= amount;
+      if (e.fromAccount === accountId) cents += amount;
+    }
+    return cents;
+  };
   // 首頁勾選的成本目標（期限、總額、搭配帳戶）；已存金額另由 Planning.poolGoalSavings 分配
   const selectedGoals = (now = new Date()) => scenarios.filter(s => config.dashboard.scenarioSelections[s.scenarioId]).map(s => {
     const accountId = config.dashboard.scenarioAccountMap[s.scenarioId] || config.accountProfiles[0]?.id;
@@ -352,8 +370,7 @@ const App = (() => {
   // 分配表各列的「狀態」：發薪日取金額最大的固定收入；只看已入帳（非預測）的帳目與實際餘額
   const allocationStatuses = (health, now = new Date()) => {
     const recurring = recurringSummary();
-    const mainIncome = recurring.items.filter(f => f.type === 'income').sort((a, b) => (b.netCents || 0) - (a.netCents || 0))[0];
-    const cycle = Planning.payCycle(now, mainIncome?.dayOfMonth || 1);
+    const { mainIncome, cycle } = currentPayCycle(now, recurring);
     const balances = getAccountBalances();
     const twd = (e) => { try { return Math.abs(Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD)); } catch { return 0; } };
     const inCycle = (e) => e.status !== 'projected' && e.date >= cycle.start && e.date <= cycle.today;
@@ -373,6 +390,8 @@ const App = (() => {
       }
     }
     const paidCents = ledger.entries.filter(e => dueIds.has(e.id) && e.status === 'realized').reduce((s, e) => s + twd(e), 0);
+    // 預測帳目只在扣款日當天或之後產生，仍是預測代表已過扣款日但還沒確認
+    const unconfirmedCents = ledger.entries.filter(e => dueIds.has(e.id) && e.status === 'projected').reduce((s, e) => s + twd(e), 0);
     const spentCents = ledger.entries.filter(e => e.type === 'expense' && !e.recurringFlowId && inCycle(e)).reduce((s, e) => s + twd(e), 0);
     const incomeAccounts = new Set(recurring.items.filter(f => f.type === 'income').map(f => f.accountId));
     // 同一帳戶搭配多個用途時，本期轉入的錢依分配順序先滿足前面的用途
@@ -392,7 +411,7 @@ const App = (() => {
     for (const row of health.allocation.rows) {
       const base = { accountName: accountName(row.accountId), balanceCents: balances[row.accountId] || 0, noData };
       let facts = base;
-      if (row.key === 'fixed') facts = { ...base, dueTotalCents, paidCents };
+      if (row.key === 'fixed') facts = { ...base, dueTotalCents, paidCents, unconfirmedCents };
       else if (row.key === 'living') facts = { ...base, spentCents, spareCents: health.allocation.unallocatedCents };
       else {
         const movedInCents = Math.max(0, Math.min(movedInto(row.accountId), row.allocatedCents));
@@ -425,7 +444,9 @@ const App = (() => {
     const balances = getAccountBalances();
     const emergencyAccountId = config.dashboard.emergencyAccountId;
     const emergency = emergencyPlan(plan);
-    const { targetCents: emergencyTargetCents, balanceCents: emergencyBalanceCents, gapCents: emergencyGapCents, monthlyCents: rawEmergencyMonthly } = emergency;
+    const { targetCents: emergencyTargetCents, balanceCents: emergencyBalanceCents, gapCents: emergencyGapCents } = emergency;
+    // 差額顯示目前實況；本期建議提撥固定用期初餘額算
+    const rawEmergencyMonthly = emergencyPlan(plan, balanceAtCycleStart(emergencyAccountId, currentPayCycle(now, recurring).cycle, balances)).monthlyCents;
     // 固定儲蓄轉入緊急預備金帳戶時算進緊急預備金；一般儲蓄的搭配帳戶在「必備分配帳戶」自選
     const savingsFlow = recurring.items.find(f => f.type === 'saving');
     const sameAccount = (savingsFlow?.accountId || emergencyAccountId) === emergencyAccountId;
@@ -762,7 +783,7 @@ const App = (() => {
     const noStatusData = statusRows.length > 0 && statusRows.every(s => s.status.level === 'none');
     sourceDefinitions.push({
       value: 'allocationStatus', label: '分配｜整體狀態', format: 'status', level: noStatusData ? 'none' : Object.keys(levelRank)[worst],
-      note: noStatusData ? '記帳或填帳戶餘額後開始追蹤' : (flagged.length ? flagged.map(s => `${s.row.label}${levelText[s.status.level]}`).join('、') : `${statusRows.length} 項分配皆正常`)
+      note: noStatusData ? '記帳或填帳戶餘額後開始追蹤' : (flagged.length ? flagged.map(s => `${s.row.label}${s.status.tag || levelText[s.status.level]}`).join('、') : `${statusRows.length} 項分配皆正常`)
     });
     statusRows.forEach(({ row, status }) => sourceDefinitions.push({ value: `allocation:${row.key}:status`, label: `分配｜${row.label}・狀態`, format: 'status', level: status.level, note: status.text }));
     goals.forEach(goal => sourceDefinitions.push(
@@ -840,6 +861,16 @@ const App = (() => {
       el('p', { text: `收入 ${Money.formatTWD(income)} 與支出是「進階財務健檢」的估計值，沒改過就是範例數字。到帳本設定固定收入與支出後，這裡會改用你的實際設定。` }),
       el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); $('#personal-settings')?.scrollIntoView({ block: 'start' }); } })
     ]);
+    // 帳戶數字本身有問題時，上面的狀態都建立在錯的餘額上：非信用帳戶出現負餘額（多半漏記收入或期初餘額），
+    // 或緊急預備金放在不算可動用資金的帳戶（投資市價會跌、要賣出才拿得到）（2026-10-22 紅隊 #5）
+    const accountBalancesNow = getAccountBalances();
+    const negativeAccounts = config.accountProfiles.filter(a => a.nature !== 'credit' && (accountBalancesNow[a.id] || 0) < 0);
+    const emergencyAccount = config.accountProfiles.find(a => a.id === config.dashboard.emergencyAccountId);
+    const accountWarnings = [
+      ...negativeAccounts.map(a => `${a.name}餘額是 ${Money.formatTWD(accountBalancesNow[a.id])}：可能漏記收入或期初餘額，到「帳戶核對」更新實際餘額`),
+      emergencyAccount && !isLiquidNature(emergencyAccount.nature) ? `緊急預備金放在「${emergencyAccount.name}」（${natureLabels()[emergencyAccount.nature] || emergencyAccount.nature}），不算可動用資金：急用時可能要賣出或等待，建議改搭配活存或儲蓄帳戶` : null
+    ].filter(Boolean);
+    const accountNotice = accountWarnings.length ? el('div', { class: 'estimate-notice' }, accountWarnings.map(text => el('p', { text }))) : null;
     // 結論模式看不到分配表，要做的事直接列出來（編輯模式由分配表的狀態欄呈現，不重複）
     const todoList = flagged.length ? el('div', { class: 'allocation-todo simple-only' }, [
       el('h3', { text: '本期待辦' }),
@@ -848,6 +879,7 @@ const App = (() => {
     root.innerHTML = '';
     root.append(
       ...(estimateNotice ? [estimateNotice] : []),
+      ...(accountNotice ? [accountNotice] : []),
       el('div', { class: 'dashboard-summary' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可切換至編輯模式重新勾選。' })]),
       ...(todoList ? [todoList] : []),
       renderSummaryCardSettings(),
@@ -1082,6 +1114,18 @@ const App = (() => {
     IO.markDirty();
     renderLedger();
   };
+  // 固定項目產生的預測帳目要能確認成已入帳：分配狀態的「已付／已轉入」與帳戶餘額只算已入帳的帳目
+  // 實付金額不同時在同一列改金額再確認；刪掉本月預測帳目會在下次重算時再長出來，不能用「刪除後重記」
+  const confirmEntry = (id, actualYuan) => {
+    const entry = ledger.entries.find((e) => e.id === id);
+    if (!entry || entry.status !== 'projected') return;
+    const cents = Math.round(Number(actualYuan) * 100);
+    if (Number.isFinite(cents) && cents > 0) entry.amountCents = entry.amountCents < 0 ? -cents : cents;
+    entry.status = 'realized';
+    entry.note = String(entry.note || '').replace(/（[^（）]*預測[^（）]*）$/, '');
+    IO.markDirty();
+    renderAll();
+  };
 
   const renderLedgerList = () => {
     const body = $('#ledger-table-body');
@@ -1100,15 +1144,15 @@ const App = (() => {
             el('div', { class: 'mono notice', text: '≈ ' + Money.formatMoney(twdEquivalent, 'TWD') })
           ])
         : el('td', { class: e.amountCents < 0 ? 'neg mono' : 'mono', text: Money.formatMoney(e.amountCents, currency) });
-      body.appendChild(el('tr', {}, [
-        el('td', { text: e.date }),
+      body.appendChild(el('tr', { 'data-entry-id': e.id }, [
+        el('td', {}, [document.createTextNode(e.date), e.status === 'projected' ? el('span', { class: 'badge', text: '預測' }) : null]),
         el('td', { text: typeLabel + (e.type === 'income' && e.incomeSource ? `（${e.incomeSource}）` : '') }),
         el('td', { text: e.type === 'transfer' ? `${accountName(e.fromAccount)} → ${accountName(e.toAccount)}` : ([e.category, e.account ? accountName(e.account) : null].filter(Boolean).join('／') || '—') }),
         amountCell,
         el('td', { text: e.type === 'expense' ? (e.essential ? '必要' : '非必要') : '—' }),
         el('td', { text: e.type === 'expense' ? (e.reimbursable ? '可報銷' : '—') : '—' }),
         el('td', { text: e.note || '' }),
-        el('td', {}, [el('button', { class: 'btn small danger', text: '刪除', onclick: () => deleteEntry(e.id) })])
+        el('td', {}, [e.status === 'projected' ? el('input', { type: 'number', min: '1', step: '1', class: 'confirm-amount', 'aria-label': '實際金額（元）', value: String(Math.abs(e.amountCents) / 100) }) : null, e.status === 'projected' ? el('button', { class: 'btn small', text: '確認入帳', onclick: (ev) => confirmEntry(e.id, ev.target.parentElement.querySelector('.confirm-amount')?.value) }) : null, el('button', { class: 'btn small danger', text: '刪除', onclick: () => deleteEntry(e.id) })])
       ]));
     }
   };
@@ -1430,7 +1474,9 @@ const App = (() => {
         summaryItem ? el('p', { class: 'income-net' }, [
           document.createTextNode('每月實際入帳約 '),
           el('strong', { class: 'mono', text: yuan(summaryItem.netCents) })
-        ]) : el('p', { class: 'income-net', text: '目前不計入每月收入' }),
+        ]) : el('p', { class: flow.active !== false && basis !== 'monthly' ? 'income-net neg' : 'income-net', text: flow.active !== false && basis !== 'monthly' && !(income.grossCents > 0)
+          ? (basis === 'per_case' ? '這個月接案數或每件報酬是 0，本月收入算 0 元、不計入每月收入；接到案件後記得更新' : '這個月工作時數或時薪是 0，本月收入算 0 元、不計入每月收入；排班後記得更新')
+          : '目前不計入每月收入' }),
         payroll && payroll.laborFee + payroll.healthFee > 0 ? el('p', { class: 'income-sub', text: `已扣勞保 ${yuan(payroll.laborFee)}、健保 ${yuan(payroll.healthFee)}（依投保薪資 ${yuan(payroll.insuredSalaryCents)}）` }) : null,
         basis !== 'monthly' && income.monthlyWorkHours > 0 ? el('p', { class: 'income-sub', text: `本月共工作 ${hoursText(income.monthlyWorkHours)}，實際時薪 ${yuan(income.hourlyRateCents)}` }) : null
       ]);
@@ -1449,7 +1495,7 @@ const App = (() => {
       return flowCard(flow, [
         el('span', { class: 'flow-name', text: flow.name || recurringKinds[flow.kind] || '收入' }),
         el('span', { class: 'flow-tag', text: payBasisOptions[basis].label }),
-        el('span', { class: 'flow-amount positive mono', text: flow.active === false ? '未啟用' : `＋${yuan(summaryItem?.netCents || 0)}／月` })
+        el('span', { class: summaryItem || flow.active === false ? 'flow-amount positive mono' : 'flow-amount neg mono', text: flow.active === false ? '未啟用' : (summaryItem ? `＋${yuan(summaryItem.netCents)}／月` : '本月 0 元・待更新') })
       ], [
         el('div', { class: 'toolbar' }, [
           el('label', {}, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, onchange: (ev) => { flow.active = ev.target.checked; saveFlow(); } }), document.createTextNode(' 啟用')]),
@@ -1481,10 +1527,10 @@ const App = (() => {
       return flowCard(flow, [
         el('span', { class: 'flow-name', text: flow.name || (isSaving ? '固定儲蓄' : '固定支出') }),
         el('span', { class: 'flow-tag', text: isSaving ? `每月轉存 ${flow.dayOfMonth || 1} 日` : `${rentCycleNames[cycle]}扣款 ${flow.dayOfMonth || 1} 日${cycle > 1 ? `・每次 ${Money.formatTWD((flow.amountCents || 0) * cycle)}` : ''}` }),
-        el('span', { class: `flow-amount mono${isSaving ? '' : ' negative'}`, text: flow.active === false ? '未啟用' : `${isSaving ? '' : '－'}${Money.formatTWD(flow.amountCents || 0)}／月` })
+        el('span', { class: `flow-amount mono${isSaving ? '' : ' negative'}`, text: flow.active === false ? (flow.repairNote ? '已暫停・待確認' : '未啟用') : `${isSaving ? '' : '－'}${Money.formatTWD(flow.amountCents || 0)}／月` })
       ], [
         el('div', { class: 'toolbar' }, [
-          el('label', {}, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.active = ev.target.checked; saveFlow(); } }), document.createTextNode(flow.systemManaged ? ' 依年齡自動啟用' : ' 啟用')]),
+          el('label', {}, [el('input', { type: 'checkbox', checked: flow.active !== false ? 'checked' : undefined, disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.active = ev.target.checked; if (flow.active) delete flow.repairNote; saveFlow(); } }), document.createTextNode(flow.systemManaged ? ' 依年齡自動啟用' : ' 啟用')]),
           el('div', { class: 'field' }, [el('label', { text: '名稱' }), el('input', { value: flow.name || '', disabled: flow.systemManaged ? 'disabled' : undefined, onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
           flowTypeSelect(flow),
           numField(isSaving ? '每月儲蓄（元）' : (cycle > 1 ? `每月金額（元，每次繳 ${cycle} 個月）` : '每月金額（元）'), Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(Math.abs(v)); saveFlow(); }),
@@ -1494,7 +1540,7 @@ const App = (() => {
           isSaving ? el('div', { class: 'field' }, [el('label', { text: '轉出帳戶' }), el('select', { onchange: (ev) => { flow.fromAccountId = ev.target.value; saveFlow(); } }, config.accountProfiles.filter(a => a.linkRecurring !== false || a.id === flow.fromAccountId).map(a => el('option', { value: a.id, text: a.linkRecurring === false ? `${a.name}（未連動）` : a.name, selected: flow.fromAccountId === a.id ? 'selected' : undefined, disabled: a.id === flow.accountId ? 'disabled' : undefined })))]) : null,
           accountSelect(flow, isSaving ? '儲蓄帳戶' : '扣款帳戶')
         ]),
-        isSaving ? el('p', { class: 'linked-note', text: '固定儲蓄會建立帳戶間轉帳，不列入收入或支出。' }) : el('label', {}, [el('input', { type: 'checkbox', checked: flow.essential !== false ? 'checked' : undefined, onchange: (ev) => { flow.essential = ev.target.checked; saveFlow(); } }), document.createTextNode(' 必要固定支出')]),
+        isSaving ? el('p', { class: flow.repairNote ? 'linked-note neg' : 'linked-note', text: flow.repairNote || '固定儲蓄會建立帳戶間轉帳，不列入收入或支出。' }) : el('label', {}, [el('input', { type: 'checkbox', checked: flow.essential !== false ? 'checked' : undefined, onchange: (ev) => { flow.essential = ev.target.checked; saveFlow(); } }), document.createTextNode(' 必要固定支出')]),
         el('button', { class: 'btn small danger', text: flow.systemManaged ? `由${flow.systemManaged === 'mortgage' ? '房貸' : '學貸'}設定管理` : '刪除固定項目', disabled: flow.systemManaged ? 'disabled' : undefined, onclick: () => { config.recurringCashFlows = config.recurringCashFlows.filter(f => f.id !== flow.id); IO.markDirty(); renderPersonalSettings(); } })
       ]);
     });

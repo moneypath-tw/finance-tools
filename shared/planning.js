@@ -88,17 +88,21 @@ const Planning = (() => {
   //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, projectedInCents, sharedWithIncome, accountName }  發薪後應先轉入
   //           projectedInCents＝本期固定儲蓄的預測轉帳（帳本還沒確認入帳）；夠的話只提醒確認，不判不足
   //   facts.noData：沒有任何已入帳帳目、帳戶餘額也都是 0 → 還沒開始記帳，不判斷進度（不然新使用者一打開就全紅）
+  // tag＝整體狀態卡列出的簡短原因：「不足」可能是收入結構不夠，也可能只是本期還沒轉帳，兩者要分開講
+  //   fixed 另收 unconfirmedCents：扣款日已過、帳本仍是預測的固定支出（多半已扣款，只是還沒按「確認入帳」）
   const allocationStatus = (row, cycle, facts = {}) => {
     if (facts.noData) return { level: 'none', text: '尚未記帳或填寫帳戶餘額，暫不判斷進度' };
-    const out = (level, text) => ({ level, text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text });
+    const out = (level, text, tag) => ({ level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text });
     const target = row.allocatedCents;
     if (row.key === 'fixed') {
       const remaining = Math.max(0, (facts.dueTotalCents || 0) - (facts.paidCents || 0));
       if (!(facts.dueTotalCents > 0)) return out('ok', '本期沒有要扣的固定支出');
       if (remaining <= 0) return out('ok', `本期固定支出 ${fmt(facts.dueTotalCents)} 已全部扣款`);
+      const unconfirmed = Math.min(remaining, Math.max(0, facts.unconfirmedCents || 0));
+      const confirmNote = unconfirmed > 0 ? `；其中 ${fmt(unconfirmed)} 已過扣款日，扣款後到帳本按「確認入帳」` : '';
       const lack = remaining - Math.max(0, facts.balanceCents || 0);
-      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入`);
-      return out('ok', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠`);
+      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入${confirmNote}`, '餘額不足');
+      return out(unconfirmed > 0 ? 'watch' : 'ok', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠${confirmNote}`, '待確認入帳');
     }
     if (row.key === 'living') {
       const spent = Math.max(0, facts.spentCents || 0);
@@ -107,20 +111,20 @@ const Planning = (() => {
       // 每日可花取整數元並無條件捨去，不高估能花的錢
       const perDay = Math.floor(Math.max(0, spendable - spent) / Math.max(1, cycle.daysLeft) / 100) * 100;
       const progress = `第 ${cycle.elapsedDays}／${cycle.totalDays} 天，已花 ${fmt(spent)}（進度 ${fmt(expected)}）`;
-      if (spent > spendable) return out('short', `${progress}，已超出本期可花用 ${fmt(spent - spendable)}`);
+      if (spent > spendable) return out('short', `${progress}，已超出本期可花用 ${fmt(spent - spendable)}`, '超支');
       const over = spent > target ? `，超出生活費預算 ${fmt(spent - target)}，已動用未分配的錢` : (spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '');
       const lowBalance = (facts.balanceCents ?? Infinity) < target - spent ? `；${facts.accountName}餘額只剩 ${fmt(Math.max(0, facts.balanceCents))}，不夠剩下的生活費` : '';
-      return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`);
+      return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`, spent > target ? '超出預算' : (over ? '花得比進度快' : '餘額偏低'));
     }
-    if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
-    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`);
+    if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', tag: '收入不夠分配', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
+    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`, '無法追蹤');
     const moved = Math.max(0, facts.movedInCents || 0);
     if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
     const projected = Math.max(0, facts.projectedInCents || 0);
-    if (moved + projected >= target) return out('watch', `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}；轉帳後到帳本把預測帳目標為已入帳`);
-    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`);
+    if (moved + projected >= target) return out('watch', `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}；轉帳後到帳本按「確認入帳」`, '待確認入帳');
+    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, '待轉入');
     const pendingNote = projected > 0 ? `（其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認）` : '';
-    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`);
+    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`, '尚未轉入');
   };
   // 成本目標的已存金額取自指定帳戶餘額；同帳戶先保留緊急預備金目標，再依期限先後分給各目標，同一筆錢不重複計算
   const poolGoalSavings = (goals, balances, reservedByAccount = {}) => {

@@ -487,3 +487,7 @@ tbody tr:last-child td { border-bottom: 0; }
   th, td { padding: 9px 8px; }
 }
 .trend-chart { width: 100%; height: auto; }
+
+/* 帳本預測帳目：實際金額欄位與確認按鈕同一格 */
+#ledger-table-body .confirm-amount { width: 7em; margin-right: 4px; }
+#ledger-table-body td .badge { margin-left: 4px; }
