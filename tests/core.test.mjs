@@ -11,11 +11,38 @@ vm.createContext(ctx);
 for (const rel of ['shared/reference-data.js','shared/config.js','shared/validation.js','shared/planning.js','shared/money.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, rel), 'utf8'), ctx, { filename: rel });
 }
-const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
+const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,PLANNING_RULES,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
 
-test('官方通膨快照包含來源與日期', () => {
-  assert.ok(api.REFERENCE_DATA.twInflation.sourceUrl.startsWith('https://'));
-  assert.match(api.REFERENCE_DATA.twInflation.observedThrough, /^\d{4}-\d{2}-\d{2}$/);
+// 外部數字只能來自官方機關網域，且要記錄取得日期，過期時才知道該重查
+const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw)\//;
+test('外部參考數字皆有官方來源網址與取得日期', () => {
+  const entries = [...Object.entries(api.REFERENCE_DATA.inflation).map(([k, v]) => [`inflation.${k}`, v]),
+    ...Object.entries(api.REFERENCE_DATA).filter(([k]) => k !== 'inflation')];
+  assert.ok(entries.length >= 7);
+  for (const [key, ref] of entries) {
+    assert.match(ref.sourceUrl, OFFICIAL_HOSTS, key);
+    assert.match(ref.retrievedAt, /^\d{4}-\d{2}-\d{2}$/, key);
+    if (ref.lawUrl) assert.match(ref.lawUrl, OFFICIAL_HOSTS, key);
+  }
+  for (const [key, ref] of Object.entries(api.REFERENCE_DATA.inflation)) {
+    assert.ok(Number.isFinite(ref.annualRate) && ref.annualRate > -0.05 && ref.annualRate < 0.2, key);
+    assert.equal(api.DEFAULT_CONFIG.inflationRates[key], ref.annualRate, key);
+  }
+});
+
+test('預設勞保費率含就業保險，且直接取自參考資料', () => {
+  const ref = api.REFERENCE_DATA.twLaborInsurance;
+  assert.equal(api.DEFAULT_CONFIG.insuranceRates.laborInsuranceRate, ref.ordinaryRate + ref.employmentRate);
+  assert.equal(api.DEFAULT_CONFIG.insuranceRates.healthInsuranceRate, api.REFERENCE_DATA.twHealthInsurance.rate);
+});
+
+test('成本試算通膨依目標月數複利換算，與健檢同一公式', () => {
+  const c = structuredClone(api.DEFAULT_CONFIG);
+  c.inflationRates.JP = 0.02;
+  const s = { schemaVersion: 2, scenarioId: 'trip', calcType: 'items', applyInflation: true, inflationKey: 'JP', currentSavedCents: 0, items: [{ label: '機票', kind: 'cost', amountCents: 1000000 }] };
+  assert.equal(api.Money.calcScenario(s, c, { horizonMonths: 0 }).inflated, 1000000);
+  assert.equal(api.Money.calcScenario(s, c, { horizonMonths: 24 }).inflated, 1040400);
+  assert.equal(api.Money.calcScenario(s, c, { horizonMonths: 12 }).inflated, api.Planning.futureValue(1000000, 0.02, 12));
 });
 
 test('今日金額以複利換算未來名目金額', () => {
@@ -149,7 +176,7 @@ test('正職、兼職與接案可分別決定是否扣勞健保', () => {
   assert.equal(result.items[1].netCents, 1000000);
   assert.ok(result.items[0].netCents < 4000000);
   assert.equal(result.essentialExpenseCents, 1200000);
-  assert.equal(result.monthlySavingsCents, result.incomeCents - 1200000);
+  assert.equal(result.essentialExpenseGrossCents, 1200000);
   assert.equal(api.Validation.validateRecurringFlows(flows).valid, true);
 });
 
@@ -275,7 +302,7 @@ test('租屋補助可保留資料但不納入計算', () => {
 
 test('多帳戶分配先付固定支出，再滿足生活與緊急預備金', () => {
   const result = api.Planning.allocateMonthly({
-    incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyGapCents: 1200000,
+    incomeCents: 5000000, livingCents: 1800000, fixedExpenseCents: 1200000, emergencyMonthlyCents: 100000,
     savingCents: 300000, livingAccountId: 'living', fixedExpenseAccountId: 'fixed', emergencyAccountId: 'emergency', savingsAccountId: 'saving',
     goals: [{ key: 'trip', label: '旅行', gapCents: 2400000, months: 12, accountId: 'trip' }]
   });
@@ -285,7 +312,7 @@ test('多帳戶分配先付固定支出，再滿足生活與緊急預備金', ()
 });
 
 test('收入不足時可選成本目標不會排擠必備分配', () => {
-  const result = api.Planning.allocateMonthly({ incomeCents: 2000000, livingCents: 1500000, fixedExpenseCents: 1000000, emergencyGapCents: 1200000, goals: [{ key: 'goal', label: '目標', gapCents: 1200000, months: 12 }] });
+  const result = api.Planning.allocateMonthly({ incomeCents: 2000000, livingCents: 1500000, fixedExpenseCents: 1000000, emergencyMonthlyCents: 100000, goals: [{ key: 'goal', label: '目標', gapCents: 1200000, months: 12 }] });
   assert.equal(result.rows[0].key, 'fixed');
   assert.equal(result.rows[0].allocatedCents, 1000000); // 已約定的固定支出先付足
   assert.equal(result.rows[1].allocatedCents, 1000000);
@@ -378,16 +405,33 @@ test('房貸可計算寬限期、正常月繳、總利息與升息壓力', () =>
   assert.ok(stressed.monthlyPaymentCents > plan.monthlyPaymentCents);
 });
 
-test('FIRE反推納入其他目標：提高買房目標不得提早退休', () => {
+test('FIRE反推納入其他目標：提高其他目標不得提早退休', () => {
   const c = structuredClone(api.DEFAULT_CONFIG);
   const base = structuredClone(api.SCENARIO_FIRE);
   base.retireAgeSolveMode = 'given_growth_rate';
   base.assumedSalaryGrowthRate = 0.03;
   const age1 = api.Money.calcScenario(base, c).solvedRetireAge;
   const larger = structuredClone(base);
-  larger.buyHouseGoalCents *= 2;
+  larger.otherGoalsCents = 300000000;
   const age2 = api.Money.calcScenario(larger, c).solvedRetireAge;
   assert.ok(age2 === null || age1 === null || age2 >= age1);
+});
+
+test('FIRE總需求＝退休資產＋其他目標＋緊急預備金；連動帶入的緊急預備金優先於月數', () => {
+  const c = structuredClone(api.DEFAULT_CONFIG);
+  const s = structuredClone(api.SCENARIO_FIRE);
+  s.otherGoalsCents = 500000;
+  const manual = api.Money.calcScenario(s, c);
+  assert.equal(manual.totalNeededBeforeRetire, manual.retirementAssetTarget + 500000 + s.currentMonthlyExpenseCents * s.emergencyFundMonths);
+  s.emergencyFundCents = 123400;
+  const linked = api.Money.calcScenario(s, c);
+  assert.equal(linked.totalNeededBeforeRetire, linked.retirementAssetTarget + 500000 + 123400);
+  // 舊存檔沒有 otherGoalsCents 時沿用買房＋留學
+  const legacy = structuredClone(api.SCENARIO_FIRE);
+  delete legacy.otherGoalsCents;
+  legacy.buyHouseGoalCents = 100; legacy.studyAbroadFundCents = 200;
+  const r = api.Money.calcScenario(legacy, c);
+  assert.equal(r.totalNeededBeforeRetire, r.retirementAssetTarget + 300 + legacy.currentMonthlyExpenseCents * legacy.emergencyFundMonths);
 });
 
 test('FIRE拒絕零除與錯誤年齡順序', () => {
@@ -397,12 +441,30 @@ test('FIRE拒絕零除與錯誤年齡順序', () => {
   assert.throws(() => api.Money.calcScenario(s, c), /年齡/);
 });
 
-test("FIRE 拒絕負數財務欄位與超過 100% 分配", () => {
+test("FIRE 拒絕負數財務欄位", () => {
   const c = structuredClone(api.DEFAULT_CONFIG);
-  const s = structuredClone(api.SCENARIO_FIRE);
-  s.retirementMonthlyExpenseCents = -1;
-  s.allocationPercents["投資提撥（FIRE 基金）"] = 1.1;
-  assert.throws(() => api.Money.calcScenario(s, c), /非負有限金額|100%/);
+  for (const key of ['retirementMonthlyExpenseCents', 'otherGoalsCents', 'emergencyFundCents']) {
+    const s = structuredClone(api.SCENARIO_FIRE);
+    s[key] = -1;
+    assert.throws(() => api.Money.calcScenario(s, c), /非負有限金額/, key);
+  }
+});
+
+test('緊急預備金以未扣補助的必要支出計算，缺口文字以元顯示', () => {
+  const flows = [{ id: 'rent', name: '房租', type: 'expense', kind: 'fixed_expense', amountCents: 1200000, essential: true, dayOfMonth: 1, accountId: 'bank',
+    housing: { ...sampleHousing(), subsidy: { enabled: true, amountCents: 300000, dayOfMonth: 10 } } }];
+  const monthly = api.Money.calcRecurringMonthly(flows, api.DEFAULT_CONFIG.insuranceRates);
+  // 補助只降低每月實付，不降低緊急預備金基數
+  assert.equal(monthly.essentialExpenseGrossCents - monthly.essentialExpenseCents, 300000);
+  const fund = api.Planning.emergencyFund({ baseMonthlyCents: 2000000, months: 6, balanceCents: 5000000 });
+  assert.deepEqual([fund.targetCents, fund.gapCents, fund.monthlyCents], [12000000, 7000000, Math.ceil(7000000 / api.PLANNING_RULES.emergencyFillMonths)]);
+  assert.equal(api.Planning.emergencyFund({ baseMonthlyCents: 100, months: 99, balanceCents: 0 }).targetMonths, api.PLANNING_RULES.emergencyMonths.max);
+  const p = structuredClone(api.DEFAULT_CONFIG.quickPlan);
+  Object.assign(p, { monthlyEssentialExpenseCents: 1000000, emergencyBaseCents: 2000000, emergencyReserveCents: 9000000, emergencyTargetMonths: 6 });
+  const r = api.Planning.assess(p, new Date('2026-08-07T00:00:00Z'));
+  assert.equal(r.emergencyGap, 3000000);
+  const risk = r.risks.find(x => x.code === 'EMERGENCY_BELOW_TARGET');
+  assert.ok(risk && risk.text.includes('30,000元') && !risk.text.includes('分'), risk?.text);
 });
 
 test('FIRE零報酬率在永續模型中被拒絕，有限模型可計算', () => {
@@ -790,4 +852,22 @@ test('分配狀態文字：沒有應扣款與只因餘額不足時不出現 0 �
   assert.equal(S('fixed', { dueTotalCents: 0, paidCents: 0, balanceCents: 0 }), '本期沒有要扣的固定支出');
   const low = S('living', { spentCents: 0, balanceCents: 0 });
   assert.ok(!low.includes('多花') && low.includes('不夠剩下的生活費'), low);
+});
+
+// 取代 package.json 逐檔 node --check：index.html 載入的每支腳本與 sw.js 都要能編譯
+test('index.html 載入的腳本與 sw.js 皆可編譯', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]).concat('sw.js');
+  assert.ok(scripts.length >= 10);
+  for (const rel of scripts) assert.doesNotThrow(() => new vm.Script(fs.readFileSync(path.join(root, rel), 'utf8'), { filename: rel }), rel);
+});
+
+// CSP 已拿掉 style-src 'unsafe-inline'：HTML 字串裡的 style 屬性與 <style> 會被瀏覽器擋下（element.style 不受影響）
+test('不使用會被 CSP 擋下的行內樣式', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(html, /style-src 'self';/);
+  for (const rel of ['index.html', ...fs.readdirSync(path.join(root, 'shared')).filter((f) => f.endsWith('.js')).map((f) => `shared/${f}`)]) {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8');
+    assert.doesNotMatch(src, /\sstyle=["'\]|<style[\s>]/, rel);
+  }
 });

@@ -54,122 +54,35 @@
 - **結論／編輯模式**：結論模式只看關鍵結果；需要調整時再切換完整編輯畫面。
 - **本機自動保存**：修改後立即保存，最多保留 20 個滾動版本，也可綁定 JSON 工作區檔案。
 
-## 安裝到 Windows 電腦
+## 安裝（Windows／Mac）
 
-錢路不需要安裝程式，也不需要 Node.js 才能使用。只要下載專案並用瀏覽器載入 `index.html`。
+錢路不需要安裝程式，也不需要 Node.js：下載專案後用瀏覽器開啟 `index.html`。要把工作區綁定到本機 JSON 檔案，請用最新版 Chrome 或 Edge；Safari、Firefox 只能保存在瀏覽器本機並用匯出備份。
 
-### Windows：下載 ZIP（最簡單）
+**下載 ZIP（最簡單）**：在 GitHub 專案頁按 **Code → Download ZIP**，解壓縮後把資料夾改名為 `MoneyPath`，移到「文件」資料夾，雙擊 `index.html`（建議建立桌面捷徑）。
 
-1. 在 GitHub 專案頁按 **Code → Download ZIP**。
-2. 解壓縮後，把資料夾改名為 `MoneyPath`，移到自己的「文件」資料夾：
-
-   ```text
-   C:\Users\<你的帳號>\Documents\MoneyPath
-   ```
-
-3. 在檔案總管開啟下列檔案：
-
-   ```text
-   C:\Users\<你的帳號>\Documents\MoneyPath\index.html
-   ```
-
-4. 也可以把下列網址貼到 Edge 或 Chrome 網址列：
-
-   ```text
-   file:///C:/Users/<你的帳號>/Documents/MoneyPath/index.html
-   ```
-
-5. 建議為 `index.html` 建立桌面捷徑，以後雙擊即可使用。
-
-> `<你的帳號>` 需換成目前的 Windows 使用者資料夾名稱。若「文件」已由 OneDrive 接管，實際位置可能包含 `OneDrive`；直接在檔案總管雙擊 `index.html` 最可靠。以含有 `index.html`、`shared` 與 `README.md` 的資料夾為準。
-
-### Windows：使用 Git（方便更新）
-
-在 PowerShell 執行：
+**使用 Git（方便更新）**：
 
 ```powershell
-$moneyPathDocuments = [Environment]::GetFolderPath('MyDocuments')
-Set-Location $moneyPathDocuments
+# Windows PowerShell
+Set-Location ([Environment]::GetFolderPath('MyDocuments'))
 git clone https://github.com/moneypath-tw/finance-tools.git MoneyPath
-Set-Location .\MoneyPath
-Start-Process .\index.html
+Start-Process .\MoneyPath\index.html
 ```
-
-安裝完成後的對應路徑：
-
-| 用途 | 路徑 |
-| --- | --- |
-| 專案資料夾 | `C:\Users\<你的帳號>\Documents\MoneyPath` |
-| 網頁入口 | `C:\Users\<你的帳號>\Documents\MoneyPath\index.html` |
-| 瀏覽器載入網址 | `file:///C:/Users/<你的帳號>/Documents/MoneyPath/index.html` |
-| 共用程式 | `C:\Users\<你的帳號>\Documents\MoneyPath\shared` |
-| 範例資料 | `C:\Users\<你的帳號>\Documents\MoneyPath\sample-data` |
-| 建議的個人備份檔 | `C:\Users\<你的帳號>\Documents\MoneyPath Data\money-path-workspace.json` |
-
-更新程式時，在 PowerShell 執行：
-
-```powershell
-$moneyPathDocuments = [Environment]::GetFolderPath('MyDocuments')
-Set-Location (Join-Path $moneyPathDocuments 'MoneyPath')
-git pull
-```
-
-個人工作區 JSON 請放在專案外的 `MoneyPath Data` 資料夾，不要放進 `MoneyPath` 公開程式碼資料夾，避免日後被 Git 誤提交。
-
-## 安裝到 Mac
-
-macOS 同樣不需要安裝程式或 Node.js。下載後以 Safari、Chrome 或 Edge 開啟 `index.html` 即可；若要把工作區直接綁定至本機 JSON 檔案，建議使用最新版 Chrome 或 Edge。
-
-### Mac：下載 ZIP（最簡單）
-
-1. 在 GitHub 專案頁按 **Code → Download ZIP**。
-2. 在 Finder 的「下載項目」雙擊 ZIP 解壓縮。
-3. 將資料夾改名為 `MoneyPath`，再移到自己的「文件」資料夾：
-
-   ```text
-   /Users/<你的帳號>/Documents/MoneyPath
-   ```
-
-4. 在 Finder 開啟 `MoneyPath`，雙擊 `index.html`；或在瀏覽器網址列輸入：
-
-   ```text
-   file:///Users/<你的帳號>/Documents/MoneyPath/index.html
-   ```
-
-> `<你的帳號>` 是 Mac 的短使用者名稱。可在「終端機」執行 `whoami` 查詢；不要把中文顯示名稱直接當成路徑。
-
-### Mac：使用 Git（方便更新）
-
-先確認 Mac 已安裝 Git，再於「終端機」執行：
 
 ```bash
-cd ~/Documents
-git clone https://github.com/moneypath-tw/finance-tools.git MoneyPath
-cd MoneyPath
-open index.html
+# Mac 終端機
+cd ~/Documents && git clone https://github.com/moneypath-tw/finance-tools.git MoneyPath && open MoneyPath/index.html
 ```
 
-安裝完成後的對應路徑：
+之後在 `MoneyPath` 資料夾執行 `git pull` 即可更新。
 
-| 用途 | macOS 路徑 |
-| --- | --- |
-| 專案資料夾 | `~/Documents/MoneyPath` |
-| 網頁入口 | `~/Documents/MoneyPath/index.html` |
-| 瀏覽器載入網址 | `file:///Users/<你的帳號>/Documents/MoneyPath/index.html` |
-| 共用程式 | `~/Documents/MoneyPath/shared` |
-| 範例資料 | `~/Documents/MoneyPath/sample-data` |
-| 建議的個人備份檔 | `~/Documents/MoneyPath Data/money-path-workspace.json` |
+| 用途 | Windows | Mac |
+| --- | --- | --- |
+| 網頁入口 | `C:\Users\<你的帳號>\Documents\MoneyPath\index.html` | `~/Documents/MoneyPath/index.html` |
+| 建議的個人備份檔 | `C:\Users\<你的帳號>\Documents\MoneyPath Data\money-path-workspace.json` | `~/Documents/MoneyPath Data/money-path-workspace.json` |
 
-更新程式時，在「終端機」執行：
-
-```bash
-cd ~/Documents/MoneyPath
-git pull
-```
-
-個人工作區 JSON 請放在專案外的 `~/Documents/MoneyPath Data`，不要放進 `MoneyPath` 公開程式碼資料夾。Safari 可以使用瀏覽器本機保存與 JSON 匯入／匯出；若「選擇本機保存位置」不可用，請改用 Chrome／Edge，或定期按匯出下載備份。
-
-> 如果 Windows「文件」由 OneDrive 同步，或 Mac「文件」由 iCloud Drive 同步，放在其中的檔案可能會上傳雲端。希望資料嚴格留在單機時，請在未同步的本機資料夾建立 `MoneyPath` 與 `MoneyPath Data`；程式可從任何有讀取權限的位置載入。
+- 個人工作區 JSON 請放在專案外的 `MoneyPath Data`，不要放進 `MoneyPath` 公開程式碼資料夾，避免被 Git 誤提交。
+- 「文件」由 OneDrive 或 iCloud Drive 同步時，檔案可能上傳雲端；要嚴格留在單機，請改放未同步的本機資料夾。
 
 ## 第一次使用
 
@@ -203,12 +116,15 @@ git pull
 ## 計算方式與重要界線
 
 - 所有金額以整數「分」儲存與計算，避免小數誤差；帳戶核對紀錄存在帳本的 `snapshots` 欄位，舊資料沒有這個欄位也能照常讀取。
-- 目標預估採複利通膨：`今日金額 × (1 ＋ 年通膨率)^(月份 ÷ 12)`。
-- 實質報酬率：`(1 ＋ 名目報酬率) ÷ (1 ＋ 通膨率) − 1`。
-- 財務健檢同時提供有利、基準與壓力情境；壓力情境包含收入下降、較高通膨和零投資報酬。
+- **通膨一律複利**：`今日金額 × (1 ＋ 年通膨率)^(月數 ÷ 12)`。財務健檢、成本試算與養老金用同一公式；月數算到首頁為該目標設定的月份（養老金算到退休年齡）。年通膨率依地區採各國央行官方預測：台灣用中央銀行、日本用日本銀行、歐元區用歐洲中央銀行，可在介面覆寫。
+- **緊急預備金**＝每月（必要固定支出＋基本生活開銷）× 目標月數，**不扣任何補助**（補助可能停發）；首頁分配、財務健檢與 FIRE 連動都用同一算法，每月補足額為缺口 ÷ 12。
+- **每月可存**＝固定收入－固定支出－生活開銷；成本試算的「存款版達成時間」與 FIRE 連動都用這個數字。
+- **FIRE** 退休前總需求＝退休資產目標＋其他目標＋緊急預備金。開啟連動時，目前年齡、月薪、月支出、已存資產、其他目標（首頁勾選的成本目標）與緊急預備金都由帳本與首頁帶入。
+- 勞保費率含就業保險（受僱者負擔 20%），健保以本人計算、未含眷屬，也未套投保薪資分級表；實際以投保單位計算為準。
+- 實質報酬率：`(1 ＋ 名目報酬率) ÷ (1 ＋ 通膨率) − 1`。財務健檢同時提供有利、基準與壓力情境；壓力情境包含收入下降、較高通膨和零投資報酬。
 - 帳戶核對的「用掉」是推算值：`期初餘額 ＋ 期間內計畫存入 − 期末餘額`，計畫存入來自固定出入帳（收入入帳、儲蓄轉入減轉出）。帳戶互轉不記錄時，個別帳戶會一邊多花、一邊多存，但全部帳戶加總不受影響，所以總覽以加總為主；結果為負時顯示「多出」（利息、退款、計畫外收入）。核對間隔不固定，比較各期時看「每 30 天」換算值。
-- 儲蓄健康度是本工具的規劃規則：低於 10% 為偏低、10% 至未滿 20% 為待改善、20% 至 40% 為健康、高於 40% 為充足。
-- 官方資料以 `shared/reference-data.js` 內的離線快照為準；介面會顯示來源日期，使用者也可覆寫參數。
+- 本工具自訂的規劃規則（儲蓄率基準與健康分級、緊急預備金月數範圍）只定義在 `shared/config.js` 的 `PLANNING_RULES`。
+- **外部數字的唯一來源**是 `shared/reference-data.js`：每筆都附官方機關網址與取得日期（通膨預測、勞保與就保費率、健保費率、學貸利率、房貸利率），測試會擋下沒有官方來源或日期的項目。更新數字只改這個檔案。
 - 試算結果取決於輸入與假設，不代表收益保證，也不構成投資、稅務、保險、法律或貸款建議。
 
 ## 隱私防護
@@ -230,57 +146,18 @@ git config core.hooksPath hooks
 
 ## 開發與測試
 
-本專案無第三方執行期套件，使用 Node.js 內建測試器：
+本專案無第三方執行期套件，使用 Node.js 內建測試器（測試同時編譯 `index.html` 載入的每支腳本與 `sw.js`）：
 
 ```powershell
 npm test
-npm run check
 ```
 
-測試涵蓋通膨、實質報酬、財務健檢、壓力情境、帳本驗證、外幣匯率、FIRE、目標推算及多項邊界條件，以及線上版的攻擊面回歸測試（惡意匯入、HTML 注入點、CSP、多分頁互相覆蓋、離線快取範圍）。
+測試涵蓋通膨、實質報酬、財務健檢、壓力情境、緊急預備金、帳本驗證、外幣匯率、FIRE、目標推算、外部數字來源及多項邊界條件，以及線上版的攻擊面回歸測試（惡意匯入、HTML 注入點、CSP 不允許行內樣式、多分頁互相覆蓋、離線快取範圍）。
 
-改動到保存、離線快取或頁面載入時，另跑瀏覽器實測（需本機有 Chrome，不需網路）：
+改動到保存、離線快取或頁面載入時，另跑瀏覽器實測（需本機有 Chrome，不需網路；會載入舊版存檔確認轉換正確）：
 
 ```powershell
 npm run browser-check
-```GitHub Actions 會同步執行程式檢查、測試與隱私掃描。
-
-每次 GitHub Actions 執行都會跑 `npm run check`，並將完整輸出保存為 `finance-ci-logs-<run_id>` artifact（保留 14 天）。若檢查失敗，請先下載該 artifact，再依日誌中的語法錯誤、測試名稱與堆疊位置進行修正。
-
-## 機械複查（2026-08-30訂定，移植自wordpress-builder-playbook repo的同類規則）
-
-本專案是純前端靜態工具，沒有PAT編號式知識庫，不確定的做法先查本節
-上方「計算方式與重要界線」，內部真的沒有才查外部。**機械複查**：
-`node scripts/dev-knowledge-audit.mjs`——`shared/`底下JS檔案篇幅離群值
-/README過時關鍵字候選，純Node內建模組，只找候選不判斷對錯，不進CI，
-手動觸發即可。
-
-**★閥值自動觸發★**收工時先跑這行判斷要不要做健檢，不用自己記或等
-使用者提醒：
-```bash
-git rev-list --count $(head -c 7 scripts/.last-audit-marker)..HEAD
 ```
-（**這個檔案不存在**時上面這行會直接報錯——代表從沒跑過健檢，視同
-數字已達閥值，直接跑健檢腳本並用結果建立這個檔案，不用回頭修這行
-指令）**這個數字≥8就自動跑**`node scripts/dev-knowledge-audit.mjs`，
-跑完後用當下HEAD的short SHA+日期覆寫`scripts/.last-audit-marker`。
 
-**全面收斂稽核（多輪修改收工前，或使用者要求「嚴格審核」時執行，
-2026-08-30訂定，移植自wordpress-builder-playbook repo Phase 4.5的
-同類概念，通用程式碼repo版）**：跟上面的機械複查是不同顆粒度、不同
-觸發時機的兩件事——機械複查抓的是「距離上次健檢累積了幾個commit」
-這種跨時間的知識庫落後；這裡抓的是「同一個功能/檔案範圍累積了多輪
-反覆修改」造成的跨輪次內部不一致，零星單點驗證會漏掉這種「這一輪改
-完當下沒問題，但跟三輪前改的地方兜不起來」的落差（fintools的FIRE/
-驗證強化那批11檔WIP就是實例——`app.js`的`catch{}`綁定bug就是這種
-跨輪次不一致，收斂稽核抓的正是這一類）。
-
-觸發時機：①同一功能/同一批檔案累積修改超過~10輪以上準備收工前，
-②使用者明確要求「嚴格審核」/「全面檢查」時，③或懷疑有跨輪次殘留
-不一致但說不出具體是什麼時。
-
-查什麼：(1)跨檔案命名/欄位一致性——同一概念在本輪異動涉及的不同
-檔案有沒有被叫成不同名字；(2)死碼/孤兒函式——早期輪次寫的邏輯被
-同一輪內更晚版本取代但沒刪掉；(3)文件/註解與目前程式碼行為脫節；
-(4)重複邏輯可收斂成共用函式卻沒有抽。跑完直接修掉抓到的問題，不用
-等使用者再次提出——這是「收斂」動作的一部分，不是額外加碼。
+GitHub Actions 會執行測試與隱私掃描。

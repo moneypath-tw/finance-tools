@@ -19,17 +19,5 @@ jobs:
         with:
           node-version: 20
 
-      - name: 執行完整檢查並保存日誌
-        shell: bash
-        run: |
-          set -o pipefail
-          npm run check 2>&1 | tee ci-check.log
-
-      - name: 上傳 CI 檢查日誌
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: finance-ci-logs-${{ github.run_id }}
-          path: ci-check.log
-          if-no-files-found: warn
-          retention-days: 14
+      - name: 執行測試（含全部腳本語法編譯）
+        run: npm test
