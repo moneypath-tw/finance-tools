@@ -926,3 +926,38 @@ test('分配狀態：收入付完前面用途後沒剩時直接說無法提撥�
   assert.equal(s.level, 'short');
   assert.ok(!s.text.includes('不需提撥') && s.text.includes('無法提撥'), s.text);
 });
+
+test('分配狀態：扣款日已過但帳本仍是預測的固定支出 → 留意並提示確認入帳；原因標籤分開「收入不夠」與「尚未轉入」', () => {
+  const cycle = { elapsedDays: 10, totalDays: 30, daysLeft: 21, ratio: 1 / 3 };
+  const fixed = api.Planning.allocationStatus({ key: 'fixed', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { dueTotalCents: 1200000, paidCents: 0, unconfirmedCents: 1200000, balanceCents: 5000000, accountName: '主要銀行' });
+  assert.equal(fixed.level, 'watch');
+  assert.equal(fixed.tag, '待確認入帳');
+  assert.ok(fixed.text.includes('確認入帳'), fixed.text);
+  const notMoved = api.Planning.allocationStatus({ key: 'emergency', allocatedCents: 500000, shortfallCents: 0 }, cycle, { movedInCents: 0, accountName: '儲蓄' });
+  assert.deepEqual([notMoved.level, notMoved.tag], ['short', '尚未轉入']);
+  const noIncome = api.Planning.allocationStatus({ key: 'emergency', allocatedCents: 0, requestedCents: 500000, shortfallCents: 500000 }, cycle, {});
+  assert.deepEqual([noIncome.level, noIncome.tag], ['short', '收入不夠分配']);
+  const ok = api.Planning.allocationStatus({ key: 'emergency', allocatedCents: 500000, shortfallCents: 0 }, cycle, { movedInCents: 500000 });
+  assert.equal(ok.tag, undefined);
+});
+
+test('舊存檔的固定儲蓄轉出、轉入同一帳戶：載入前改成另一個帳戶並暫停，整份工作區不再被拒', () => {
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.recurringCashFlows = [{ id: 's1', type: 'saving', kind: 'saving', name: '存錢', amountCents: 500000, dayOfMonth: 5, accountId: 'bank', fromAccountId: 'bank', active: true }];
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) };
+  assert.ok(api.Validation.validateWorkspace(workspace).errors.some(e => e.code === 'INVALID_SAVING_TRANSFER'));
+  api.Validation.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  const flow = workspace.config.recurringCashFlows[0];
+  assert.notEqual(flow.fromAccountId, flow.accountId);
+  assert.equal(flow.active, false);
+  assert.ok(flow.repairNote);
+  assert.ok(!api.Validation.validateWorkspace(workspace).errors.some(e => e.code === 'INVALID_SAVING_TRANSFER'));
+});
+
+test('分配狀態：生活費只是比進度多花時，標籤不能寫成超出預算', () => {
+  const cycle = { elapsedDays: 18, totalDays: 31, daysLeft: 14, ratio: 18 / 31 };
+  const ahead = api.Planning.allocationStatus({ key: 'living', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { spentCents: 850000, spareCents: 0, balanceCents: 9000000 });
+  assert.deepEqual([ahead.level, ahead.tag], ['watch', '花得比進度快']);
+  const over = api.Planning.allocationStatus({ key: 'living', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { spentCents: 1300000, spareCents: 500000, balanceCents: 9000000 });
+  assert.deepEqual([over.level, over.tag], ['watch', '超出預算']);
+});
