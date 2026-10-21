@@ -245,12 +245,30 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .allocation-status.status-none { color: var(--ink-soft); }
 .estimate-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #EADFC8; border-radius: 10px; background: #FCF9F2; font-size: 0.88rem; }
 .estimate-notice p { margin: 0; flex: 1 1 280px; }
-.allocation-todo { margin: 12px 0; }
-.allocation-todo h3 { margin: 0 0 6px; font-size: 0.95rem; }
-.allocation-todo ul { margin: 0; padding-left: 1.2em; font-size: 0.88rem; }
-.allocation-todo li { margin: 4px 0; }
-.allocation-todo li.status-short { color: var(--negative); }
-.allocation-todo li.status-watch { color: var(--over-limit); }
+/* 首頁結論（結論模式）：一句結論、分配長條、生活費滑桿、緊急預備金進度、要做的事 */
+.home-overview { display: grid; gap: 10px; }
+.home-overview p { margin: 0; }
+.home-sample { font-size: 0.85rem; color: var(--over-limit); display: flex; align-items: center; gap: 8px; }
+.home-headline { font-size: 1.35rem; font-weight: 700; }
+.home-overview.level-short .home-headline { color: var(--negative); }
+.home-overview.level-watch .home-headline { color: var(--over-limit); }
+.home-daily { color: var(--ink-soft); }
+.home-bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: var(--rule); }
+.home-bar span { min-width: 3px; }
+.seg-fixed { --seg: #8A9A92; }
+.seg-living { --seg: #4F9A7A; }
+.seg-saving { --seg: var(--accent-strong); }
+.seg-spare { --seg: #C9DDD2; }
+.seg-short { --seg: var(--negative); }
+.home-bar span { background: var(--seg); }
+.home-bar .seg-short { background: repeating-linear-gradient(45deg, var(--negative) 0 4px, #E9C3C9 4px 8px); }
+.home-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-size: 0.85rem; }
+.home-legend li::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 5px; border-radius: 2px; background: var(--seg); }
+.home-slider, .home-progress { display: grid; gap: 4px; font-size: 0.9rem; }
+.home-slider input, .home-progress progress { width: 100%; accent-color: var(--accent); }
+.home-actions { margin: 0; padding-left: 1.3em; }
+.home-actions li { margin: 4px 0; }
+.home-ok { color: var(--accent); }
 body[data-view-mode="detailed"] .simple-only { display: none !important; }
 .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
 .health-critical, .health-risk { color: var(--negative); }

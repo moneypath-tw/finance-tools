@@ -961,3 +961,32 @@ test('分配狀態：生活費只是比進度多花時，標籤不能寫成超�
   const over = api.Planning.allocationStatus({ key: 'living', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { spentCents: 1300000, spareCents: 500000, balanceCents: 9000000 });
   assert.deepEqual([over.level, over.tag], ['watch', '超出預算']);
 });
+
+test('首頁結論：同一份分配算出一句結論、長條與解方；差額不超過生活費時給出生活費要降到多少', () => {
+  const emergency = { coverageMonths: 1, targetMonths: 6, gapCents: 0 };
+  const verdict = (living, income) => api.Planning.homeVerdict({ emergency, allocation: api.Planning.allocateMonthly({ incomeCents: income, fixedExpenseCents: 1000000, livingCents: living, emergencyMonthlyCents: 300000, savingCents: 300000 }) });
+  const ok = verdict(1500000, 3500000);
+  assert.equal(ok.level, 'ok');
+  assert.equal(ok.headline, '本月可存 6,000元');
+  assert.equal(ok.fixes.length, 0);
+  assert.deepEqual([...ok.segments.map(s => s.key)], ['fixed', 'living', 'saving', 'spare']);
+  assert.equal(ok.segments.reduce((s, x) => s + x.cents, 0), 3500000); // 長條加總就是收入
+  const tight = verdict(2000000, 3500000);
+  assert.equal(tight.level, 'watch');
+  assert.equal(tight.headline, '本月可存 5,000元，離建議還差 1,000元');
+  assert.deepEqual([...tight.fixes], ['生活費預算降到 19,000元，就能存滿建議金額']);
+  const broke = verdict(2000000, 2500000);
+  assert.equal(broke.level, 'short');
+  assert.equal(broke.headline, '收入不夠付支出，每月差 5,000元');
+  assert.deepEqual([...broke.fixes], ['每月多 11,000元 收入，或減少固定支出']);
+});
+
+test('分配狀態：要處理的狀態附一句可直接照做的解方；正常或收入不夠分配時沒有', () => {
+  const cycle = { elapsedDays: 20, totalDays: 30, daysLeft: 11, ratio: 2 / 3 };
+  const S = (r, f) => api.Planning.allocationStatus({ requestedCents: r.allocatedCents + (r.shortfallCents || 0), shortfallCents: 0, label: '緊急預備金', ...r }, cycle, { accountName: '儲蓄帳戶', ...f });
+  assert.equal(S({ key: 'emergency', allocatedCents: 500000 }, { movedInCents: 200000 }).action, '轉 3,000元 到儲蓄帳戶（緊急預備金）');
+  assert.equal(S({ key: 'emergency', allocatedCents: 500000 }, { movedInCents: 500000 }).action, undefined);
+  assert.equal(S({ key: 'emergency', allocatedCents: 500000, shortfallCents: 100000 }, { movedInCents: 0 }).action, undefined);
+  assert.equal(S({ key: 'fixed', allocatedCents: 500000 }, { dueTotalCents: 500000, paidCents: 0, balanceCents: 100000 }).action, '扣款日前轉 4,000元 到儲蓄帳戶');
+  assert.equal(S({ key: 'living', allocatedCents: 1000000 }, { spentCents: 1200000 }).action, '生活費已超支 2,000元，剩 11 天只花必要開銷');
+});

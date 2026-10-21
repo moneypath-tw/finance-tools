@@ -857,9 +857,10 @@ const App = (() => {
       showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
-    const estimateNotice = hasRecurringIncome ? null : el('div', { class: 'estimate-notice' }, [
+    const openIncomeSettings = () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); $('#personal-settings')?.scrollIntoView({ block: 'start' }); };
+    const estimateNotice = hasRecurringIncome ? null : el('div', { class: 'estimate-notice editor-only' }, [
       el('p', { text: `收入 ${Money.formatTWD(income)} 與支出是「進階財務健檢」的估計值，沒改過就是範例數字。到帳本設定固定收入與支出後，這裡會改用你的實際設定。` }),
-      el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); $('#personal-settings')?.scrollIntoView({ block: 'start' }); } })
+      el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: openIncomeSettings })
     ]);
     // 帳戶數字本身有問題時，上面的狀態都建立在錯的餘額上：非信用帳戶出現負餘額（多半漏記收入或期初餘額），
     // 或緊急預備金放在不算可動用資金的帳戶（投資市價會跌、要賣出才拿得到）（2026-10-22 紅隊 #5）
@@ -870,18 +871,55 @@ const App = (() => {
       ...negativeAccounts.map(a => `${a.name}餘額是 ${Money.formatTWD(accountBalancesNow[a.id])}：可能漏記收入或期初餘額，到「帳戶核對」更新實際餘額`),
       emergencyAccount && !isLiquidNature(emergencyAccount.nature) ? `緊急預備金放在「${emergencyAccount.name}」（${natureLabels()[emergencyAccount.nature] || emergencyAccount.nature}），不算可動用資金：急用時可能要賣出或等待，建議改搭配活存或儲蓄帳戶` : null
     ].filter(Boolean);
-    const accountNotice = accountWarnings.length ? el('div', { class: 'estimate-notice' }, accountWarnings.map(text => el('p', { text }))) : null;
-    // 結論模式看不到分配表，要做的事直接列出來（編輯模式由分配表的狀態欄呈現，不重複）
-    const todoList = flagged.length ? el('div', { class: 'allocation-todo simple-only' }, [
-      el('h3', { text: '本期待辦' }),
-      el('ul', {}, flagged.map(({ row, status }) => el('li', { class: `status-${status.level}` }, [el('strong', { text: `${row.label}：` }), document.createTextNode(status.text)])))
-    ]) : null;
+    const accountNotice = accountWarnings.length ? el('div', { class: 'estimate-notice editor-only' }, accountWarnings.map(text => el('p', { text }))) : null;
+    // 結論模式只給結論與解方（使用者不在乎過程）：一句結論、分配長條、最多 3 件要做的事；計算過程收進「怎麼算的」
+    const verdict = Planning.homeVerdict({ allocation, emergency: savingsHealth.emergency });
+    const { result: healthResult, linkedGoal, noGoal } = healthAssessment();
+    const goalLine = healthResult.ok && !noGoal ? `${linkedGoal?.label || '主要目標'}：每月至少準備 ${Money.formatTWD(healthResult.monthlyGoalContribution)}` : null;
+    const goalRisks = healthResult.ok ? healthResult.risks.filter(r => r.severity === 'high' && r.code.startsWith('GOAL')).map(r => r.text) : [];
+    const actions = [...accountWarnings, ...verdict.fixes, ...flagged.map(s => s.status.action).filter(Boolean), ...goalRisks].slice(0, 3);
+    const bar = el('div', { class: 'home-bar', role: 'img', 'aria-label': verdict.segments.map(s => `${s.label} ${Money.formatTWD(s.cents)}`).join('、') }, verdict.segments.map(s => {
+      const seg = el('span', { class: `seg-${s.key}` });
+      seg.style.flexGrow = String(s.cents); // CSP style-src 'self' blocks style attributes, not CSSOM
+      return seg;
+    }));
+    // 生活費是唯一能直接調的大項；放開滑桿才重算，拖動時只更新數字
+    const livingFloor = expenses.derived ? 0 : q.monthlyEssentialExpenseCents;
+    const livingMax = Math.max(livingFloor, income - fixedExpense, expenses.livingCents);
+    const livingValue = el('strong', { class: 'mono', text: Money.formatTWD(expenses.livingCents) });
+    const em = verdict.emergency;
+    const overview = el('div', { class: `home-overview simple-only level-${verdict.level}` }, [
+      hasRecurringIncome ? null : el('p', { class: 'home-sample' }, [document.createTextNode('目前是範例數字 '), el('button', { type: 'button', class: 'btn small', text: '設定我的收支', onclick: openIncomeSettings })]),
+      el('p', { class: 'home-headline', text: verdict.headline }),
+      el('p', { class: 'home-daily', text: `每天可花 ${Money.formatTWD(savingsHealth.dailyLivingCents)}` }),
+      bar,
+      el('ul', { class: 'home-legend' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}`, text: `${s.label} ${Money.formatTWD(s.cents)}` }))),
+      el('label', { class: 'home-slider' }, [
+        el('span', {}, [document.createTextNode('生活費預算 '), livingValue]),
+        el('input', {
+          type: 'range', min: String(livingFloor / 100), max: String(Math.ceil(livingMax / 100)), step: '100', value: String(Math.round(expenses.livingCents / 100)),
+          oninput: e => { livingValue.textContent = Money.formatTWD(Money.toCents(e.target.value)); },
+          onchange: e => { q.monthlyOtherExpenseCents = Math.max(0, Money.toCents(e.target.value) - livingFloor); IO.markDirty(); renderHealth(); }
+        })
+      ]),
+      em.months === null ? null : el('label', { class: 'home-progress' }, [
+        el('span', { text: `緊急預備金 ${em.months.toFixed(1)}／${em.targetMonths} 個月` }),
+        el('progress', { max: String(em.targetMonths), value: String(Math.min(em.months, em.targetMonths)) })
+      ]),
+      goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
+      actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : el('p', { class: 'home-ok', text: '目前不用做任何事' }),
+      el('details', { class: 'compact-settings', 'data-collapse-id': 'home-how' }, [
+        el('summary', { text: '怎麼算的' }),
+        el('p', { class: 'notice', text: `收入 ${Money.formatTWD(income)} 依序分給固定支出、生活費、緊急預備金、儲蓄與目標；建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。每天可花＝生活費＋未分配的錢 ÷ 本月天數。` }),
+        ...statusRows.filter(s => s.status.level !== 'ok').map(({ row, status }) => el('p', { class: 'notice', text: `${row.label}：${status.text}` }))
+      ])
+    ]);
     root.innerHTML = '';
     root.append(
+      overview,
       ...(estimateNotice ? [estimateNotice] : []),
       ...(accountNotice ? [accountNotice] : []),
-      el('div', { class: 'dashboard-summary' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可切換至編輯模式重新勾選。' })]),
-      ...(todoList ? [todoList] : []),
+      el('div', { class: 'dashboard-summary editor-only' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可在摘要卡設定重新勾選。' })]),
       renderSummaryCardSettings(),
       loanOverview,
       el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${progress.cycle.next.slice(5).replace('-', '/')} 前（${progress.payday ? `依「${progress.payday.name}」每月 ${progress.payday.day} 日發薪` : '尚未設定固定收入，以每月 1 日起算'}）・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天（${Math.round(progress.cycle.ratio * 100)}%）；狀態只看已入帳的帳目與實際餘額` }),
@@ -900,19 +938,14 @@ const App = (() => {
     );
   };
 
-  const renderHealth = () => {
-    const form = $('#health-form');
-    const resultRoot = $('#health-results');
-    if (!form || !resultRoot) return;
-    form.innerHTML = '';
+  // 健檢結論的唯一算法：首頁結論與健檢表單、編輯模式的結論卡都讀這裡
+  const healthAssessment = () => {
     const q = config.quickPlan;
-    renderAllocationDashboard();
     const planForHealth = monthlyPlan();
-    const { recurring: recurringForHealth, expenses: expensesForHealth, hasRecurringIncome } = planForHealth;
+    const { expenses: expensesForHealth } = planForHealth;
     const liquidBalances = getAccountBalances();
     const derivedLiquidAssets = liquidAssetsCents(liquidBalances);
     const hasAccountAssets = derivedLiquidAssets > 0 || ledger.entries.length > 0;
-    const derivedField = (label, cents, note) => el('div', { class: 'field' }, [el('label', { text: label }), el('span', { class: 'mono readonly-value', text: Money.formatTWD(cents) }), el('small', { class: 'notice', text: note })]);
     if (!['month', 'age'].includes(q.goalDeadlineMode)) q.goalDeadlineMode = 'month';
     if (!Number.isFinite(q.goalTargetAge) || q.goalTargetAge <= q.currentAge) q.goalTargetAge = Math.min(120, Math.max(q.currentAge + 1, 30));
     const ageDeadlineDate = new Date();
@@ -924,6 +957,21 @@ const App = (() => {
     const noGoal = q.goalScenarioId === 'none';
     const linkedGoalAmount = linkedGoal ? scenarioTargetCents(linkedGoal) : (noGoal ? 0 : q.goalAmountTodayCents);
     const linkedGoalInvalid = !!linkedGoal && linkedGoalAmount === null;
+    const emergencyReserveCents = hasAccountAssets ? Math.max(0, liquidBalances[config.dashboard.emergencyAccountId] || 0) : q.liquidAssetsCents;
+    const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, emergencyBaseCents: expensesForHealth.emergencyBaseCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : config.inflationRates.TW, monthlyNetIncomeCents: planForHealth.incomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
+    return { planForHealth, derivedLiquidAssets, hasAccountAssets, ageTargetMonth, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result: Planning.assess(effectivePlan) };
+  };
+
+  const renderHealth = () => {
+    const form = $('#health-form');
+    const resultRoot = $('#health-results');
+    if (!form || !resultRoot) return;
+    form.innerHTML = '';
+    const q = config.quickPlan;
+    renderAllocationDashboard();
+    const { planForHealth, derivedLiquidAssets, hasAccountAssets, ageTargetMonth, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result } = healthAssessment();
+    const { recurring: recurringForHealth, expenses: expensesForHealth, hasRecurringIncome } = planForHealth;
+    const derivedField = (label, cents, note) => el('div', { class: 'field' }, [el('label', { text: label }), el('span', { class: 'mono readonly-value', text: Money.formatTWD(cents) }), el('small', { class: 'notice', text: note })]);
     const goalSourceField = el('div', { class: 'field wide' }, [
       el('label', { text: '主要儲蓄目標來源' }),
       el('select', { onchange: e => { q.goalScenarioId = e.target.value; IO.markDirty(); renderHealth(); } }, [
@@ -957,9 +1005,6 @@ const App = (() => {
         el('p', { class: 'notice' }, [document.createTextNode(`預設 ${(REFERENCE_DATA.inflation.TW.annualRate * 100).toFixed(2)}%：${REFERENCE_DATA.inflation.TW.label}（${REFERENCE_DATA.inflation.TW.source}，${REFERENCE_DATA.inflation.TW.observedThrough}）。可手動覆寫。 `), el('a', { href: REFERENCE_DATA.inflation.TW.sourceUrl, target: '_blank', rel: 'noopener', text: '官方來源' })])
       ])
     );
-    const emergencyReserveCents = hasAccountAssets ? Math.max(0, liquidBalances[config.dashboard.emergencyAccountId] || 0) : q.liquidAssetsCents;
-    const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, emergencyBaseCents: expensesForHealth.emergencyBaseCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : config.inflationRates.TW, monthlyNetIncomeCents: planForHealth.incomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
-    const result = Planning.assess(effectivePlan);
     const allocationNow = currentMonthSavingsHealth();
     resultRoot.innerHTML = '';
     if (!result.ok) {
