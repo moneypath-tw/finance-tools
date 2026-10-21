@@ -990,3 +990,16 @@ test('分配狀態：要處理的狀態附一句可直接照做的解方；正�
   assert.equal(S({ key: 'fixed', allocatedCents: 500000 }, { dueTotalCents: 500000, paidCents: 0, balanceCents: 100000 }).action, '扣款日前轉 4,000元 到儲蓄帳戶');
   assert.equal(S({ key: 'living', allocatedCents: 1000000 }, { spentCents: 1200000 }).action, '生活費已超支 2,000元，剩 11 天只花必要開銷');
 });
+
+test('單一權威來源：日期字串、匯率換算、預設月工時、固定項目陣列只在各自的唯一位置處理', () => {
+  const src = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  const others = ['shared/app.js', 'shared/planning.js', 'shared/validation.js'];
+  for (const rel of others) {
+    // 年月／年月日用 Money.ym／Money.ymd；`${ym}-日` 這種由既有年月接日的組法不算
+    assert.doesNotMatch(src(rel), /getMonth\(\) \+ 1\)\.padStart/, `${rel}: 用 Money.ym／Money.ymd`);
+    assert.doesNotMatch(src(rel), /try \{[^}]*toTWDCents/, `${rel}: 用 Money.entryTWDCents`);
+    assert.doesNotMatch(src(rel), /monthlyWorkHours[^;\n]*\b160\b/, `${rel}: 用 PLANNING_RULES.defaultMonthlyWorkHours`);
+  }
+  // migrateConfig 載入時已補成陣列，其他地方不再各自防呆
+  assert.doesNotMatch(src('shared/app.js'), /recurringCashFlows \|\| \[\]|!Array\.isArray\(config\.recurringCashFlows\)/);
+});

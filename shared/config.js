@@ -7,7 +7,8 @@ const PLANNING_RULES = {
   savingsRateTarget: 0.20,
   savingsRateBands: { low: 0.10, healthy: 0.20, strong: 0.40 },
   emergencyMonths: { default: 6, min: 3, max: 18 },
-  emergencyFillMonths: 12
+  emergencyFillMonths: 12,
+  defaultMonthlyWorkHours: 160 // 月薪換算時薪、缺月工時時的預設
 };
 
 const DEFAULT_CONFIG = {
@@ -75,7 +76,7 @@ const DEFAULT_LEDGER = { schemaVersion: 2, entries: [] };
 // field＝dashboard 上存搭配帳戶的欄位；尚未選過時用 fallback 欄位的帳戶，沒有 fallback 就用第一個帳戶
 const ALLOCATION_PURPOSES = [
   { key: 'fixed', label: '固定支出', field: 'fixedExpenseAccountId' },
-  { key: 'living', label: '基本生活需求', field: 'livingAccountId' },
+  { key: 'living', label: '生活費', field: 'livingAccountId' },
   { key: 'emergency', label: '緊急預備金', field: 'emergencyAccountId' },
   { key: 'saving', label: '一般儲蓄', field: 'savingAccountId', fallback: 'emergencyAccountId' }
 ];
@@ -287,7 +288,7 @@ const WAGE_REVERSE_SCENARIO = {
   rateToTWD: 1,
   baseRateCentsPerHour: 21000,
   grossMonthlySalaryCents: 3300000,
-  monthlyWorkHours: 160,
+  monthlyWorkHours: PLANNING_RULES.defaultMonthlyWorkHours,
   insuredSalaryFollowsGross: true,
   linkedRecurringFlowId: 'auto',
   applyInsurance: false,

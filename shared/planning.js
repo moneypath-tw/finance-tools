@@ -32,7 +32,7 @@ const Planning = (() => {
   };
   const fmt = (c) => `${Math.round(c / 100).toLocaleString('en-US')}元`;
   // 緊急預備金的唯一算法：首頁分配、進階健檢與 FIRE 連動都用這裡。
-  // baseMonthlyCents＝未扣任何補助的必要固定支出＋基本生活需求（由 app.js 的 plannedExpenses 提供）
+  // baseMonthlyCents＝未扣任何補助的必要固定支出＋生活費（由 app.js 的 plannedExpenses 提供）
   const emergencyFund = ({ baseMonthlyCents, months, balanceCents }) => {
     const rule = PLANNING_RULES.emergencyMonths;
     const targetMonths = Number.isFinite(months) ? Math.min(rule.max, Math.max(rule.min, months)) : rule.default;
@@ -41,6 +41,12 @@ const Planning = (() => {
     const targetCents = base * targetMonths;
     const gapCents = Math.max(0, targetCents - balance);
     return { baseMonthlyCents: base, targetMonths, targetCents, balanceCents: balance, gapCents, coverageMonths: base > 0 ? balance / base : null, monthlyCents: Math.ceil(gapCents / PLANNING_RULES.emergencyFillMonths) };
+  };
+  // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
+  const purposeLabel = (key) => {
+    const purpose = ALLOCATION_PURPOSES.find(p => p.key === key);
+    if (!purpose) throw new Error(`分配用途 ${key} 未登記在 ALLOCATION_PURPOSES`);
+    return purpose.label;
   };
   const allocateMonthly = ({ incomeCents, livingCents, fixedExpenseCents, emergencyMonthlyCents, savingCents = 0, livingAccountId, fixedExpenseAccountId, emergencyAccountId, savingsAccountId, goals = [] }) => {
     let remaining = Math.max(0, Math.round(incomeCents || 0));
@@ -51,17 +57,11 @@ const Planning = (() => {
       remaining -= allocated;
       rows.push({ key, label, requestedCents: requested, allocatedCents: allocated, shortfallCents: requested - allocated, accountId, required, ...extra });
     };
-    // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
-    const label = (key) => {
-      const purpose = ALLOCATION_PURPOSES.find(p => p.key === key);
-      if (!purpose) throw new Error(`分配用途 ${key} 未登記在 ALLOCATION_PURPOSES`);
-      return purpose.label;
-    };
     // 固定支出是已約定的款項（房租、保費、貸款），收入不足時要先付，再分生活費
-    assign('fixed', label('fixed'), fixedExpenseCents, fixedExpenseAccountId, true);
-    assign('living', label('living'), livingCents, livingAccountId, true);
-    assign('emergency', label('emergency'), emergencyMonthlyCents, emergencyAccountId, true);
-    if (savingCents > 0) assign('saving', label('saving'), savingCents, savingsAccountId, true);
+    assign('fixed', purposeLabel('fixed'), fixedExpenseCents, fixedExpenseAccountId, true);
+    assign('living', purposeLabel('living'), livingCents, livingAccountId, true);
+    assign('emergency', purposeLabel('emergency'), emergencyMonthlyCents, emergencyAccountId, true);
+    if (savingCents > 0) assign('saving', purposeLabel('saving'), savingCents, savingsAccountId, true);
     [...goals].sort((a, b) => (a.months || Infinity) - (b.months || Infinity)).forEach(g => {
       const requested = g.monthlyRequiredCents ?? Math.ceil(Math.max(0, g.gapCents || 0) / Math.max(1, g.months || 1));
       assign(g.key, g.label, requested, g.accountId, false, g);
@@ -76,7 +76,7 @@ const Planning = (() => {
     let start = at(t.getFullYear(), t.getMonth());
     if (start > t) start = at(t.getFullYear(), t.getMonth() - 1);
     const next = at(start.getFullYear(), start.getMonth() + 1);
-    const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    const ymd = Money.ymd; // money.js 載入在後，呼叫時才取用
     const totalDays = Math.round((next - start) / 86400000);
     const elapsedDays = Math.round((t - start) / 86400000) + 1;
     return { payday: d, start: ymd(start), today: ymd(t), next: ymd(next), totalDays, elapsedDays, daysLeft: totalDays - elapsedDays + 1, ratio: elapsedDays / totalDays };
@@ -130,7 +130,7 @@ const Planning = (() => {
   };
   // 首頁結論：只回答「這個月夠不夠、能存多少、差多少怎麼補」，數字全取自同一份分配結果（allocateMonthly）
   const homeVerdict = ({ allocation, emergency }) => {
-    const row = (key) => allocation.rows.find(r => r.key === key) || { requestedCents: 0, allocatedCents: 0, shortfallCents: 0 };
+    const row = (key) => allocation.rows.find(r => r.key === key) || { label: purposeLabel(key), requestedCents: 0, allocatedCents: 0, shortfallCents: 0 };
     const fixed = row('fixed'), living = row('living');
     const spendShort = fixed.shortfallCents + living.shortfallCents;
     const shortfallCents = allocation.rows.reduce((s, r) => s + r.shortfallCents, 0);
@@ -140,11 +140,11 @@ const Planning = (() => {
       : `本月可存 ${fmt(savingCents)}${shortfallCents > 0 ? `，離建議還差 ${fmt(shortfallCents)}` : ''}`;
     const fixes = [];
     // 生活費是唯一能自己調的大項：差額不超過生活費就說要降到多少，否則只能增加收入或減少固定支出
-    if (shortfallCents > 0 && spendShort === 0 && living.requestedCents >= shortfallCents) fixes.push(`生活費預算降到 ${fmt(living.requestedCents - shortfallCents)}，就能存滿建議金額`);
+    if (shortfallCents > 0 && spendShort === 0 && living.requestedCents >= shortfallCents) fixes.push(`${living.label}預算降到 ${fmt(living.requestedCents - shortfallCents)}，就能存滿建議金額`);
     else if (shortfallCents > 0) fixes.push(`每月多 ${fmt(shortfallCents)} 收入，或減少固定支出`);
     const segments = [
-      { key: 'fixed', label: '固定支出', cents: fixed.allocatedCents },
-      { key: 'living', label: '生活費', cents: living.allocatedCents },
+      { key: 'fixed', label: fixed.label, cents: fixed.allocatedCents },
+      { key: 'living', label: living.label, cents: living.allocatedCents },
       { key: 'saving', label: '儲蓄', cents: savingCents },
       shortfallCents > 0 ? { key: 'short', label: '缺', cents: shortfallCents } : { key: 'spare', label: '未分配', cents: allocation.unallocatedCents }
     ].filter(s => s.cents > 0);

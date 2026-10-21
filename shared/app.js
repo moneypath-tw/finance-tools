@@ -29,6 +29,8 @@ const App = (() => {
     // 2026-10 前的舊欄位：勞保 11.5% 是未含就業保險的佔位值、年通膨率改存 inflationRates（0.0191 是當時的預設，視為未覆寫）
     if (sourceConfig.insuranceRates?.laborInsuranceRate === 0.115) nextConfig.insuranceRates.laborInsuranceRate = DEFAULT_CONFIG.insuranceRates.laborInsuranceRate;
     delete nextConfig.insuranceRates.note;
+    // 載入時補一次；之後所有讀取直接當陣列用
+    if (!Array.isArray(nextConfig.recurringCashFlows)) nextConfig.recurringCashFlows = [];
     const legacyRate = sourceConfig.quickPlan?.inflationAnnualRate;
     if (sourceConfig.inflationRates?.TW === undefined && Number.isFinite(legacyRate) && legacyRate !== 0.0191) nextConfig.inflationRates.TW = legacyRate;
     delete nextConfig.quickPlan.inflationAnnualRate;
@@ -133,7 +135,7 @@ const App = (() => {
       const matched = config.accountProfiles.find(a => a.name === entry.account);
       if (matched) entry.account = matched.id;
     }
-    for (const flow of config.recurringCashFlows || []) {
+    for (const flow of config.recurringCashFlows) {
       const matched = config.accountProfiles.find(a => a.name === flow.accountId);
       if (matched) flow.accountId = matched.id;
       const fromMatched = config.accountProfiles.find(a => a.name === flow.fromAccountId);
@@ -161,7 +163,7 @@ const App = (() => {
     for (const { key, field, fallback } of ALLOCATION_PURPOSES) {
       if (valid(config.dashboard[field])) continue;
       // 一般儲蓄沿用改版前的預設：有固定儲蓄就用它轉入的帳戶，否則跟緊急預備金同帳戶
-      const fromFlow = key === 'saving' ? (config.recurringCashFlows || []).find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
+      const fromFlow = key === 'saving' ? config.recurringCashFlows.find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
       config.dashboard[field] = [fromFlow, fallback && config.dashboard[fallback]].find(valid) || first;
     }
     if (!Array.isArray(config.dashboard.summaryCards)) config.dashboard.summaryCards = structuredClone(DEFAULT_CONFIG.dashboard.summaryCards);
@@ -177,8 +179,8 @@ const App = (() => {
     const balances = Object.fromEntries(config.accountProfiles.map(a => [a.id, a.initialBalanceCents || 0]));
     for (const entry of ledger.entries) {
       if (entry.type === 'wishlist' || (!includeProjected && entry.status === 'projected')) continue;
-      let amount;
-      try { amount = Money.toTWDCents(entry.amountCents, entry.currency, entry.rateToTWD); } catch { continue; }
+      const amount = Money.entryTWDCents(entry);
+      if (amount === null) continue;
       if (entry.type === 'transfer') {
         balances[entry.fromAccount] = (balances[entry.fromAccount] || 0) - Math.abs(amount);
         balances[entry.toAccount] = (balances[entry.toAccount] || 0) + Math.abs(amount);
@@ -267,7 +269,6 @@ const App = (() => {
     if (!scenario) return null;
     const repayment = ensureStudentLoanRepayment(scenario);
     const plan = studentLoanPlan(scenario);
-    if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
     let flow = config.recurringCashFlows.find(f => f.id === 'system-student-loan-repayment');
     if (!flow && repayment.includeAsFixedExpense) {
       flow = { id: 'system-student-loan-repayment', name: '學貸每月攤還', type: 'expense', kind: 'fixed_expense', essential: true, source: 'scenario:student_loan' };
@@ -291,17 +292,13 @@ const App = (() => {
     if (!config.accountProfiles.some(a => a.id === scenario.mortgage.accountId)) scenario.mortgage.accountId = config.dashboard.fixedExpenseAccountId || config.accountProfiles[0]?.id || '';
     return scenario.mortgage;
   };
-  const mortgagePlan = (scenario) => {
-    const settings = ensureMortgageSettings(scenario);
-    const principal = settings.principalMode === 'manual' ? settings.manualPrincipalCents : scenario.loanAmountCents;
-    return Money.calcMortgageRepayment(principal, settings, config.personalBaseline.currentAge);
-  };
+  const mortgagePrincipal = (scenario, settings = ensureMortgageSettings(scenario)) => settings.principalMode === 'manual' ? settings.manualPrincipalCents : scenario.loanAmountCents;
+  const mortgagePlan = (scenario) => Money.calcMortgageRepayment(mortgagePrincipal(scenario), ensureMortgageSettings(scenario), config.personalBaseline.currentAge);
   const syncMortgageFixedExpense = () => {
     const scenario = scenarios.find(s => s.scenarioId === 'buy_house');
     if (!scenario) return null;
     const settings = ensureMortgageSettings(scenario);
     const plan = mortgagePlan(scenario);
-    if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
     let flow = config.recurringCashFlows.find(f => f.id === 'system-mortgage-repayment');
     if (!flow && settings.includeAsFixedExpense) {
       flow = { id: 'system-mortgage-repayment', name: '房貸每月攤還', type: 'expense', kind: 'fixed_expense', essential: true, source: 'scenario:mortgage' };
@@ -316,7 +313,7 @@ const App = (() => {
   };
   // 首頁的必要／其他支出：有固定支出項目時，必要支出直接用標為必要的固定支出每月推估，
   // 其他支出＝非必要固定支出＋自填的「固定支出以外的生活開銷」；沒有固定支出時沿用自填的兩個數字
-  // emergencyBaseCents＝緊急預備金的每月基數：未扣補助的必要固定支出＋基本生活需求（沒有固定支出時用自填的必要支出）
+  // emergencyBaseCents＝緊急預備金的每月基數：未扣補助的必要固定支出＋生活費（沒有固定支出時用自填的必要支出）
   const plannedExpenses = (recurring = recurringSummary()) => {
     const q = config.quickPlan;
     const derived = recurring.items.some(f => f.type === 'expense');
@@ -349,8 +346,9 @@ const App = (() => {
     let cents = balances[accountId] || 0;
     for (const e of ledger.entries) {
       if (e.type !== 'transfer' || e.status === 'projected' || !(e.date >= cycle.start && e.date <= cycle.today)) continue;
-      let amount;
-      try { amount = Math.abs(Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD)); } catch { continue; }
+      const signed = Money.entryTWDCents(e);
+      if (signed === null) continue;
+      const amount = Math.abs(signed);
       if (e.toAccount === accountId) cents -= amount;
       if (e.fromAccount === accountId) cents += amount;
     }
@@ -363,7 +361,7 @@ const App = (() => {
     const months = Math.max(1, Planning.monthsBetween(now, targetMonth));
     const summary = scenarioSummary(s);
     // 目標月份已過不能照算（會變成本月要一次存完），排除並請使用者改月份
-    const overdue = targetMonth < `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const overdue = targetMonth < Money.ym(now);
     const invalid = summary.status === 'invalid' || overdue;
     return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: invalid ? 0 : summary.targetCents, invalid, overdue, error: overdue ? '目標月份已過' : (summary.error || null) };
   });
@@ -372,7 +370,7 @@ const App = (() => {
     const recurring = recurringSummary();
     const { mainIncome, cycle } = currentPayCycle(now, recurring);
     const balances = getAccountBalances();
-    const twd = (e) => { try { return Math.abs(Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD)); } catch { return 0; } };
+    const twd = (e) => Math.abs(Money.entryTWDCents(e) ?? 0);
     const inCycle = (e) => e.status !== 'projected' && e.date >= cycle.start && e.date <= cycle.today;
     // 本期（發薪日到下次發薪前）每個固定支出的應扣金額，算法與帳本預測帳目相同
     const dueIds = new Set();
@@ -427,15 +425,15 @@ const App = (() => {
   // 每月計畫的唯一算法：摘要卡、建議分配表都讀這裡的結果
   const currentMonthSavingsHealth = (now = new Date()) => {
     ensureAccountProfiles(); ensureDashboard();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const ym = Money.ym(now);
     const plan = monthlyPlan();
     const { recurring, expenses, hasRecurringIncome } = plan;
     const plannedIncome = plan.incomeCents;
     let actualIncome = 0, actualExpense = 0;
     for (const entry of ledger.entries) {
       if (!entry.date?.startsWith(ym) || entry.status === 'projected') continue;
-      let amount;
-      try { amount = Money.toTWDCents(entry.amountCents, entry.currency, entry.rateToTWD); } catch { continue; }
+      const amount = Money.entryTWDCents(entry);
+      if (amount === null) continue;
       if (entry.type === 'income') actualIncome += Math.max(0, amount);
       else if (entry.type === 'expense') actualExpense += Math.abs(amount);
     }
@@ -478,9 +476,9 @@ const App = (() => {
       monthlyFlexCents: plannedIncome - fixedExpense - expenses.livingCents - recommendedSavingCents
     };
   };
-  const recurringSummary = () => { syncStudentLoanFixedExpense(); syncMortgageFixedExpense(); return Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(flowLinked), config.insuranceRates); };
+  const recurringSummary = () => { syncStudentLoanFixedExpense(); syncMortgageFixedExpense(); return Money.calcRecurringMonthly(config.recurringCashFlows.filter(flowLinked), config.insuranceRates); };
   const syncWageFromLinkedIncome = () => {
-    const flows = (config.recurringCashFlows || []).filter(f => f.type === 'income' && f.active !== false);
+    const flows = config.recurringCashFlows.filter(f => f.type === 'income' && f.active !== false);
     if ((!wageReverseScenario.linkedRecurringFlowId || wageReverseScenario.linkedRecurringFlowId === 'auto') && flows.length) wageReverseScenario.linkedRecurringFlowId = flows[0].id;
     const flow = flows.find(f => f.id === wageReverseScenario.linkedRecurringFlowId);
     if (!flow) return null;
@@ -489,14 +487,11 @@ const App = (() => {
   };
   const materializeDueRecurringEntries = (now = new Date()) => {
     ensureAccountProfiles();
-    if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
-    const year = now.getFullYear(), month = now.getMonth() + 1;
-    const currentYm = `${year}-${String(month).padStart(2, '0')}`;
+    const currentYm = Money.ym(now);
     const summary = recurringSummary();
     const nextMonth = (ym) => {
       const [y, m] = ym.split('-').map(Number);
-      const d = new Date(y, m, 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return Money.ym(new Date(y, m, 1));
     };
     const marker = config.recurringProjectionThroughMonth;
     // 過去月份只補一次；本月每次都重算，固定項目月中改動（新增、改金額、加補助）才會反映到本月預測
@@ -895,7 +890,7 @@ const App = (() => {
       bar,
       el('ul', { class: 'home-legend' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}`, text: `${s.label} ${Money.formatTWD(s.cents)}` }))),
       el('label', { class: 'home-slider' }, [
-        el('span', {}, [document.createTextNode('生活費預算 '), livingValue]),
+        el('span', {}, [document.createTextNode(`${allocation.rows.find(r => r.key === 'living').label}預算 `), livingValue]),
         el('input', {
           type: 'range', min: String(livingFloor / 100), max: String(Math.ceil(livingMax / 100)), step: '100', value: String(Math.round(expenses.livingCents / 100)),
           oninput: e => { livingValue.textContent = Money.formatTWD(Money.toCents(e.target.value)); },
@@ -950,7 +945,7 @@ const App = (() => {
     if (!Number.isFinite(q.goalTargetAge) || q.goalTargetAge <= q.currentAge) q.goalTargetAge = Math.min(120, Math.max(q.currentAge + 1, 30));
     const ageDeadlineDate = new Date();
     ageDeadlineDate.setMonth(ageDeadlineDate.getMonth() + Math.max(1, Math.ceil((q.goalTargetAge - q.currentAge) * 12)));
-    const ageTargetMonth = `${ageDeadlineDate.getFullYear()}-${String(ageDeadlineDate.getMonth() + 1).padStart(2, '0')}`;
+    const ageTargetMonth = Money.ym(ageDeadlineDate);
     const effectiveTargetMonth = q.goalDeadlineMode === 'age' ? ageTargetMonth : q.goalTargetMonth;
     if (!['none', 'manual'].includes(q.goalScenarioId) && !scenarios.some(s => s.scenarioId === q.goalScenarioId)) q.goalScenarioId = 'none';
     const linkedGoal = scenarios.find(s => s.scenarioId === q.goalScenarioId);
@@ -1179,10 +1174,7 @@ const App = (() => {
     for (const e of sorted) {
       const typeLabel = { expense: '支出', income: '收入', wishlist: '願望', transfer: '轉帳' }[e.type];
       const currency = e.currency || 'TWD';
-      const twdEquivalent = (() => {
-        try { return Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD); }
-        catch (err) { return null; }
-      })();
+      const twdEquivalent = Money.entryTWDCents(e);
       const amountCell = twdEquivalent !== null && currency !== 'TWD'
         ? el('td', {}, [
             el('div', { class: e.amountCents < 0 ? 'neg mono' : 'mono', text: Money.formatMoney(e.amountCents, currency) }),
@@ -1212,7 +1204,7 @@ const App = (() => {
     }
 
     // 換算成台幣後才能加總，避免不同幣別的原始金額直接相加（先前修正過的重點原則）
-    const twd = (e) => { try { return Money.toTWDCents(e.amountCents, e.currency, e.rateToTWD); } catch (err) { return 0; } };
+    const twd = (e) => Money.entryTWDCents(e) ?? 0;
 
     const balancesById = getAccountBalances();
     const byAccount = Object.fromEntries(config.accountProfiles.map(a => [a.name, balancesById[a.id] || 0]));
@@ -1302,7 +1294,7 @@ const App = (() => {
     box.innerHTML = '';
     const numField = (label, value, onchange) => numberField(label, value, onchange, 'field');
     const accountRows = config.accountProfiles.map((account) => {
-      const used = ledger.entries.some(e => e.account === account.id || e.account === account.name || e.fromAccount === account.id || e.toAccount === account.id) || (config.recurringCashFlows || []).some(f => f.accountId === account.id || f.fromAccountId === account.id);
+      const used = ledger.entries.some(e => e.account === account.id || e.account === account.name || e.fromAccount === account.id || e.toAccount === account.id) || config.recurringCashFlows.some(f => f.accountId === account.id || f.fromAccountId === account.id);
       return el('div', { class: 'toolbar account-row' }, [
         el('div', { class: 'field' }, [el('label', { text: '帳戶名稱' }), el('input', { value: account.name, onchange: (ev) => { const name = ev.target.value.trim(); if (name) { account.name = name; IO.markDirty(); renderLedgerForm(); renderLedger(); } } })]),
         el('div', { class: 'field' }, [el('label', { text: '性質' }), el('select', { onchange: (ev) => { account.nature = ev.target.value; IO.markDirty(); renderAll(); } }, Object.entries(natureLabels()).map(([value, text]) => el('option', { value, text, selected: account.nature === value ? 'selected' : undefined })))]),
@@ -1329,7 +1321,6 @@ const App = (() => {
       ]),
       el('p', { class: 'notice', text: '收入與支出都會計入指定帳戶；已有交易的帳戶不可直接刪除，以免餘額失去歸屬。關閉「連動固定收支」的帳戶不會出現在固定項目的帳戶選單，掛在上面的固定項目也不計入每月總額。' })
     ]);
-    if (!Array.isArray(config.recurringCashFlows)) config.recurringCashFlows = [];
     // 收入的 amountCents／monthlyWorkHours 由計薪方式推得後寫回，帳本、健檢與工時反推都沿用同一數字
     const syncIncomeFlow = (flow) => {
       if (flow.type === 'expense' && flow.housing) {
@@ -1389,7 +1380,6 @@ const App = (() => {
     };
     const openFlowCard = (id) => { expandedDetailKeys.add(`panel-ledger｜flow-${id}`); };
     const rentCycleNames = { 1: '每月', 2: '每兩個月', 3: '每季', 6: '每半年', 12: '每年' };
-    const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
     const dateField = (label, value, onchange) => el('div', { class: 'field' }, [el('label', { text: label }), el('input', { type: 'date', value: value || '', onchange: (ev) => onchange(ev.target.value) })]);
     const housingFeePresets = ['管理費', '網路費', '水費', '清潔費', '其他'];
     const housingCard = (flow) => {
@@ -1506,7 +1496,7 @@ const App = (() => {
           : incomeField('案件時薪', '元／小時', Money.toYuan(flow.hourlyRateCents || 0), (v) => { flow.hourlyRateCents = Money.toCents(v); saveFlow(); })
       ] : [
         incomeField('每月薪資（稅前）', '元', Money.toYuan(flow.amountCents || 0), (v) => { flow.amountCents = Money.toCents(v); saveFlow(); }, null),
-        incomeField('每月大約工作時數', '小時', flow.monthlyWorkHours || 160, (v) => { if (!(v > 0)) return alert('月工時必須大於 0'); flow.monthlyWorkHours = v; saveFlow(); }, '換算時薪用', '1')
+        incomeField('每月大約工作時數', '小時', flow.monthlyWorkHours || PLANNING_RULES.defaultMonthlyWorkHours, (v) => { if (!(v > 0)) return alert('月工時必須大於 0'); flow.monthlyWorkHours = v; saveFlow(); }, '換算時薪用', '1')
       ];
       const formula = basis === 'hourly'
         ? `時薪 ${yuan(income.hourlyRateCents)} × ${hoursText(income.monthlyWorkHours)} ＝ 本月稅前 ${yuan(income.grossCents)}`
@@ -1615,7 +1605,7 @@ const App = (() => {
       ...flowRows,
       el('div', { class: 'toolbar' }, [
         ...[['monthly', '＋月薪收入', '正職薪水'], ['hourly', '＋時薪兼職', '兼職'], ['per_case', '＋接案收入', '接案']].map(([basis, text, name]) => el('button', { class: 'btn small', text, onclick: () => {
-          const base = { id: createEntryId(), name, type: 'income', kind: payBasisOptions[basis].kind, payBasis: basis, amountCents: 0, dayOfMonth: 5, accountId: config.accountProfiles[0]?.id, monthlyWorkHours: basis === 'monthly' ? 160 : 0, applyInsurance: basis !== 'per_case', insuredSalaryFollowsGross: basis === 'monthly', insuredSalaryCents: 0, active: true };
+          const base = { id: createEntryId(), name, type: 'income', kind: payBasisOptions[basis].kind, payBasis: basis, amountCents: 0, dayOfMonth: 5, accountId: config.accountProfiles[0]?.id, monthlyWorkHours: basis === 'monthly' ? PLANNING_RULES.defaultMonthlyWorkHours : 0, applyInsurance: basis !== 'per_case', insuredSalaryFollowsGross: basis === 'monthly', insuredSalaryCents: 0, active: true };
           openFlowCard(base.id);
           config.recurringCashFlows.push(basis === 'monthly' ? base : { ...base, hourlyRateCents: 0, ...(basis === 'per_case' ? { caseCount: 0, hoursPerCase: 1, caseFeeMode: 'hourly' } : {}) });
           IO.markDirty(); renderPersonalSettings();
@@ -1660,10 +1650,7 @@ const App = (() => {
   let ledgerView = null;
   let pendingSnapshotDelete = null;
   let snapshotMessage = '';
-  const localToday = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  };
+  const localToday = () => Money.ymd(new Date());
   const renderSnapshots = () => {
     const box = $('#ledger-view');
     if (!box) return;
@@ -1724,7 +1711,7 @@ const App = (() => {
       status
     );
 
-    const periods = Snapshots.periods(ledger.snapshots, config.recurringCashFlows || []);
+    const periods = Snapshots.periods(ledger.snapshots, config.recurringCashFlows);
     if (!periods.length) {
       box.append(el('p', { class: 'notice', text: '再核對一次之後，就能看到這段期間用掉多少。' }));
     } else {
@@ -1834,8 +1821,8 @@ const App = (() => {
 
   const renderMortgageRepaymentBlock = (scenario) => {
     const settings = ensureMortgageSettings(scenario);
-    const principal = settings.principalMode === 'manual' ? settings.manualPrincipalCents : scenario.loanAmountCents;
-    const plan = Money.calcMortgageRepayment(principal, settings, config.personalBaseline.currentAge);
+    const principal = mortgagePrincipal(scenario, settings);
+    const plan = mortgagePlan(scenario);
     const stress1 = Money.calcMortgageRepayment(principal, { ...settings, annualRate: settings.annualRate + 0.01 }, config.personalBaseline.currentAge);
     const stress2 = Money.calcMortgageRepayment(principal, { ...settings, annualRate: settings.annualRate + 0.02 }, config.personalBaseline.currentAge);
     const housePrice = Math.max(0, scenario.items.find(i => i.label === '房價')?.amountCents || 0);
@@ -1844,7 +1831,7 @@ const App = (() => {
     // 已存自備款＝首頁此目標從搭配帳戶分得的金額；未勾選此目標時視為 0
     const downPaymentSaved = Math.min(neededDownPayment, currentMonthSavingsHealth().goals.find(g => g.key === scenario.scenarioId)?.savedCents || 0);
     const downPaymentGap = Math.max(0, neededDownPayment - downPaymentSaved);
-    const cashFlowWithoutMortgage = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-mortgage-repayment' && flowLinked(f)), config.insuranceRates);
+    const cashFlowWithoutMortgage = Money.calcRecurringMonthly(config.recurringCashFlows.filter(f => f.id !== 'system-mortgage-repayment' && flowLinked(f)), config.insuranceRates);
     const beforeMortgage = cashFlowWithoutMortgage.incomeCents - cashFlowWithoutMortgage.essentialExpenseCents - cashFlowWithoutMortgage.otherExpenseCents - cashFlowWithoutMortgage.fixedSavingCents;
     const afterPayment = beforeMortgage - plan.currentPaymentCents;
     const burdenRate = cashFlowWithoutMortgage.incomeCents > 0 ? plan.currentPaymentCents / cashFlowWithoutMortgage.incomeCents : null;
@@ -1959,10 +1946,9 @@ const App = (() => {
 
   const renderStudentLoanRepaymentBlock = (scenario, result) => {
     const repayment = ensureStudentLoanRepayment(scenario);
-    const principal = repayment.principalMode === 'manual' ? repayment.manualPrincipalCents : result.grandTotal;
-    const plan = Money.calcStudentLoanRepayment(principal, scenario.periods.filter(p => !p.isLeaveOfAbsence).length, repayment, config.personalBaseline.currentAge);
+    const plan = studentLoanPlan(scenario);
     const statusText = plan.status === 'waiting' ? `尚未起繳；預計 ${plan.repaymentStartAge} 歲開始` : (plan.status === 'repaying' ? `目前在攤還期${repayment.includeAsFixedExpense ? '，已自動納入固定支出' : '，請勾選納入固定支出'}` : `依年齡估算已於 ${plan.repaymentEndAge} 歲完成`);
-    const cashFlowWithoutLoan = Money.calcRecurringMonthly((config.recurringCashFlows || []).filter(f => f.id !== 'system-student-loan-repayment' && flowLinked(f)), config.insuranceRates);
+    const cashFlowWithoutLoan = Money.calcRecurringMonthly(config.recurringCashFlows.filter(f => f.id !== 'system-student-loan-repayment' && flowLinked(f)), config.insuranceRates);
     const availableBeforeLoan = cashFlowWithoutLoan.incomeCents - cashFlowWithoutLoan.essentialExpenseCents - cashFlowWithoutLoan.otherExpenseCents - cashFlowWithoutLoan.fixedSavingCents;
     const afterPayment = availableBeforeLoan - plan.monthlyPaymentCents;
     const burdenRate = cashFlowWithoutLoan.incomeCents > 0 ? plan.monthlyPaymentCents / cashFlowWithoutLoan.incomeCents : null;
@@ -2233,14 +2219,14 @@ const App = (() => {
     const root = $('#wage-body');
     if (!root) return;
     const s = wageReverseScenario;
-    const incomeFlows = (config.recurringCashFlows || []).filter(f => f.type === 'income' && f.active !== false);
+    const incomeFlows = config.recurringCashFlows.filter(f => f.type === 'income' && f.active !== false);
     if ((!s.linkedRecurringFlowId || s.linkedRecurringFlowId === 'auto') && incomeFlows.length) s.linkedRecurringFlowId = incomeFlows[0].id;
     else if (!incomeFlows.length && s.linkedRecurringFlowId === 'auto') s.linkedRecurringFlowId = 'custom';
     let linkedFlow = incomeFlows.find(f => f.id === s.linkedRecurringFlowId);
     if (s.linkedRecurringFlowId !== 'custom' && !linkedFlow) s.linkedRecurringFlowId = 'custom';
     linkedFlow = syncWageFromLinkedIncome();
     if (!Number.isFinite(s.grossMonthlySalaryCents)) s.grossMonthlySalaryCents = s.insuredSalaryCents || 0;
-    if (!Number.isFinite(s.monthlyWorkHours) || s.monthlyWorkHours <= 0) s.monthlyWorkHours = 160;
+    if (!Number.isFinite(s.monthlyWorkHours) || s.monthlyWorkHours <= 0) s.monthlyWorkHours = PLANNING_RULES.defaultMonthlyWorkHours;
     if (s.insuredSalaryFollowsGross === undefined) s.insuredSalaryFollowsGross = false;
     if (s.insuredSalaryFollowsGross) s.insuredSalaryCents = s.grossMonthlySalaryCents;
     const payroll = Money.calcPayroll(s.grossMonthlySalaryCents, s.monthlyWorkHours, s.insuredSalaryCents, config.insuranceRates);
