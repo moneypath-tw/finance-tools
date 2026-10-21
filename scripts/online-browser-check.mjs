@@ -247,7 +247,7 @@ try {
   const pickers = await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); return d ? [...d.querySelectorAll('label')].map(l => l.firstChild.textContent.trim()) : []; })()`);
   await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '一般儲蓄').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   const savingPick = await evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.dashboard.savingAccountId`);
-  check('必備分配帳戶 lists every purpose incl. 一般儲蓄, and the pick is saved', ['固定支出', '基本生活需求', '緊急預備金', '一般儲蓄'].every(x => pickers.includes(x)) && savingPick === 'probe-1', JSON.stringify({ pickers, savingPick }));
+  check('必備分配帳戶 lists every purpose incl. 一般儲蓄, and the pick is saved', ['固定支出', '生活費', '緊急預備金', '一般儲蓄'].every(x => pickers.includes(x)) && savingPick === 'probe-1', JSON.stringify({ pickers, savingPick }));
   // turning a fixed item off mid-month removes its projected entry for this month; turning it back on restores it
   const toggleFixed = () => evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.trim() === '啟用').querySelector('input'); box.click(); return true; })()`);
   const hasFixedEntry = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.some(e => e.id === ${JSON.stringify(`recurring-${fixedFlow?.id}-${nowYm}`)})`);
@@ -276,15 +276,24 @@ try {
 
   // 4b. homepage must not present samples or templates as the user's own situation (2026-10-22 review):
   //     a first visit showed a 300,000 goal, template loans and a red 不足 the user never set up
-  const homeText = `(() => { const vis = (sel) => [...document.querySelectorAll(sel)].filter(x => x.offsetParent !== null).map(x => x.innerText).join('\\n'); const yuan = (t) => Number(String(t).replace(/[^0-9-]/g, '')); const cards = Object.fromEntries([...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].map(c => [c.querySelector('h3').textContent, c.querySelector('.dashboard-mini-value').textContent])); const most = [...document.querySelectorAll('#health-results .summary-block')].find(b => b.querySelector('h3').textContent === '每月最多可存'); return { text: vis('#panel-health'), cards, most: most ? yuan(most.querySelector('.big').textContent) : null, sum: yuan(cards['應儲蓄']) + yuan(cards['月度餘裕']) }; })()`;
+  // simple mode shows only the verdict block; the old cards stay in the DOM for 編輯 mode, so they are still compared
+  const homeText = `(() => { const vis = (sel) => [...document.querySelectorAll(sel)].filter(x => x.offsetParent !== null).map(x => x.innerText).join('\\n'); const yuan = (t) => Number(String(t).replace(/[^0-9-]/g, '')); const cards = Object.fromEntries([...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].map(c => [c.querySelector('h3').textContent, c.querySelector('.dashboard-mini-value').textContent])); const most = [...document.querySelectorAll('#health-results .summary-block')].find(b => b.querySelector('h3').textContent === '每月最多可存'); const o = document.querySelector('.home-overview'); return { text: vis('#panel-health'), cards, most: most ? yuan(most.querySelector('.big').textContent) : null, sum: yuan(cards['應儲蓄']) + yuan(cards['月度餘裕']), level: o?.className.match(/level-(\\w+)/)?.[1], headline: o?.querySelector('.home-headline')?.textContent, legendSum: [...(o?.querySelectorAll('.home-legend li') || [])].filter(li => !li.classList.contains('seg-short')).reduce((s, li) => s + yuan(li.textContent.split(' ').pop()), 0), income: yuan(o?.querySelector('details .notice')?.textContent.match(/收入 ([\\d,]+)元/)?.[1]), slider: o?.querySelector('.home-slider input')?.value, conclusionHidden: document.querySelector('.conclusion-card').offsetParent === null }; })()`;
   await go(`${base}/README.md`);
   await evaluate(`localStorage.clear(); true`);
   await go(`${base}/index.html`);
   await evaluate(`document.querySelector('[data-view-mode=simple]').click(); true`);
   const fresh = await evaluate(homeText);
   check('first visit: sample numbers labelled, no phantom goal, no template loans, status not judged',
-    fresh.text.includes('範例數字') && /主要儲蓄目標\s+未設定/.test(fresh.text) && !/\d+ 年 \d+ 月主要儲蓄目標/.test(fresh.text) && !fresh.text.includes('貸款規劃') && fresh.cards['分配狀態'] === '尚無資料',
-    JSON.stringify({ cards: fresh.cards }));
+    fresh.text.includes('範例數字') && !fresh.text.includes('每月至少準備') && !fresh.text.includes('貸款規劃') && !fresh.text.includes('不足') && fresh.cards['分配狀態'] === '尚無資料',
+    JSON.stringify({ cards: fresh.cards, text: fresh.text.slice(0, 300) }));
+  check('home verdict: one headline, bar adds up to income, 健檢結論 card folded into it', fresh.headline?.startsWith('本月可存') && fresh.legendSum === fresh.income && fresh.income > 0 && fresh.conclusionHidden, JSON.stringify({ headline: fresh.headline, legendSum: fresh.legendSum, income: fresh.income }));
+  // the suggested fix, applied with the slider, closes the gap and survives a reload
+  const livingTarget = Number(fresh.text.match(/生活費預算降到 ([\d,]+)元/)?.[1].replace(/,/g, ''));
+  await evaluate(`(() => { const s = document.querySelector('.home-slider input'); s.value = '${livingTarget}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  const slid = await evaluate(homeText);
+  await go(`${base}/index.html`);
+  const slidReload = await evaluate(homeText);
+  check('living slider applies the suggested budget: gap closed, kept after reload', livingTarget > 0 && slid.level === 'ok' && !slid.headline.includes('還差') && slidReload.slider === String(livingTarget) && slidReload.level === 'ok', JSON.stringify({ livingTarget, slid: slid.headline, reload: slidReload.slider }));
   check('health 每月最多可存 = 應儲蓄 + 月度餘裕 on the cards above', fresh.most !== null && fresh.most === fresh.sum, JSON.stringify(fresh));
   // a save from before the 不設定 option, still holding the untouched sample goal, opens with no goal
   await go(`${base}/README.md`);
@@ -292,7 +301,7 @@ try {
   await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify({ ...envelope, config: legacyGoalConfig }))}); true`);
   await go(`${base}/index.html`);
   const legacyGoal = await evaluate(homeText);
-  check('legacy untouched sample goal migrated to 不設定', /主要儲蓄目標\s+未設定/.test(legacyGoal.text) && !legacyGoal.text.includes('目標無法如期'), legacyGoal.text.slice(0, 300));
+  check('legacy untouched sample goal migrated to 不設定', !legacyGoal.text.includes('每月至少準備') && !legacyGoal.text.includes('目標無法如期'), legacyGoal.text.slice(0, 300));
 
   // 4c. projected ledger entries must be confirmable (2026-10-22: no button existed, so salary never reached the
   //     balance and rent stayed "unpaid" forever); a same-account fixed saving from an old save must not reject

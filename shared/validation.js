@@ -281,10 +281,10 @@ const Validation = (() => {
       target[path] = structuredClone(fallback[path]); repaired++;
     });
     if (data.config.quickPlan) repairFields(data.config.quickPlan, defaults?.quickPlan, validateQuickPlan(data.config.quickPlan).errors);
-    // 月薪收入缺月工時（舊版或手改的存檔）：計算本來就以 160 小時代入，補上同一個值，不讓整份工作區被拒
+    // 月薪收入缺月工時（舊版或手改的存檔）：計算本來就以預設月工時代入，補上同一個值，不讓整份工作區被拒
     (Array.isArray(data.config.recurringCashFlows) ? data.config.recurringCashFlows : []).forEach((f) => {
       if (!f || f.type !== 'income' || (f.payBasis ?? 'monthly') !== 'monthly' || (finite(f.monthlyWorkHours) && f.monthlyWorkHours > 0)) return;
-      f.monthlyWorkHours = 160; repaired++;
+      f.monthlyWorkHours = PLANNING_RULES.defaultMonthlyWorkHours; repaired++;
     });
     // 固定儲蓄轉出、轉入同一帳戶（舊版下拉選單沒擋）：改成另一個帳戶並先停用，
     // 讓使用者確認轉出帳戶後再啟用；不猜測就讓錢開始搬，也不讓整份工作區被拒
