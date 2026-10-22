@@ -48,6 +48,26 @@ const REFERENCE_DATA = {
     retrievedAt: '2026-10-21',
     note: '一般畢業情境估算；實際起算日、利率、展延、承貸銀行帳單及個人資格優先。'
   },
+  // 最低工資：依生效日排序，Planning.minimumWageOn 取某日適用的一筆
+  twMinimumWage: {
+    schedule: [
+      { effectiveFrom: '2026-01-01', monthlyCents: 2950000, hourlyCents: 19600 },
+      { effectiveFrom: '2027-01-01', monthlyCents: 3090000, hourlyCents: 20500 }
+    ],
+    source: '勞動部「歷年最低工資／基本工資調整」；116 年起數額依最低工資審議會決議，行政院 115 年 10 月 1 日院會核定',
+    sourceUrl: 'https://www.mol.gov.tw/1607/28162/28166/28180/70460/76761/',
+    nextUrl: 'https://www.mol.gov.tw/1607/1632/1633/99195/post',
+    approvalUrl: 'https://www.ey.gov.tw/Page/9277F759E41CCD91/59848ab4-676b-41b7-898e-9f5207325f0a',
+    retrievedAt: '2026-10-22'
+  },
+  // 勞基法第 30 條：每週正常工時 40 小時；第 32 條：延長工時每月不得超過 46 小時
+  twLaborStandards: {
+    weeklyNormalHours: 40, monthlyOvertimeCapHours: 46,
+    source: '勞動基準法第 30 條、第 32 條',
+    sourceUrl: 'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=N0030001&flno=30',
+    lawUrl: 'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=N0030001&flno=32',
+    retrievedAt: '2026-10-22'
+  },
   twMortgage: {
     referenceAnnualRate: 0.0337, referenceTermYears: 30,
     source: '臺灣銀行消費者貸款適用利率一覽表（利率指數 1.751%，115 年 9 月 21 日起）及中央銀行不動產貸款規定',

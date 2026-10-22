@@ -58,23 +58,139 @@ const Planning = (() => {
     const spend = new Set(spendIds), saving = new Set(savingIds);
     return { ids: new Set(accounts.filter(a => spend.has(a.id) || a.nature === 'credit' || (a.liquid && !saving.has(a.id))).map(a => a.id)), auto: true };
   };
-  // 近幾個完整發薪週期的生活花費與建議預算：中位數（不被單次大額拉高），無條件進位到百元。
-  // 只算開始記帳之後的完整週期，不然記帳前的空白週期會被當成「沒花錢」
-  const livingSpendHistory = ({ entries, accountIds, payday, today, cycles = PLANNING_RULES.livingSuggestCycles }) => {
+  const median = (list) => {
+    if (!list.length) return null;
+    const sorted = [...list].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  };
+  // 已結束的完整發薪週期（新的在前）：只算開始記帳之後的週期，不然記帳前的空白週期會被當成「沒花錢、沒收入」
+  const pastCycles = ({ entries, payday, today, count }) => {
     const started = entries.filter(e => e.status !== 'projected' && e.type !== 'wishlist' && e.date).map(e => e.date).sort()[0];
     const past = [];
     let c = payCycle(today, payday);
-    while (started && past.length < cycles) {
+    while (started && past.length < count) {
       const [y, m, d] = c.start.split('-').map(Number);
       c = payCycle(new Date(y, m - 1, d - 1), payday);
       if (c.start < started) break;
-      past.push({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next) });
+      past.push(c);
     }
-    if (!past.length) return { cycles: [], medianCents: null, suggestedCents: null };
-    const sorted = past.map(p => p.spentCents).sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    const medianCents = sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
-    return { cycles: past, medianCents, suggestedCents: Math.ceil(medianCents / 10000) * 10000 };
+    return past;
+  };
+  // 近幾個完整發薪週期的生活花費與建議預算：中位數（不被單次大額拉高），無條件進位到百元
+  const livingSpendHistory = ({ entries, accountIds, payday, today, cycles = PLANNING_RULES.livingSuggestCycles }) => {
+    const past = pastCycles({ entries, payday, today, count: cycles }).map(c => ({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next) }));
+    const medianCents = median(past.map(p => p.spentCents));
+    return { cycles: past, medianCents, suggestedCents: medianCents === null ? null : Math.ceil(medianCents / 10000) * 10000 };
+  };
+  // 每期收支報告（存花習慣的唯一資料來源）。互轉不是收入也不是支出，但要看錢有沒有真的放進儲蓄：
+  //   savedCents＝收入－全部支出（＝帳面淨資產增加；帳戶間轉帳互相抵銷）
+  //   toSavingsCents＝從其他帳戶轉進儲蓄帳戶的淨額；withdrawnCents＝從儲蓄帳戶轉回其他帳戶（動用存款）
+  //   spentFromSavingsCents＝直接從儲蓄帳戶付的支出（也是動用存款）
+  //   netWorthEndCents＝期初帳面淨資產（帳戶期初餘額合計）＋到期末為止的收入－支出；投資帳戶不含市價變動
+  //   byCategory：生活花費依分類加總（isLivingSpend）
+  const cycleReports = ({ entries, cycles, livingIds, savingIds, openingCents = 0 }) => {
+    const saving = new Set(savingIds);
+    const cents = (e) => Math.abs(Money.entryTWDCents(e) ?? 0);
+    const realized = entries.filter(e => e.status !== 'projected' && e.type !== 'wishlist' && e.date);
+    return cycles.map(c => {
+      const inside = realized.filter(e => e.date >= c.start && e.date < c.next);
+      const sum = (pred) => inside.filter(pred).reduce((s, e) => s + cents(e), 0);
+      const incomeCents = sum(e => e.type === 'income');
+      const expenseCents = sum(e => e.type === 'expense');
+      const toSavingsCents = sum(e => e.type === 'transfer' && saving.has(e.toAccount) && !saving.has(e.fromAccount));
+      const withdrawnCents = sum(e => e.type === 'transfer' && saving.has(e.fromAccount) && !saving.has(e.toAccount));
+      const byCategory = {};
+      for (const e of inside) if (isLivingSpend(e, livingIds)) byCategory[e.category || '未分類'] = (byCategory[e.category || '未分類'] || 0) + cents(e);
+      const flowsToEnd = realized.filter(e => e.date < c.next).reduce((s, e) => s + (e.type === 'income' ? cents(e) : e.type === 'expense' ? -cents(e) : 0), 0);
+      return {
+        start: c.start, next: c.next, incomeCents, expenseCents,
+        livingCents: Object.values(byCategory).reduce((s, v) => s + v, 0),
+        savedCents: incomeCents - expenseCents, savingsRate: incomeCents > 0 ? (incomeCents - expenseCents) / incomeCents : null,
+        toSavingsCents: toSavingsCents - withdrawnCents, withdrawnCents, spentFromSavingsCents: sum(e => e.type === 'expense' && saving.has(e.account)),
+        netWorthEndCents: openingCents + flowsToEnd, byCategory
+      };
+    });
+  };
+  // 存花習慣：reports 新的在前（cycleReports），current＝本期到今天的報告
+  //   上一期哪個分類比「平常」（再之前幾期的中位數）多花最多；本期哪些分類已超過平常一整期的量
+  //   連續幾期實際存下的錢達到建議儲蓄；存下的錢有沒有轉進儲蓄帳戶、有沒有動用存款
+  const habitInsights = ({ reports, current, recommendedSavingCents }) => {
+    const rule = PLANNING_RULES.habitIncrease;
+    const usual = (from) => {
+      const cats = new Set(from.flatMap(r => Object.keys(r.byCategory)));
+      return Object.fromEntries([...cats].map(k => [k, median(from.map(r => r.byCategory[k] || 0))]));
+    };
+    const notable = (spent, normal) => spent - normal >= Math.max(rule.minCents, normal * rule.ratio);
+    const lines = [];
+    let topIncrease = null;
+    if (reports.length >= 2) {
+      const base = usual(reports.slice(1));
+      for (const [cat, spent] of Object.entries(reports[0].byCategory)) {
+        const normal = base[cat] || 0;
+        if (notable(spent, normal) && (!topIncrease || spent - normal > topIncrease.extraCents)) topIncrease = { category: cat, spentCents: spent, usualCents: normal, extraCents: spent - normal };
+      }
+      if (topIncrease) lines.push(`上期「${topIncrease.category}」花 ${fmt(topIncrease.spentCents)}，比平常多 ${fmt(topIncrease.extraCents)}；回到平常水準每期可多存 ${fmt(topIncrease.extraCents)}`);
+    }
+    const overNow = [];
+    if (current && reports.length) {
+      const base = usual(reports);
+      for (const [cat, spent] of Object.entries(current.byCategory)) if (base[cat] > 0 && spent > base[cat]) overNow.push({ category: cat, spentCents: spent, usualCents: base[cat] });
+      overNow.sort((a, b) => (b.spentCents - b.usualCents) - (a.spentCents - a.usualCents));
+      if (overNow.length) lines.push(`本期「${overNow[0].category}」已花 ${fmt(overNow[0].spentCents)}，超過平常一整期的 ${fmt(overNow[0].usualCents)}`);
+    }
+    let streak = 0;
+    for (const r of reports) { if (recommendedSavingCents > 0 && r.savedCents >= recommendedSavingCents) streak++; else break; }
+    const last = reports[0];
+    if (last) {
+      if (last.withdrawnCents + last.spentFromSavingsCents > 0) lines.push(`上期動用存款 ${fmt(last.withdrawnCents + last.spentFromSavingsCents)}（從儲蓄帳戶轉出或直接付款）`);
+      else if (last.savedCents > 0 && last.toSavingsCents < last.savedCents) lines.push(`上期存下 ${fmt(last.savedCents)}，只有 ${fmt(Math.max(0, last.toSavingsCents))} 轉進儲蓄帳戶；留在生活帳戶的錢容易被花掉`);
+    }
+    return { topIncrease, overNow, streak, lines };
+  };
+  // 照實際存錢速度預測各存錢項目何時達成：實際速度依計畫比例分給各項（與分配表同一順序與比例）
+  //   items：[{ label, gapCents, plannedMonthlyCents, targetMonth? }]；actualMonthlyCents＝近幾期實際存下的中位數
+  const goalForecast = ({ items, plannedSavingCents, actualMonthlyCents, today }) => {
+    const factor = plannedSavingCents > 0 ? Math.max(0, actualMonthlyCents || 0) / plannedSavingCents : 0;
+    return items.filter(i => i.gapCents > 0).map(i => {
+      const pace = Math.floor(i.plannedMonthlyCents * factor);
+      const months = pace > 0 ? Math.ceil(i.gapCents / pace) : null;
+      const d = months === null ? null : new Date(today.getFullYear(), today.getMonth() + months, 1);
+      const doneMonth = d ? Money.ym(d) : null;
+      return { ...i, paceCents: pace, months, doneMonth, late: !!(i.targetMonth && (doneMonth === null || doneMonth > i.targetMonth)) };
+    });
+  };
+  // 支應計畫需要的每月淨收入（與 currentMonthSavingsHealth 的應儲蓄同一規則）：
+  //   應儲蓄 R(I)＝max(savingFloorCents, 儲蓄率基準 × I)；savingFloorCents＝緊急預備金＋成本目標＋存到其他帳戶的固定儲蓄
+  //   minimum＝付得起固定支出與生活費；recommended＝最小的 I 使 I＝支出＋R(I)
+  const requiredIncome = ({ spendCents, savingFloorCents }) => {
+    const spend = Math.max(0, Math.round(spendCents || 0));
+    const floor = Math.max(0, Math.round(savingFloorCents || 0));
+    return { minimumCents: spend, recommendedCents: Math.max(spend + floor, Math.ceil(spend / (1 - PLANNING_RULES.savingsRateTarget))) };
+  };
+  // 要多少工時或時薪才賺得到 needNetCents：只調整一份收入（flow），其他收入照舊（otherNetCents）
+  //   淨額換算稅前用這份收入目前的淨額／稅前比例（勞健保大致隨薪資比例）；時薪與工時都無條件進位
+  //   flow：{ netCents, grossCents, hourlyRateCents, monthlyWorkHours }；maxMonthlyHours＝使用者設定的工時上限
+  const workTarget = ({ needNetCents, otherNetCents = 0, flow, maxMonthlyHours, minimumHourlyCents }) => {
+    const flowNeed = Math.max(0, Math.round(needNetCents - otherNetCents));
+    const ratio = flow.grossCents > 0 && flow.netCents > 0 ? flow.netCents / flow.grossCents : 1;
+    const grossNeeded = Math.ceil(flowNeed / ratio);
+    const toYuan = (c) => Math.ceil(c / 100) * 100;
+    const rate = Math.max(0, flow.hourlyRateCents || 0);
+    const hours = Math.max(0, flow.monthlyWorkHours || 0);
+    const hoursAtRate = rate > 0 ? Math.ceil(grossNeeded / rate) : null;
+    return {
+      grossNeededCents: grossNeeded, hoursAtRate,
+      wageAtHoursCents: hours > 0 ? toYuan(grossNeeded / hours) : null,
+      wageAtMaxCents: maxMonthlyHours > 0 ? Math.max(toYuan(grossNeeded / maxMonthlyHours), minimumHourlyCents || 0) : null,
+      overMax: hoursAtRate !== null && hoursAtRate > maxMonthlyHours,
+      belowMinimum: rate > 0 && minimumHourlyCents > 0 && rate < minimumHourlyCents
+    };
+  };
+  // 某日適用的法定基本工資（reference-data 的唯一來源）；next＝之後已公告、還沒生效的一筆
+  const minimumWageOn = (ymd) => {
+    const list = [...REFERENCE_DATA.twMinimumWage.schedule].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+    return { current: [...list].reverse().find(w => w.effectiveFrom <= ymd) || null, next: list.find(w => w.effectiveFrom > ymd) || null };
   };
   // 帳戶裡本期還要用來付支出的錢：還沒扣的固定支出＋生活費預算還沒花的部分。
   // 同一個帳戶也放存款時，餘額依分配順序（固定支出→生活費→緊急預備金→儲蓄→目標）先留給這些支出，剩下的才算存款
@@ -341,5 +457,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

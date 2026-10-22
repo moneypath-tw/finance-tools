@@ -14,7 +14,7 @@ for (const rel of ['shared/reference-data.js','shared/config.js','shared/validat
 const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,PLANNING_RULES,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
 
 // 外部數字只能來自官方機關網域，且要記錄取得日期，過期時才知道該重查
-const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw)\//;
+const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw|mol\.gov\.tw|ey\.gov\.tw)\//;
 test('外部參考數字皆有官方來源網址與取得日期', () => {
   const entries = [...Object.entries(api.REFERENCE_DATA.inflation).map(([k, v]) => [`inflation.${k}`, v]),
     ...Object.entries(api.REFERENCE_DATA).filter(([k]) => k !== 'inflation')];
@@ -1088,4 +1088,72 @@ test('轉帳指示與分配狀態同一數字：固定支出與生活費同帳�
     const statusLack = (f.transfer ? yuan(f.action) : 0) + (l.transfer ? yuan(l.action) : 0);
     assert.equal(statusLack, plan.transfers[0].remainingCents, `balance ${balance}`);
   }
+});
+
+test('每期收支報告：帳戶間轉帳不算收支；轉進儲蓄、轉回動用、從儲蓄帳戶直接付款分開算', () => {
+  const P = api.Planning;
+  const e = (type, date, yuan, extra) => ({ type, date, amountCents: (type === 'expense' ? -yuan : yuan) * 100, currency: 'TWD', rateToTWD: 1, status: 'realized', ...extra });
+  const entries = [
+    e('income', '2026-09-05', 40000, { account: 'bank' }),
+    e('expense', '2026-09-08', 3000, { account: 'card', category: '食' }),
+    e('transfer', '2026-09-06', 10000, { fromAccount: 'bank', toAccount: 'save' }),
+    e('transfer', '2026-09-20', 2000, { fromAccount: 'save', toAccount: 'bank' }),
+    e('transfer', '2026-09-25', 3000, { fromAccount: 'bank', toAccount: 'card' }), // 卡費：不是儲蓄
+    e('expense', '2026-09-22', 1500, { account: 'save', category: '旅遊' }),
+    e('expense', '2026-09-26', 8000, { account: 'bank', recurringFlowId: 'rent' })
+  ];
+  const [r] = P.cycleReports({ entries, cycles: [{ start: '2026-09-05', next: '2026-10-05' }], livingIds: new Set(['bank', 'card']), savingIds: ['save'], openingCents: 500000 });
+  assert.equal(r.savedCents, (40000 - 3000 - 1500 - 8000) * 100);
+  assert.equal(r.toSavingsCents, 800000);
+  assert.equal(r.withdrawnCents, 200000);
+  assert.equal(r.spentFromSavingsCents, 150000);
+  assert.equal(r.livingCents, 300000);
+  assert.equal(r.netWorthEndCents, 500000 + r.savedCents);
+});
+
+test('存花習慣：上期多花最多的分類、本期已超過平常、動用存款與存了沒轉進儲蓄都提醒；連續達標期數', () => {
+  const P = api.Planning;
+  const rep = (food, drink, saved, extra = {}) => ({ byCategory: { 食: food * 100, 飲料: drink * 100 }, savedCents: saved * 100, toSavingsCents: saved * 100, withdrawnCents: 0, spentFromSavingsCents: 0, ...extra });
+  const reports = [rep(9000, 1000, 9000, { withdrawnCents: 300000 }), rep(6000, 1000, 9000), rep(6200, 1100, 9000), rep(5800, 900, 5000)];
+  const h = P.habitInsights({ reports, current: { byCategory: { 飲料: 150000 } }, recommendedSavingCents: 800000 });
+  assert.equal(h.topIncrease.category, '食');
+  assert.equal(h.topIncrease.extraCents, 300000);
+  assert.equal(h.overNow[0].category, '飲料');
+  assert.equal(h.streak, 3);
+  assert.ok(h.lines.some(l => l.includes('動用存款 3,000元')));
+  // 小波動不提醒（少於 500 元或 20%）
+  assert.equal(P.habitInsights({ reports: [rep(6300, 1000, 1), rep(6000, 1000, 1)], recommendedSavingCents: 0 }).topIncrease, null);
+  const kept = P.habitInsights({ reports: [rep(6000, 1000, 9000, { toSavingsCents: 200000 })], recommendedSavingCents: 0 });
+  assert.ok(kept.lines.some(l => l.includes('只有 2,000元 轉進儲蓄帳戶')));
+});
+
+test('達成預測：實際速度依計畫比例分給各項，晚於目標月份要標示', () => {
+  const P = api.Planning;
+  const f = P.goalForecast({ items: [{ label: '緊急預備金', gapCents: 1200000, plannedMonthlyCents: 200000 }, { label: '旅遊', gapCents: 600000, plannedMonthlyCents: 200000, targetMonth: '2026-12' }, { label: '已達成', gapCents: 0, plannedMonthlyCents: 0 }],
+    plannedSavingCents: 400000, actualMonthlyCents: 200000, today: new Date(2026, 9, 22) });
+  assert.deepEqual(Array.from(f, i => [i.label, i.paceCents, i.months, i.doneMonth, i.late]), [['緊急預備金', 100000, 12, '2027-10', false], ['旅遊', 100000, 6, '2027-04', true]]);
+  assert.equal(P.goalForecast({ items: [{ label: 'x', gapCents: 1, plannedMonthlyCents: 1, targetMonth: '2027-01' }], plannedSavingCents: 1, actualMonthlyCents: -5, today: new Date(2026, 9, 22) })[0].late, true);
+});
+
+test('收入目標：建議收入恰好付得起支出加應儲蓄（與分配同一規則）；工時、時薪、上限與基本工資', () => {
+  const P = api.Planning;
+  const rate = api.PLANNING_RULES.savingsRateTarget;
+  for (const [spend, floor] of [[2500000, 300000], [2500000, 1000000], [0, 0]]) {
+    const r = P.requiredIncome({ spendCents: spend, savingFloorCents: floor });
+    const saving = Math.max(floor, Math.ceil(r.recommendedCents * rate));
+    assert.ok(r.recommendedCents - spend >= saving, `${spend}/${floor}`);
+    assert.ok(r.recommendedCents - 1 - spend < Math.max(floor, Math.ceil((r.recommendedCents - 1) * rate)), `minimal ${spend}/${floor}`);
+  }
+  // 時薪 200、淨額為稅前 90%，另有 5,000 其他收入：要淨 23,000 → 這份要淨 18,000 → 稅前 20,000 → 100 小時
+  const flow = { netCents: 1440000, grossCents: 1600000, hourlyRateCents: 20000, monthlyWorkHours: 80 };
+  const t = P.workTarget({ needNetCents: 2300000, otherNetCents: 500000, flow, maxMonthlyHours: 40 * 52 / 12, minimumHourlyCents: 19600 });
+  assert.deepEqual([t.grossNeededCents, t.hoursAtRate, t.wageAtHoursCents, t.overMax, t.belowMinimum], [2000000, 100, 25000, false, false]);
+  const over = P.workTarget({ needNetCents: 9000000, flow, maxMonthlyHours: 40 * 52 / 12, minimumHourlyCents: 19600 });
+  assert.equal(over.overMax, true);
+  assert.equal(over.wageAtMaxCents, Math.ceil(10000000 / (40 * 52 / 12) / 100) * 100);
+  assert.equal(P.workTarget({ needNetCents: 1, flow: { ...flow, hourlyRateCents: 19000 }, maxMonthlyHours: 100, minimumHourlyCents: 19600 }).belowMinimum, true);
+  // 基本工資依日期取用，下一筆已公告的另外列出
+  const w = P.minimumWageOn('2026-10-22');
+  assert.deepEqual([w.current.hourlyCents, w.next.hourlyCents, w.next.effectiveFrom], [19600, 20500, '2027-01-01']);
+  assert.equal(P.minimumWageOn('2027-01-01').current.hourlyCents, 20500);
 });

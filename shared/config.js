@@ -9,6 +9,9 @@ const PLANNING_RULES = {
   emergencyMonths: { default: 6, min: 3, max: 18 },
   emergencyFillMonths: 12,
   livingSuggestCycles: 3, // 生活費建議值取最近幾個完整發薪週期的實際花費中位數
+  habitCycles: 6, // 存花習慣看最近幾個完整發薪週期
+  habitIncrease: { minCents: 50000, ratio: 0.2 }, // 分類比平常多花至少 500 元且多 20% 才提醒，免得小波動一直跳
+  defaultMaxWeeklyWorkHours: 40, // 工時上限預設＝勞基法每週正常工時（REFERENCE_DATA.twLaborStandards），使用者可改
   defaultMonthlyWorkHours: 160 // 月薪換算時薪、缺月工時時的預設
 };
 
