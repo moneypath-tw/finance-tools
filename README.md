@@ -146,6 +146,8 @@ git config core.hooksPath hooks
 
 ## 開發與測試
 
+程式結構、各數字的唯一來源與計算管線見 [設計架構與計算邏輯](docs/設計架構與計算邏輯.md)。
+
 本專案無第三方執行期套件，使用 Node.js 內建測試器（測試同時編譯 `index.html` 載入的每支腳本與 `sw.js`）：
 
 ```powershell
