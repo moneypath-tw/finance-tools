@@ -65,6 +65,21 @@ const Validation = (() => {
     }) : items;
     if (Array.isArray(s.items)) s.items = normalizeItems(s.items);
     if (Array.isArray(s.itemTemplate)) s.itemTemplate = normalizeItems(s.itemTemplate);
+    // 改版前的旅費情境沒有天數／人數：沒改過的內建項目換成新範例（1 人 10 天總額不變）；
+    // 改過的保留原項目，一律視為「整趟一次、台幣」，總額也不變
+    if (s.scenarioId === 'trip_budget' && s.calcType === 'items' && !s.trip && Array.isArray(s.items)) {
+      const untouched = s.items.length === LEGACY_TRIP_ITEMS.length && s.items.every((item, i) => item?.label === LEGACY_TRIP_ITEMS[i][0] && item.amountCents === LEGACY_TRIP_ITEMS[i][1] && item.kind === 'cost');
+      if (untouched) {
+        const { currency, rateToTWD, inflationKey, applyInflation, trip, items } = structuredClone(SCENARIO_TRIP_BUDGET);
+        Object.assign(s, { currency, rateToTWD, inflationKey, applyInflation, trip, items });
+      } else {
+        const destination = Object.keys(TRIP_DESTINATIONS).find(k => s.inflationKey && TRIP_DESTINATIONS[k].inflationKey === s.inflationKey) || 'OTHER';
+        s.trip = { destination, days: 10, people: 1 };
+        s.currency = TRIP_DESTINATIONS[destination].currency;
+        s.rateToTWD = s.currency === 'TWD' ? 1 : 0;
+        s.items = s.items.map(item => item && typeof item === 'object' ? { ...item, basis: 'trip', currency: 'TWD' } : item);
+      }
+    }
     const discountLabels = new Set((s.itemTemplate || []).filter(item => item?.kind === "discount").map(item => item.label));
     if (Array.isArray(s.periods)) s.periods = s.periods.map(period => {
       if (!period || typeof period !== "object" || !period.overrides || typeof period.overrides !== "object") return period;
@@ -85,6 +100,19 @@ const Validation = (() => {
     if (Array.isArray(s.items)) s.items.forEach((item, i) => {
       if (!item || typeof item.label !== "string" || !item.label.trim() || !["cost", "discount"].includes(item.kind || "cost") || !finite(item.amountCents) || !integer(item.amountCents) || item.amountCents < 0) errors.push(error(path + ".items[" + i + "]", "INVALID_ITEM", "項目必須包含名稱、類型與非負整數分金額"));
     });
+    if (s.trip !== undefined) {
+      const t = s.trip && typeof s.trip === 'object' ? s.trip : {};
+      if (!TRIP_DESTINATIONS[t.destination]) errors.push(error(`${path}.trip.destination`, 'INVALID_DESTINATION', '請選擇旅行目的地'));
+      if (!integer(t.days) || t.days < 1 || t.days > TRIP_LIMITS.maxDays) errors.push(error(`${path}.trip.days`, 'INVALID_DAYS', `旅行天數須為 1–${TRIP_LIMITS.maxDays} 的整數`));
+      if (!integer(t.people) || t.people < 1 || t.people > TRIP_LIMITS.maxPeople) errors.push(error(`${path}.trip.people`, 'INVALID_PEOPLE', `人數須為 1–${TRIP_LIMITS.maxPeople} 的整數`));
+      if (!currencies.has(s.currency || 'TWD')) errors.push(error(`${path}.currency`, 'INVALID_CURRENCY', '不支援此幣別'));
+      const items = Array.isArray(s.items) ? s.items : [];
+      items.forEach((item, i) => {
+        if (!TRIP_BASES[item?.basis || 'trip']) errors.push(error(`${path}.items[${i}].basis`, 'INVALID_BASIS', '計算方式不合法'));
+        if (!['TWD', s.currency].includes(item?.currency || 'TWD')) errors.push(error(`${path}.items[${i}].currency`, 'INVALID_CURRENCY', `「${item?.label}」的幣別只能是台幣或目的地貨幣`));
+      });
+      if ((s.currency || 'TWD') !== 'TWD' && items.some(item => (item?.currency || 'TWD') !== 'TWD') && (!finite(s.rateToTWD) || s.rateToTWD <= 0)) errors.push(error(`${path}.rateToTWD`, 'INVALID_RATE', `請輸入匯率：1 ${s.currency} 等於多少台幣`));
+    }
     if (s.mortgage) {
       if (!finite(s.mortgage.purchaseAge) || s.mortgage.purchaseAge < 0) errors.push(error(`${path}.mortgage.purchaseAge`, 'INVALID_AGE', '購屋年齡必須為非負數'));
       if (!finite(s.mortgage.annualRate) || s.mortgage.annualRate < 0 || s.mortgage.annualRate > 0.20) errors.push(error(`${path}.mortgage.annualRate`, 'INVALID_RATE', '房貸年利率須介於 0%–20%'));

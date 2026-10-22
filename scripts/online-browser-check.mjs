@@ -372,6 +372,22 @@ try {
     habitIncome.habit.length === 3 && habitIncome.income.find(r => r[0] === '目前')?.[3] === '375元' && !!recommendedRow && habitIncome.verdict.includes(recommendedRow[1]) && habitIncome.wage, JSON.stringify(habitIncome));
   check('applying the suggestion sets the living budget and survives reload', applied.slider === '22000' && !applied.button, JSON.stringify({ slider: applied.slider, button: applied.button }));
 
+  // trip budget (2026-10-22): days, people and a JPY item × rate drive the total; kept after reload; no stray "null" text
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=estimator]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); true`);
+  await pickScenario('trip_budget'); await sleep(80);
+  const setTrip = async (sel, value) => { const ok = await evaluate(`(() => { const x = ${sel}; if (!x) return false; x.value = ${JSON.stringify(value)}; x.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`); await sleep(60); return ok; };
+  const tripField = (label) => `[...document.querySelectorAll('#estimator-body .trip-settings .field')].find(f => f.querySelector('label')?.textContent === ${JSON.stringify(label)})?.querySelector('input')`;
+  const lodgingRow = `[...document.querySelectorAll('#estimator-body tbody tr')].find(tr => tr.querySelector('input[type=text]')?.value === '住宿')`;
+  const tripTyped = await setTrip(tripField('天數'), '5') && await setTrip(tripField('人數'), '2') && await setTrip(`document.querySelector('#trip-rate')`, '0.2')
+    && await setTrip(`${lodgingRow}?.querySelector('.trip-currency')`, 'JPY') && await setTrip(`${lodgingRow}?.querySelector('input[type=number]')`, '20000');
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=estimator]').click(); true`);
+  await pickScenario('trip_budget'); await sleep(80);
+  const tripView = await evaluate(`({ lodging: ${lodgingRow}?.querySelector('.trip-subtotal')?.textContent, text: document.querySelector('#estimator-body').innerText })`);
+  // 5 天 4 晚 2 人：機票 20,000＋住宿 ¥20,000×4×0.2＝16,000＋(210＋420＋2,100)×10＝27,300 → 63,300
+  check('trip budget: 5 days × 2 people with a JPY lodging item totals 63,300 and survives reload', tripTyped && tripView.lodging === '16,000元' && tripView.text.includes('總額：63,300元') && !/\bnull\b/.test(tripView.text), JSON.stringify({ tripTyped, lodging: tripView.lodging, text: tripView.text.slice(0, 300) }));
+
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);

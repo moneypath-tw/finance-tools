@@ -1157,3 +1157,46 @@ test('收入目標：建議收入恰好付得起支出加應儲蓄（與分配�
   assert.deepEqual([w.current.hourlyCents, w.next.hourlyCents, w.next.effectiveFrom], [19600, 20500, '2027-01-01']);
   assert.equal(P.minimumWageOn('2027-01-01').current.hourlyCents, 20500);
 });
+
+test('旅費：數量依天數與人數（晚數＝天數－1），預設範例 1 人 10 天總額與改版前相同', () => {
+  const trip = { days: 10, people: 3 };
+  const q = Object.fromEntries(['trip', 'person', 'day', 'person_day', 'night', 'person_night'].map(b => [b, api.Money.tripQuantity(b, trip)]));
+  assert.deepEqual(q, { trip: 1, person: 3, day: 10, person_day: 30, night: 9, person_night: 27 });
+  const s = structuredClone(api.DEFAULT_SCENARIOS.find(x => x.scenarioId === 'trip_budget'));
+  const legacyTotal = 1000000 + 1800000 + 210000 + 420000 + 2100000;
+  assert.equal(api.Money.calcScenario(s, api.DEFAULT_CONFIG).total, legacyTotal);
+  s.trip.people = 2;
+  // 機票與每人每天加倍，整間房的住宿不變
+  assert.equal(api.Money.calcScenario(s, api.DEFAULT_CONFIG).total, 2000000 + 1800000 + 2 * (210000 + 420000 + 2100000));
+});
+
+test('旅費：目的地貨幣的項目乘匯率換成台幣，缺匯率時驗證擋下而不是算成 0', () => {
+  const s = structuredClone(api.DEFAULT_SCENARIOS.find(x => x.scenarioId === 'trip_budget'));
+  s.items = [{ label: '住宿', kind: 'cost', basis: 'night', currency: 'JPY', amountCents: 2000000 }, { label: '折價券', kind: 'discount', basis: 'trip', currency: 'TWD', amountCents: 100000 }];
+  assert.equal(api.Validation.validateScenario(s).errors.map(e => e.code).join(), 'INVALID_RATE');
+  s.rateToTWD = 0.2;
+  assert.equal(api.Validation.validateScenario(s).valid, true);
+  const r = api.Money.calcScenario(s, api.DEFAULT_CONFIG);
+  assert.equal(r.lines[0].twdCents, 3600000); // ¥20,000 × 9 晚 × 0.2
+  assert.equal(r.total, 3500000);
+  assert.match(r.formulaText, /住宿：.*× 9 晚/);
+  s.items[0].currency = 'EUR';
+  s.trip.days = 0;
+  assert.deepEqual(Array.from(api.Validation.validateScenario(s).errors, e => e.code).sort(), ['INVALID_CURRENCY', 'INVALID_DAYS']);
+});
+
+test('旅費：舊存檔沒改過的內建項目換成新範例、改過的保留為整趟台幣，總額都不變', () => {
+  const legacy = { schemaVersion: 2, currency: 'TWD', rateToTWD: 1, calcType: 'items', scenarioId: 'trip_budget', label: '旅費預算試算', applyInflation: true, inflationKey: 'JP',
+    items: [['機票', 1000000], ['民宿', 1800000], ['交通費用（10日）', 210000], ['伙食費（10日）', 420000], ['娛樂費（10日）', 2100000]].map(([label, amountCents]) => ({ label, amountCents })) };
+  const fresh = api.Validation.normalizeScenario(legacy);
+  assert.equal(fresh.trip.days, 10);
+  assert.equal(fresh.items[1].basis, 'night');
+  assert.equal(api.Money.calcScenario(fresh, api.DEFAULT_CONFIG).total, 5530000);
+  const edited = structuredClone(legacy);
+  edited.items[0].amountCents = 1500000;
+  const kept = api.Validation.normalizeScenario(edited);
+  assert.deepEqual([kept.trip.destination, kept.currency, kept.rateToTWD], ['JP', 'JPY', 0]);
+  assert.ok(kept.items.every(i => i.basis === 'trip' && i.currency === 'TWD'));
+  assert.equal(api.Validation.validateScenario(kept).valid, true);
+  assert.equal(api.Money.calcScenario(kept, api.DEFAULT_CONFIG).total, 6030000);
+});
