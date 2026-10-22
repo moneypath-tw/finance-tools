@@ -295,8 +295,43 @@ const Money = (() => {
   // 一次性情境（買房／買地自建／旅費／喪葬）；horizonMonths＝距目標月份的月數，由呼叫端依首頁目標月份算好
   const inflationText = (scenario, config, horizonMonths, factor) =>
     `通膨後總額 = 總額 ×(1＋${scenario.inflationKey} 年通膨率 ${(inflationRateOf(config, scenario.inflationKey) * 100).toFixed(2)}%)^(${horizonMonths} 個月 ÷ 12) = 總額 × ${factor.toFixed(4)}`;
+  // 旅費：數量由天數、人數算出（TRIP_BASES）；目的地貨幣的項目用情境的 rateToTWD 換成台幣，金額 × 數量後只四捨五入一次
+  const tripQuantity = (basis, trip) => {
+    const nights = Math.max(0, trip.days - 1);
+    return { trip: 1, person: trip.people, day: trip.days, person_day: trip.people * trip.days, night: nights, person_night: trip.people * nights }[basis || 'trip'];
+  };
+  const tripItemLines = (scenario) => scenario.items.map((item) => {
+    const basis = item.basis || 'trip', currency = item.currency || 'TWD';
+    const qty = tripQuantity(basis, scenario.trip);
+    const localCents = Math.abs(item.amountCents) * qty;
+    return { label: item.label, kind: item.kind, basis, currency, qty, unitCents: Math.abs(item.amountCents), localCents, twdCents: toTWDCents(localCents, currency, scenario.rateToTWD) };
+  });
+  // 換目的地：用舊貨幣輸入的項目先按舊匯率換成台幣，金額意義才不會跑掉；缺匯率時不動並回報要先補什麼
+  const switchTripDestination = (scenario, key) => {
+    const next = TRIP_DESTINATIONS[key];
+    if (!next) return { ok: false, reason: '沒有這個目的地' };
+    const currency = scenario.currency || 'TWD';
+    const localItems = scenario.items.filter(i => (i.currency || 'TWD') !== 'TWD');
+    if (next.currency !== currency && localItems.length) {
+      if (!(scenario.rateToTWD > 0)) return { ok: false, reason: `有 ${localItems.length} 個項目用 ${currency} 輸入：請先填匯率（換目的地時會換算成台幣），或把這些項目改成台幣` };
+      for (const i of localItems) { i.amountCents = toTWDCents(i.amountCents, currency, scenario.rateToTWD); i.currency = 'TWD'; }
+    }
+    if (next.currency !== currency) scenario.rateToTWD = next.currency === 'TWD' ? 1 : 0;
+    scenario.trip.destination = key;
+    scenario.currency = next.currency;
+    scenario.applyInflation = Boolean(next.inflationKey);
+    if (next.inflationKey) scenario.inflationKey = next.inflationKey;
+    return { ok: true, converted: next.currency !== currency ? localItems.length : 0 };
+  };
+  const tripLineText = (l) => {
+    const unit = TRIP_BASES[l.basis].unit;
+    const qtyText = unit ? ` × ${l.qty} ${unit}` : '';
+    const fx = l.currency === 'TWD' ? '' : ` = ${formatMoney(l.localCents, l.currency)} × 匯率`;
+    return `${l.kind === 'discount' ? '－' : ''}${l.label}：${formatMoney(l.unitCents, l.currency)}${qtyText}${fx} = ${formatTWD(l.twdCents)}`;
+  };
   const calcOneTimeScenario = (scenario, config, horizonMonths = 0) => {
-    const total = sumItems(scenario.items);
+    const lines = scenario.trip ? tripItemLines(scenario) : null;
+    const total = lines ? sumItems(lines.map(l => ({ kind: l.kind, amountCents: l.twdCents }))) : sumItems(scenario.items);
     const multiplier = scenario.applyInflation ? inflationFactor(inflationRateOf(config, scenario.inflationKey), horizonMonths) : 1;
     const inflated = scenario.applyInflation ? applyInflation(total, multiplier) : total;
     const afterLoan = (scenario.loanAmountCents !== undefined && scenario.loanAmountCents !== null)
@@ -309,11 +344,14 @@ const Money = (() => {
       ? (scenario.applyInflation ? inflated : total) - scenario.currentSavedCents
       : null;
 
-    const formulaText = scenario.applyInflation
+    const tripText = lines
+      ? `${scenario.trip.days} 天 ${Math.max(0, scenario.trip.days - 1)} 晚、${scenario.trip.people} 人${scenario.currency !== 'TWD' ? `，匯率 1 ${scenario.currency} = ${scenario.rateToTWD} 元` : ''}\n${lines.map(tripLineText).join('\n')}\n總額 = ${formatTWD(total)}\n`
+      : '';
+    const formulaText = tripText + (scenario.applyInflation
       ? `${inflationText(scenario, config, horizonMonths, multiplier)}\n           = ${formatTWD(total)} × ${multiplier.toFixed(4)} = ${formatTWD(inflated)}`
-      : `總額 = 各項目加總 = ${formatTWD(total)}（此情境未套用通膨）`;
+      : `總額 = 各項目加總 = ${formatTWD(total)}（此情境未套用通膨）`);
 
-    return { total, inflated, afterLoan, inflatedAfterLoan, gap, multiplier, formulaText };
+    return { total, inflated, afterLoan, inflatedAfterLoan, gap, multiplier, formulaText, lines };
   };
 
   // 養老金情境：總額 = 每月生活費 × 12 × (身故年齡－退休年齡)，可選複利通膨到退休年齡
@@ -616,7 +654,7 @@ const Money = (() => {
   };
 
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, inflationRateOf, inflationFactor,
+    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
     getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

@@ -2025,9 +2025,43 @@ const App = (() => {
     ]);
   };
 
+  // 旅費設定：目的地決定貨幣與通膨率；換目的地時，用舊貨幣輸入的項目先按舊匯率換成台幣，金額意義才不會跑掉
+  const renderTripSettings = (scenario, result) => {
+    const trip = scenario.trip;
+    const currency = scenario.currency || 'TWD';
+    const refresh = () => { IO.markDirty(); renderEstimator(); };
+    const changeDestination = (key) => {
+      const r = Money.switchTripDestination(scenario, key);
+      if (!r.ok) alert(r.reason);
+      refresh();
+    };
+    const intField = (label, value, max, set) => numField(label, value, v => { set(Math.min(max, Math.max(1, Math.trunc(v) || 1))); refresh(); });
+    const nights = Math.max(0, trip.days - 1);
+    return el('section', { class: 'estimator-section trip-settings' }, [
+      el('div', { class: 'estimator-field-grid' }, [
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '目的地' }), el('select', { id: 'trip-destination', onchange: e => changeDestination(e.target.value) },
+          Object.entries(TRIP_DESTINATIONS).map(([k, d]) => el('option', { value: k, text: `${d.label}（${d.currency}）`, selected: trip.destination === k ? 'selected' : undefined })))]),
+        intField('天數', trip.days, TRIP_LIMITS.maxDays, v => { trip.days = v; }),
+        intField('人數', trip.people, TRIP_LIMITS.maxPeople, v => { trip.people = v; }),
+        currency !== 'TWD' ? el('div', { class: 'field estimator-field' }, [
+          el('label', { text: `匯率：1 ${currency} ＝ ? 元` }),
+          el('input', { type: 'number', id: 'trip-rate', step: '0.0001', min: '0', class: 'mono', value: scenario.rateToTWD > 0 ? scenario.rateToTWD : '', placeholder: '例如 0.2', onchange: e => { scenario.rateToTWD = Math.max(0, Number(e.target.value) || 0); refresh(); } })
+        ]) : null
+      ]),
+      el('p', { class: 'notice' }, [document.createTextNode(`${trip.days} 天 ${nights} 晚、${trip.people} 人；項目可選「每人」「每天」「每晚」等計算方式，數量自動依天數與人數計算。`),
+        currency !== 'TWD' ? el('span', {}, [document.createTextNode(`項目可用台幣或 ${currency} 輸入；匯率請查`), el('a', { href: FX_RATE_SOURCE.url, target: '_blank', rel: 'noopener', text: FX_RATE_SOURCE.label }), document.createTextNode('（換現金看「現金賣出」，刷卡看「即期賣出」再加海外刷卡手續費）。')]) : null,
+        TRIP_DESTINATIONS[trip.destination]?.inflationKey ? null : document.createTextNode('此目的地沒有內建的官方通膨預測，總額不套用通膨。')]),
+      result && trip.people > 1 ? el('p', { text: `每人平均 ${Money.formatTWD(Math.round((scenario.applyInflation ? result.inflated : result.total) / trip.people))}` }) : null
+    ]);
+  };
+
   const renderOneTimeScenario = (scenario) => {
     const root = $('#estimator-body');
-    const result = calcScenario(scenario);
+    // 旅費缺匯率時換算不了台幣：仍顯示設定與項目讓使用者補上，結果區留空（錯誤訊息由 renderEstimator 顯示）
+    let result = null;
+    try { result = calcScenario(scenario); } catch (err) { if (!scenario.trip) throw err; }
+    const isTrip = Boolean(scenario.trip);
+    const localCurrency = scenario.currency || 'TWD';
 
     const itemRows = scenario.items.map((item, idx) => el('tr', {}, [
       el('td', {}, [el('input', {
@@ -2038,26 +2072,34 @@ const App = (() => {
         el('option', { value: 'cost', text: '成本', selected: (item.kind || 'cost') === 'cost' ? 'selected' : undefined }),
         el('option', { value: 'discount', text: '折扣／減免', selected: item.kind === 'discount' ? 'selected' : undefined })
       ])]),
+      isTrip ? el('td', {}, [el('select', { class: 'trip-basis', onchange: (ev) => { item.basis = ev.target.value; IO.markDirty(); renderEstimator(); } },
+        Object.entries(TRIP_BASES).map(([k, b]) => el('option', { value: k, text: b.label, selected: (item.basis || 'trip') === k ? 'selected' : undefined })))]) : null,
+      isTrip && localCurrency !== 'TWD' ? el('td', {}, [el('select', { class: 'trip-currency', onchange: (ev) => { item.currency = ev.target.value; IO.markDirty(); renderEstimator(); } },
+        ['TWD', localCurrency].map(c => el('option', { value: c, text: c, selected: (item.currency || 'TWD') === c ? 'selected' : undefined })))]) : null,
       el('td', {}, [el('input', {
         type: 'number', value: Money.toYuan(item.amountCents), class: 'mono',
         onchange: (ev) => { item.amountCents = Math.max(0, Money.toCents(ev.target.value)); IO.markDirty(); renderEstimator(); }
       })]),
+      isTrip ? el('td', { class: 'mono trip-subtotal', text: result ? `${result.lines[idx].kind === 'discount' ? '－' : ''}${Money.formatTWD(result.lines[idx].twdCents)}` : '—' }) : null,
       el('td', {}, [el('button', {
         class: 'btn small danger', text: '刪除',
         onclick: () => { scenario.items.splice(idx, 1); IO.markDirty(); renderEstimator(); }
       })])
     ]));
     root.innerHTML = '';
-    const targetForHint = result.gap !== null ? result.gap : (scenario.applyInflation ? result.inflated : result.total);
-    root.append(
+    const targetForHint = result && (result.gap !== null ? result.gap : (scenario.applyInflation ? result.inflated : result.total));
+    const headers = ['項目', '類型', ...(isTrip ? ['計算方式'] : []), ...(isTrip && localCurrency !== 'TWD' ? ['幣別'] : []), isTrip ? '單價' : '金額（元）', ...(isTrip ? ['小計（台幣）'] : []), ''];
+    // 原生 append 會把 null 印成文字「null」，先濾掉不顯示的區塊
+    root.append(...[
       scenario.scenarioId === 'buy_house' ? renderMortgageRepaymentBlock(scenario) : null,
+      isTrip ? renderTripSettings(scenario, result) : null,
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'items-table estimator-items-table' }, [
-        el('thead', {}, [el('tr', {}, [el('th', { text: '項目' }), el('th', { text: '類型' }), el('th', { text: '金額（元）' }), el('th', { text: '' })])]),
+        el('thead', {}, [el('tr', {}, headers.map(text => el('th', { text })))]),
         el('tbody', {}, itemRows)
       ])]),
       el('button', {
         class: 'btn small editor-only', text: '＋新增項目',
-        onclick: () => { scenario.items.push({ label: '新項目', kind: 'cost', amountCents: 0 }); IO.markDirty(); renderEstimator(); }
+        onclick: () => { scenario.items.push(isTrip ? { label: '新項目', kind: 'cost', basis: 'trip', currency: 'TWD', amountCents: 0 } : { label: '新項目', kind: 'cost', amountCents: 0 }); IO.markDirty(); renderEstimator(); }
       }),
       scenario.currentSavedCents !== undefined ? el('div', { class: 'field editor-only' }, [
         el('label', { text: '目前已存金額（元）' }),
@@ -2066,7 +2108,7 @@ const App = (() => {
           onchange: (ev) => { scenario.currentSavedCents = Money.toCents(ev.target.value); IO.markDirty(); renderEstimator(); }
         })
       ]) : empty(),
-      el('div', { class: 'result-block' }, [
+      result && el('div', { class: 'result-block' }, [
         el('p', {}, [document.createTextNode('總額：'), el('span', { class: 'mono big', text: Money.formatTWD(result.total) })]),
         scenario.applyInflation ? el('div', { class: 'field' }, [
           el('label', { text: '目標月份（與首頁此目標同一設定，通膨換算到這個月）' }),
@@ -2082,8 +2124,8 @@ const App = (() => {
           el('pre', { class: 'formula', text: result.formulaText })
         ])
       ]),
-      renderAchievabilityBlock(targetForHint)
-    );
+      result && renderAchievabilityBlock(targetForHint)
+    ].filter(Boolean));
   };
 
   const renderStudentLoanRepaymentBlock = (scenario, result) => {
@@ -2140,7 +2182,7 @@ const App = (() => {
     root.innerHTML = '';
     root.append(
       el('p', { class: 'notice editor-only', text: '此情境為期別型（如學貸），每期套用同一組項目範本，個別期別可覆寫單一項目金額。可標記某期為休學，該期金額自動算 0。' }),
-      scenario.scenarioId === 'student_loan' ? renderStudentLoanRepaymentBlock(scenario, result) : null,
+      scenario.scenarioId === 'student_loan' ? renderStudentLoanRepaymentBlock(scenario, result) : empty(),
       el('details', { class: 'estimator-section editor-only' }, [
         el('summary', { text: '編輯共用欄目' }),
         el('div', { class: 'table-scroll' }, [el('table', { class: 'estimator-items-table' }, [el('tbody', {}, scenario.itemTemplate.map((item, itemIndex) => el('tr', {}, [

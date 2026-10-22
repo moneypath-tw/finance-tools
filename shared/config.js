@@ -151,24 +151,48 @@ const SCENARIO_SELF_BUILD = {
   loanAmountCents: 460000000
 };
 
-// 旅費情境：機票/民宿一次性 + 交通/伙食/娛樂為每日×10天加總，套用日本通膨率
+// 旅費情境：每個項目自選計算方式（整趟／每人／每天／每晚…）與幣別（台幣或目的地貨幣），
+// 小計＝金額 × 數量（由天數、人數算出）× 匯率；目的地決定貨幣與通膨率。金額為起始範例。
+// 晚數＝天數－1（10 天 9 晚）；「每晚」是整間房，「每人每晚」是床位
+const TRIP_BASES = {
+  trip: { label: '整趟一次', unit: '' },
+  person: { label: '每人一次', unit: '人' },
+  day: { label: '每天（全團）', unit: '天' },
+  person_day: { label: '每人每天', unit: '人天' },
+  night: { label: '每晚（整間房）', unit: '晚' },
+  person_night: { label: '每人每晚', unit: '人晚' }
+};
+// inflationKey＝null：reference-data.js 沒有該地官方通膨預測，不套用通膨（不自己編數字）
+const TRIP_DESTINATIONS = {
+  JP: { label: '日本', currency: 'JPY', inflationKey: 'JP' },
+  EU: { label: '歐元區國家', currency: 'EUR', inflationKey: 'EU' },
+  US: { label: '美國', currency: 'USD', inflationKey: null },
+  TW: { label: '台灣國內', currency: 'TWD', inflationKey: 'TW' },
+  OTHER: { label: '其他國家（以台幣輸入）', currency: 'TWD', inflationKey: null }
+};
+const TRIP_LIMITS = { maxDays: 365, maxPeople: 50 };
+// 匯率不內建（每天在變）；請使用者到臺灣銀行查「現金賣出」或「即期賣出」自行填入
+const FX_RATE_SOURCE = { label: '臺灣銀行牌告匯率', url: 'https://rate.bot.com.tw/xrt?Lang=zh-TW' };
 const SCENARIO_TRIP_BUDGET = {
   schemaVersion: 2,
-  currency: 'TWD',
-  rateToTWD: 1,
+  currency: 'JPY',
+  rateToTWD: 0,
   calcType: 'items',
   scenarioId: 'trip_budget',
   label: '旅費預算試算',
   applyInflation: true,
   inflationKey: 'JP',
+  trip: { destination: 'JP', days: 10, people: 1 },
   items: [
-    { label: '機票', amountCents: 1000000 },
-    { label: '民宿', amountCents: 1800000 },
-    { label: '交通費用（10日）', amountCents: 210000 },
-    { label: '伙食費（10日）', amountCents: 420000 },
-    { label: '娛樂費（10日）', amountCents: 2100000 }
+    { label: '機票', kind: 'cost', basis: 'person', currency: 'TWD', amountCents: 1000000 },
+    { label: '住宿', kind: 'cost', basis: 'night', currency: 'TWD', amountCents: 200000 },
+    { label: '交通', kind: 'cost', basis: 'person_day', currency: 'TWD', amountCents: 21000 },
+    { label: '伙食', kind: 'cost', basis: 'person_day', currency: 'TWD', amountCents: 42000 },
+    { label: '娛樂', kind: 'cost', basis: 'person_day', currency: 'TWD', amountCents: 210000 }
   ]
 };
+// 改版前的內建旅費項目（10 天總額、台幣）；存檔中完全沒改過時，載入時換成上面的新範例（1 人 10 天總額相同）
+const LEGACY_TRIP_ITEMS = [['機票', 1000000], ['民宿', 1800000], ['交通費用（10日）', 210000], ['伙食費（10日）', 420000], ['娛樂費（10日）', 2100000]];
 
 // 學貸情境：每學期 學雜費＋電腦網路通訊費＋平安保險費－減免，8 學期逐期呈現
 const SCENARIO_STUDENT_LOAN = {
