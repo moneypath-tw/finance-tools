@@ -952,7 +952,8 @@ const App = (() => {
     const noGoal = q.goalScenarioId === 'none';
     const linkedGoalAmount = linkedGoal ? scenarioTargetCents(linkedGoal) : (noGoal ? 0 : q.goalAmountTodayCents);
     const linkedGoalInvalid = !!linkedGoal && linkedGoalAmount === null;
-    const emergencyReserveCents = hasAccountAssets ? Math.max(0, liquidBalances[config.dashboard.emergencyAccountId] || 0) : q.liquidAssetsCents;
+    // 與首頁進度條同一算法：只看指定帳戶餘額。首訪沒帳戶時曾改用範例的可動用資產 5 萬，編輯模式兩處月數不一致（2026-10-22）
+    const emergencyReserveCents = emergencyPlan(planForHealth, liquidBalances[config.dashboard.emergencyAccountId]).balanceCents;
     const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, emergencyBaseCents: expensesForHealth.emergencyBaseCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : config.inflationRates.TW, monthlyNetIncomeCents: planForHealth.incomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
     return { planForHealth, derivedLiquidAssets, hasAccountAssets, ageTargetMonth, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result: Planning.assess(effectivePlan) };
   };

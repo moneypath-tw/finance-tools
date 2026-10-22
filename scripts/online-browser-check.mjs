@@ -295,6 +295,9 @@ try {
   const slidReload = await evaluate(homeText);
   check('living slider applies the suggested budget: gap closed, kept after reload', livingTarget > 0 && slid.level === 'ok' && !slid.headline.includes('還差') && slidReload.slider === String(livingTarget) && slidReload.level === 'ok', JSON.stringify({ livingTarget, slid: slid.headline, reload: slidReload.slider }));
   check('health 每月最多可存 = 應儲蓄 + 月度餘裕 on the cards above', fresh.most !== null && fresh.most === fresh.sum, JSON.stringify(fresh));
+  // first visit with no accounts: the 健檢 card counted the sample 可動用資產 as emergency reserve while the homepage bar used 0 (2026-10-22)
+  const emergencyBoth = await evaluate(`(() => { const block = [...document.querySelectorAll('#health-results .summary-block')].find(b => b.querySelector('h3').textContent === '緊急預備金'); const bar = [...document.querySelectorAll('.home-overview span')].find(s => s.textContent.startsWith('緊急預備金 ')); return { card: block?.querySelector('.big')?.textContent.match(/[\\d.]+/)?.[0], home: bar?.textContent.match(/緊急預備金 ([\\d.]+)／/)?.[1] }; })()`);
+  check('first visit: 健檢 card and homepage bar show the same emergency months', !!emergencyBoth.card && emergencyBoth.card === emergencyBoth.home, JSON.stringify(emergencyBoth));
   // a save from before the 不設定 option, still holding the untouched sample goal, opens with no goal
   await go(`${base}/README.md`);
   const legacyGoalConfig = { ...sampleConfig, quickPlan: { ...structuredClone(sampleConfig.quickPlan || {}), goalScenarioId: 'manual', goalAmountTodayCents: 30000000, goalTargetMonth: '2028-12' } };
