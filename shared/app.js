@@ -367,15 +367,24 @@ const App = (() => {
     const invalid = summary.status === 'invalid' || overdue;
     return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: invalid ? 0 : summary.targetCents, invalid, overdue, error: overdue ? '目標月份已過' : (summary.error || null) };
   });
-  // 計入生活花費的帳戶，規則在 Planning.livingSpendAccounts；使用者勾選存在 dashboard.livingSpendAccountIds
-  const livingSpendAccountIds = (recurring = recurringSummary()) => {
+  // 帳戶用途：支出（生活費、固定支出、薪資入帳）與儲蓄（緊急預備金、一般儲蓄、成本目標）
+  const accountRoles = (recurring = recurringSummary()) => {
     const d = config.dashboard;
-    return Planning.livingSpendAccounts({
-      accounts: config.accountProfiles.map(a => ({ id: a.id, nature: a.nature, liquid: isLiquidNature(a.nature) })),
-      chosenIds: d.livingSpendAccountIds || [],
+    return {
       spendIds: [d.livingAccountId, d.fixedExpenseAccountId, ...recurring.items.filter(f => f.type === 'income').map(f => f.accountId)],
       savingIds: [d.emergencyAccountId, d.savingAccountId, ...Object.keys(d.scenarioSelections).filter(id => d.scenarioSelections[id]).map(id => d.scenarioAccountMap[id])]
-    });
+    };
+  };
+  // 計入生活花費的帳戶，規則在 Planning.livingSpendAccounts；使用者勾選存在 dashboard.livingSpendAccountIds
+  const livingSpendAccountIds = (recurring = recurringSummary()) => Planning.livingSpendAccounts({
+    accounts: config.accountProfiles.map(a => ({ id: a.id, nature: a.nature, liquid: isLiquidNature(a.nature) })),
+    chosenIds: config.dashboard.livingSpendAccountIds || [], ...accountRoles(recurring)
+  });
+  // 存花習慣裡的「儲蓄帳戶」：只搭配儲蓄用途的帳戶，加上投資等不算可動用、也不是信用卡的帳戶；
+  // 同時是支出帳戶的不算（單一帳戶包辦一切時，分不出哪些錢是存款）
+  const savingsAccountIds = (recurring = recurringSummary()) => {
+    const { spendIds, savingIds } = accountRoles(recurring);
+    return config.accountProfiles.filter(a => !spendIds.includes(a.id) && (savingIds.includes(a.id) || (!isLiquidNature(a.nature) && a.nature !== 'credit'))).map(a => a.id);
   };
   // 本期帳務事實的唯一來源：分配狀態、轉帳指示、緊急預備金與目標的可用餘額都讀這裡。
   // 本期＝主要收入（金額最大的固定收入）發薪日到下次發薪前；只看已入帳（非預測）的帳目與實際餘額
@@ -496,6 +505,8 @@ const App = (() => {
     return {
       ...assessed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
       emergencyMonthlyCents, savingCents, savingsAccountId, goals, allocation, plan, facts,
+      // 應儲蓄的下限（與上面 savingCents 同一規則）：緊急預備金＋成本目標＋存到其他帳戶的固定儲蓄；Planning.requiredIncome 用
+      savingFloorCents: emergencyMonthlyCents + goalMonthlyCents + (sameAccount ? 0 : recurring.fixedSavingCents),
       // 月度餘裕＝收入扣掉固定支出、生活費與全部應儲蓄（含成本目標），負數表示計畫超支
       monthlyFlexCents: plannedIncome - fixedExpense - expenses.livingCents - recommendedSavingCents
     };
@@ -714,6 +725,78 @@ const App = (() => {
     })
   ]);
 
+  // 存花習慣與資產：每期報告（Planning.cycleReports）、分類變化與動用存款（habitInsights）、照實際速度的達成預測（goalForecast）
+  const renderHabits = (health, recurring, spendAccounts) => {
+    const fmt = Money.formatTWD;
+    const today = new Date();
+    const { cycle } = health.facts;
+    const common = { entries: ledger.entries, livingIds: spendAccounts.ids, savingIds: savingsAccountIds(recurring), openingCents: config.accountProfiles.reduce((s, a) => s + (a.initialBalanceCents || 0), 0) };
+    const reports = Planning.cycleReports({ ...common, cycles: Planning.pastCycles({ entries: ledger.entries, payday: cycle.payday, today, count: PLANNING_RULES.habitCycles }) });
+    const [current] = Planning.cycleReports({ ...common, cycles: [cycle] });
+    const habits = Planning.habitInsights({ reports, current, recommendedSavingCents: health.recommendedSavingCents });
+    const actualMonthly = Planning.median(reports.slice(0, PLANNING_RULES.livingSuggestCycles).map(r => r.savedCents));
+    const forecast = actualMonthly === null ? [] : Planning.goalForecast({
+      items: [{ label: '緊急預備金', gapCents: health.emergencyGapCents, plannedMonthlyCents: health.emergencyMonthlyCents },
+        ...health.goals.filter(g => !g.invalid).map(g => ({ label: g.label, gapCents: g.gapCents, plannedMonthlyCents: g.monthlyRequiredCents, targetMonth: g.targetMonth }))],
+      plannedSavingCents: health.recommendedSavingCents, actualMonthlyCents: actualMonthly, today
+    });
+    const pct = (r) => r === null ? '—' : `${(r * 100).toFixed(1)}%`;
+    const node = el('details', { class: 'compact-settings home-habits', 'data-collapse-id': 'home-habits' }, [
+      el('summary', { text: '存花習慣與資產' }),
+      reports.length ? null : el('p', { class: 'notice', text: '還沒有完整一期的記帳；記滿一個發薪週期後開始比較。' }),
+      ...habits.lines.map(text => el('p', { class: 'notice habit-line', text })),
+      reports.length ? el('p', { class: 'notice', text: habits.streak ? `已連續 ${habits.streak} 期存到建議金額 ${fmt(health.recommendedSavingCents)}` : `上期沒存到建議金額 ${fmt(health.recommendedSavingCents)}（存下 ${fmt(reports[0].savedCents)}）` }) : null,
+      reports.length ? el('table', { class: 'habit-table' }, [
+        el('thead', {}, [el('tr', {}, ['期間', '收入', '支出', '存下', '儲蓄率', '轉進儲蓄', '動用存款', '帳面淨資產'].map(text => el('th', { text })))]),
+        el('tbody', {}, reports.map(r => el('tr', {}, [`${r.start.slice(5).replace('-', '/')} 起`, fmt(r.incomeCents), fmt(r.expenseCents), fmt(r.savedCents), pct(r.savingsRate), fmt(r.toSavingsCents), fmt(r.withdrawnCents + r.spentFromSavingsCents), fmt(r.netWorthEndCents)].map(text => el('td', { class: 'mono', text })))))
+      ]) : null,
+      ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：照近期實際速度每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，比目標 ${i.targetMonth} 晚` : ''}` })),
+      el('p', { class: 'notice', text: '存下＝收入－全部支出；帳戶間轉帳不算收支，但從儲蓄帳戶轉回或直接付款算動用存款。帳面淨資產不含投資市價變動。' })
+    ]);
+    return { node, actions: habits.lines.slice(0, 1) };
+  };
+  // 收入目標：支應計畫所需的淨收入（Planning.requiredIncome）換算成工時或時薪（workTarget），對照法定基本工資
+  const renderIncomeTarget = (health, recurring) => {
+    const fmt = Money.formatTWD;
+    const incomes = recurring.items.filter(f => f.type === 'income');
+    // 調整的那份收入：時薪制優先（工時能調），否則取金額最大的
+    const pick = [...incomes].sort((a, b) => (b.income?.payBasis === 'hourly') - (a.income?.payBasis === 'hourly') || b.netCents - a.netCents)[0];
+    const defaultHours = PLANNING_RULES.defaultMonthlyWorkHours;
+    const flow = pick ? { name: pick.name, netCents: pick.netCents, grossCents: pick.grossCents, hourlyRateCents: pick.income?.hourlyRateCents, monthlyWorkHours: pick.income?.monthlyWorkHours }
+      : { name: '範例收入', netCents: health.incomeCents, grossCents: health.incomeCents, hourlyRateCents: Math.round(health.incomeCents / defaultHours), monthlyWorkHours: defaultHours };
+    const otherNetCents = health.incomeCents - flow.netCents;
+    const weeklyMax = Number(config.personalBaseline.maxWeeklyWorkHours) > 0 ? Number(config.personalBaseline.maxWeeklyWorkHours) : PLANNING_RULES.defaultMaxWeeklyWorkHours;
+    const maxMonthlyHours = weeklyMax * 52 / 12;
+    const wage = Planning.minimumWageOn(Money.ymd(new Date()));
+    const minimumHourlyCents = wage.current?.hourlyCents || 0;
+    const spendCents = health.fixedExpenseCents + health.expenses.livingCents;
+    const req = Planning.requiredIncome({ spendCents, savingFloorCents: health.savingFloorCents });
+    const target = (needNetCents) => Planning.workTarget({ needNetCents, otherNetCents, flow, maxMonthlyHours, minimumHourlyCents });
+    const weekly = (monthlyHours) => (monthlyHours * 12 / 52).toFixed(1);
+    const tiers = [['最低（付得起支出）', req.minimumCents], ['建議（含儲蓄與目標）', req.recommendedCents], ['目前', health.incomeCents]];
+    const goalLines = health.goals.filter(g => !g.invalid && g.monthlyRequiredCents > 0).map(g => {
+      const extra = req.recommendedCents - Planning.requiredIncome({ spendCents, savingFloorCents: health.savingFloorCents - g.monthlyRequiredCents }).recommendedCents;
+      const t = Planning.workTarget({ needNetCents: extra, flow, maxMonthlyHours, minimumHourlyCents });
+      return extra > 0 ? `${g.label}（${g.targetMonth} 前存到）：每月要多 ${fmt(extra)}，約每週多 ${t.hoursAtRate === null ? '—' : weekly(t.hoursAtRate)} 小時，或時薪多 ${t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents)}` : null;
+    }).filter(Boolean);
+    const gap = req.recommendedCents - health.incomeCents;
+    return el('details', { class: 'compact-settings home-income-target', 'data-collapse-id': 'home-income-target' }, [
+      el('summary', { text: '收入目標（工時／時薪）' }),
+      el('p', { class: 'notice income-verdict', text: gap > 0 ? `要支應整個計畫，每月淨收入需 ${fmt(req.recommendedCents)}，目前差 ${fmt(gap)}` : `目前收入已足夠支應計畫（建議 ${fmt(req.recommendedCents)}）` }),
+      el('table', { class: 'income-target-table' }, [
+        el('thead', {}, [el('tr', {}, ['', '每月淨收入', `照目前時薪 ${flow.hourlyRateCents ? fmt(flow.hourlyRateCents) : '—'}：每週工時`, `照目前每週 ${weekly(flow.monthlyWorkHours || 0)} 小時：時薪`].map(text => el('th', { text })))]),
+        el('tbody', {}, tiers.map(([label, need]) => {
+          const t = target(need);
+          const hoursText = t.hoursAtRate === null ? '—' : `${weekly(t.hoursAtRate)} 小時${t.overMax ? `（超過上限 ${weeklyMax}，時薪需 ${fmt(t.wageAtMaxCents)}）` : ''}`;
+          return el('tr', {}, [label, fmt(need), hoursText, t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents)].map(text => el('td', { class: 'mono', text })));
+        }))
+      ]),
+      ...goalLines.map(text => el('p', { class: 'notice', text })),
+      wage.current ? el('p', { class: `notice${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? ' negative' : ''}`, text: `法定基本工資時薪 ${fmt(wage.current.hourlyCents)}（${wage.current.effectiveFrom} 起）${wage.next ? `；${wage.next.effectiveFrom} 起 ${fmt(wage.next.hourlyCents)}` : ''}${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? '。你的時薪低於基本工資，可向雇主或勞工局反映' : ''}` }) : null,
+      el('label', { class: 'field' }, [document.createTextNode('每週可工作時數上限 '), el('input', { type: 'number', min: '1', max: '84', value: String(weeklyMax), onchange: e => { config.personalBaseline.maxWeeklyWorkHours = Math.max(1, Math.min(84, Number(e.target.value) || PLANNING_RULES.defaultMaxWeeklyWorkHours)); IO.markDirty(); renderAllocationDashboard(); } })]),
+      el('p', { class: 'notice', text: `調整的是「${flow.name}」，其他收入照舊；淨額換稅前用這份收入目前的比例（勞健保大致隨薪資）。上限預設為勞基法每週正常工時 ${REFERENCE_DATA.twLaborStandards.weeklyNormalHours} 小時。` })
+    ]);
+  };
   const renderAllocationDashboard = () => {
     const root = $('#allocation-dashboard');
     if (!root) return;
@@ -907,11 +990,13 @@ const App = (() => {
     const goalLine = healthResult.ok && !noGoal ? `${linkedGoal?.label || '主要目標'}：每月至少準備 ${Money.formatTWD(healthResult.monthlyGoalContribution)}` : null;
     const goalRisks = healthResult.ok ? healthResult.risks.filter(r => r.severity === 'high' && r.code.startsWith('GOAL')).map(r => r.text) : [];
     // 轉帳指示依目的帳戶合併（Planning.transferPlan），不再逐列各說一次；其他解方（確認入帳、控制花費）照列
+    const habitsView = renderHabits(savingsHealth, recurring, spendAccounts);
+    const incomeView = renderIncomeTarget(savingsHealth, recurring);
     const sourceName = savingsHealth.facts.mainIncome ? accountName(savingsHealth.facts.mainIncome.accountId) : null;
     const transferLines = savingsHealth.facts.noData ? [] : progress.transfers.transfers.filter(t => t.remainingCents > 0).map(t => t.stay
       ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.remainingCents)}：從其他帳戶轉進來`
       : `${sourceName ? `從${sourceName}` : ''}轉 ${Money.formatTWD(t.remainingCents)} 到${accountName(t.accountId)}（${t.purposes.join('、')}）`);
-    const actions = [...accountWarnings, ...verdict.fixes, ...transferLines, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks].slice(0, 3);
+    const actions = [...accountWarnings, ...verdict.fixes, ...transferLines, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入
     const standingPlan = [
       ...progress.transfers.transfers.filter(t => !t.stay).map(t => `轉 ${Money.formatTWD(t.plannedCents)} 到${accountName(t.accountId)}（${t.purposes.join('、')}）`),
@@ -955,6 +1040,8 @@ const App = (() => {
       ]),
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : el('p', { class: 'home-ok', text: '目前不用做任何事' }),
+      habitsView.node,
+      incomeView,
       el('details', { class: 'compact-settings', 'data-collapse-id': 'home-how' }, [
         el('summary', { text: '怎麼算的' }),
         el('p', { class: 'notice', text: `收入 ${Money.formatTWD(income)} 依序分給固定支出、生活費、緊急預備金、儲蓄與目標；建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。每天可花＝生活費＋未分配的錢 ÷ 本月天數。` }),
