@@ -1003,3 +1003,89 @@ test('單一權威來源：日期字串、匯率換算、預設月工時、固�
   // migrateConfig 載入時已補成陣列，其他地方不再各自防呆
   assert.doesNotMatch(src('shared/app.js'), /recurringCashFlows \|\| \[\]|!Array\.isArray\(config\.recurringCashFlows\)/);
 });
+
+test('生活花費帳戶：自動判斷涵蓋常見帳戶組合，自選優先、無效帳戶忽略', () => {
+  const P = api.Planning;
+  const acc = (id, nature, liquid) => ({ id, nature, liquid });
+  const ids = (r) => [...r.ids].sort().join(',');
+  // 單一銀行帳戶包辦一切（預設設定）：銀行與現金都算
+  const single = P.livingSpendAccounts({ accounts: [acc('cash', 'cash', true), acc('bank', 'checking', true)], spendIds: ['bank', 'bank'], savingIds: ['bank'] });
+  assert.equal(ids(single), 'bank,cash');
+  assert.equal(single.auto, true);
+  // 薪轉＋信用卡＋儲蓄帳戶（緊急預備金、旅遊目標）＋投資：只算薪轉、信用卡、現金
+  const split = [acc('salary', 'checking', true), acc('card', 'credit', false), acc('save', 'savings', true), acc('trip', 'earmarked', true), acc('etf', 'investment', false), acc('cash', 'cash', true)];
+  assert.equal(ids(P.livingSpendAccounts({ accounts: split, spendIds: ['salary', 'salary', 'salary'], savingIds: ['save', 'save', 'trip'] })), 'card,cash,salary');
+  // 生活費帳戶同時是緊急預備金帳戶：仍算（支出用途優先）
+  assert.equal(ids(P.livingSpendAccounts({ accounts: split, spendIds: ['save', 'salary'], savingIds: ['save'] })), 'card,cash,salary,save,trip');
+  // 自選優先；不存在的帳戶忽略；全部無效＝回到自動
+  const chosen = P.livingSpendAccounts({ accounts: split, chosenIds: ['card', 'gone'], spendIds: ['salary'] });
+  assert.equal(ids(chosen), 'card');
+  assert.equal(chosen.auto, false);
+  assert.equal(P.livingSpendAccounts({ accounts: split, chosenIds: ['gone'], spendIds: ['salary'] }).auto, true);
+});
+
+test('生活花費：刷卡算、卡費轉帳不重複、固定項目與預測與儲蓄帳戶不算；建議值取完整週期中位數', () => {
+  const P = api.Planning;
+  const ids = new Set(['salary', 'card']);
+  const exp = (date, yuan, account, extra = {}) => ({ type: 'expense', date, amountCents: -yuan * 100, currency: 'TWD', rateToTWD: 1, account, status: 'realized', ...extra });
+  const entries = [
+    exp('2026-07-20', 999, 'salary'), // 記帳開始在週期中間：07-05 起那期不完整，不算
+    exp('2026-08-10', 9000, 'card'), exp('2026-08-20', 1000, 'salary'),
+    { type: 'transfer', date: '2026-08-25', amountCents: 9000 * 100, currency: 'TWD', rateToTWD: 1, fromAccount: 'salary', toAccount: 'card', status: 'realized' },
+    exp('2026-08-26', 8000, 'salary', { recurringFlowId: 'rent' }), // 固定支出
+    exp('2026-09-10', 12000, 'salary'), exp('2026-09-12', 5000, 'save'), // 動用儲蓄帳戶不算
+    exp('2026-09-15', 10, undefined, { currency: 'USD', rateToTWD: 32 }), // 沒帳戶的舊帳目算，外幣換台幣
+    exp('2026-09-30', 30000, 'card', { status: 'projected' }),
+    exp('2026-10-01', 40000, 'card') // 單次大額：中位數不受影響
+  ];
+  assert.equal(P.livingSpendCents(entries, ids, '2026-08-05', '2026-09-05'), 1000000);
+  const h = P.livingSpendHistory({ entries, accountIds: ids, payday: 5, today: new Date(2026, 9, 22) });
+  assert.deepEqual(Array.from(h.cycles, c => [c.start, c.spentCents]), [['2026-09-05', 4000000 + 1232000], ['2026-08-05', 1000000]]);
+  assert.equal(h.medianCents, Math.round((1000000 + 5232000) / 2));
+  assert.equal(h.suggestedCents, 3120000); // 31,160 進位到 31,200
+  assert.equal(P.livingSpendHistory({ entries: [exp('2026-10-10', 100, 'card')], accountIds: ids, payday: 5, today: new Date(2026, 9, 22) }).suggestedCents, null);
+});
+
+test('轉帳指示：依帳戶合併、加總等於已分配收入；同帳戶轉入先算支出、存入的錢不算可用餘額', () => {
+  const P = api.Planning;
+  const rows = [
+    { key: 'fixed', label: '固定支出', allocatedCents: 1000000, accountId: 'salary' },
+    { key: 'living', label: '生活費', allocatedCents: 1200000, accountId: 'spend' },
+    { key: 'emergency', label: '緊急預備金', allocatedCents: 300000, accountId: 'save' },
+    { key: 'saving', label: '一般儲蓄', allocatedCents: 200000, accountId: 'save' },
+    { key: 'trip', label: '旅遊', allocatedCents: 0, accountId: 'save' }
+  ];
+  const plan = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { spend: { balanceCents: 200000 }, save: { balanceCents: 900000, movedInCents: 100000, projectedInCents: 150000 } }, spendingNeed: { salary: 600000, spend: 1200000 } });
+  const save = plan.transfers.find(t => t.accountId === 'save');
+  assert.deepEqual(Array.from(save.purposes), ['緊急預備金', '一般儲蓄']);
+  assert.equal(plan.transfers.filter(t => !t.stay).reduce((s, t) => s + t.plannedCents, 0) + plan.stayCents, 2700000);
+  // 已轉入 1,000 先給緊急預備金，固定儲蓄預計 1,500 再補：3,000+2,000－1,000－1,500＝2,500
+  assert.equal(save.remainingCents, 250000);
+  assert.deepEqual({ ...plan.rowFacts.emergency }, { movedInCents: 100000, projectedInCents: 150000 });
+  assert.equal(plan.transfers.find(t => t.accountId === 'spend').remainingCents, 1000000);
+  // 薪資帳戶餘額不足只回報缺額（stay），不叫你從自己轉給自己
+  const short = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { salary: { balanceCents: 400000 } }, spendingNeed: { salary: 600000 } }).transfers.find(t => t.accountId === 'salary');
+  assert.deepEqual([short.stay, short.remainingCents], [true, 200000]);
+  // 生活費與緊急預備金同帳戶：本期轉入 15,000 先抵生活費 12,000，剩 3,000 才算存入；存入的錢不能拿來付生活費
+  const shared = rows.map(r => r.key === 'living' ? { ...r, accountId: 'save' } : r);
+  const s2 = P.transferPlan({ rows: shared, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 1500000, movedInCents: 1500000 } }, spendingNeed: { save: 1200000 } });
+  assert.deepEqual({ ...s2.rowFacts.emergency }, { movedInCents: 300000, projectedInCents: 0 });
+  assert.equal(s2.transfers.find(t => t.accountId === 'save').spendLackCents, 0);
+  assert.equal(s2.transfers.find(t => t.accountId === 'save').remainingCents, 200000); // 只差一般儲蓄 2,000
+});
+
+test('轉帳指示與分配狀態同一數字：固定支出與生活費同帳戶時，兩列缺額加總＝轉帳指示', () => {
+  const P = api.Planning;
+  const cycle = P.payCycle(new Date(2026, 9, 22), 5);
+  const fixed = { key: 'fixed', label: '固定支出', allocatedCents: 1000000, requestedCents: 1000000, shortfallCents: 0, accountId: 'spend' };
+  const living = { key: 'living', label: '生活費', allocatedCents: 1200000, requestedCents: 1200000, shortfallCents: 0, accountId: 'spend' };
+  const yuan = (s) => Number(s.match(/轉 ([\d,]+)元/)?.[1].replace(/,/g, '') || 0) * 100;
+  for (const balance of [300000, 900000, 1500000]) {
+    const need = P.spendingNeedByAccount({ fixedAccountId: 'spend', livingAccountId: 'spend', fixedDueRemainingCents: 800000, livingBudgetCents: 1200000, livingSpentCents: 500000 });
+    const plan = P.transferPlan({ rows: [fixed, living], accounts: { spend: { balanceCents: balance } }, spendingNeed: need });
+    const f = P.allocationStatus(fixed, cycle, { accountName: 'A', balanceCents: balance, dueTotalCents: 800000, paidCents: 0 });
+    const l = P.allocationStatus(living, cycle, { accountName: 'A', balanceCents: balance - 800000, spentCents: 500000 });
+    const statusLack = (f.transfer ? yuan(f.action) : 0) + (l.transfer ? yuan(l.action) : 0);
+    assert.equal(statusLack, plan.transfers[0].remainingCents, `balance ${balance}`);
+  }
+});

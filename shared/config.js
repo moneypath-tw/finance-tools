@@ -8,6 +8,7 @@ const PLANNING_RULES = {
   savingsRateBands: { low: 0.10, healthy: 0.20, strong: 0.40 },
   emergencyMonths: { default: 6, min: 3, max: 18 },
   emergencyFillMonths: 12,
+  livingSuggestCycles: 3, // 生活費建議值取最近幾個完整發薪週期的實際花費中位數
   defaultMonthlyWorkHours: 160 // 月薪換算時薪、缺月工時時的預設
 };
 

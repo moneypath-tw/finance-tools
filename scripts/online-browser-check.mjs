@@ -334,6 +334,39 @@ try {
   const rentAfter = await evaluate(`(() => { const all = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.filter(e => e.id === 'recurring-rent-${ym}'); return { n: all.length, status: all[0]?.status, cents: all[0]?.amountCents, note: all[0]?.note, card: ${statusNote} }; })()`);
   check('rent confirmed at the actual 12,500 survives reload once, fixed row no longer flagged', confirmedRent && rentAfter.n === 1 && rentAfter.status === 'realized' && rentAfter.cents === -1250000 && !rentAfter.note.includes('預測') && !rentAfter.card.includes('固定支出'), JSON.stringify(rentAfter));
 
+  // 4d. transfers merged per account, and the living budget suggestion from the chosen accounts' actual spending
+  //     (2026-10-22): card spending counts, the card payment (a transfer) and spending from the savings account do not
+  const ymBack = (k) => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - k); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const spendConfig = { ...sampleConfig,
+    ui: { ...sampleConfig.ui, viewMode: 'simple' },
+    accountProfiles: [{ id: 'acc-bank', name: '薪轉', nature: 'checking', initialBalanceCents: 0 }, { id: 'acc-card', name: '信用卡', nature: 'credit', initialBalanceCents: 0 }, { id: 'acc-save', name: '儲蓄', nature: 'savings', initialBalanceCents: 5000000 }],
+    recurringCashFlows: [
+      { id: 'job', name: '正職', type: 'income', kind: 'salary', payBasis: 'monthly', amountCents: 6000000, monthlyWorkHours: 160, dayOfMonth: 1, accountId: 'acc-bank', applyInsurance: false, active: true },
+      { id: 'rent', name: '房租', type: 'expense', kind: 'fixed_expense', amountCents: 1000000, dayOfMonth: 28, accountId: 'acc-bank', essential: true, active: true }],
+    quickPlan: { ...sampleConfig.quickPlan, monthlyOtherExpenseCents: 1500000 },
+    dashboard: { emergencyAccountId: 'acc-save', savingAccountId: 'acc-save', livingAccountId: 'acc-bank', fixedExpenseAccountId: 'acc-bank' } };
+  const spend = (id, ymd, account, yuan) => ({ id, date: ymd, type: 'expense', category: '食', account, currency: 'TWD', rateToTWD: 1, amountCents: -yuan * 100, essential: false, reimbursable: false, status: 'realized', note: '' });
+  const spendLedger = { schemaVersion: 1, entries: [
+    { id: 'pay0', date: `${ymBack(0)}-01`, type: 'income', category: '薪資', account: 'acc-bank', currency: 'TWD', rateToTWD: 1, amountCents: 6000000, status: 'realized', note: '' },
+    spend('m3', `${ymBack(3)}-01`, 'acc-card', 50000), spend('m2', `${ymBack(2)}-10`, 'acc-card', 20000), spend('m1', `${ymBack(1)}-10`, 'acc-card', 22000),
+    spend('fromsave', `${ymBack(2)}-12`, 'acc-save', 30000),
+    { id: 'cardbill', date: `${ymBack(1)}-20`, type: 'transfer', fromAccount: 'acc-bank', toAccount: 'acc-card', currency: 'TWD', rateToTWD: 1, amountCents: 2000000, status: 'realized', note: '' }] };
+  await go(`${base}/README.md`);
+  await evaluate(`localStorage.setItem('finance-tools.workspace.v1', ${JSON.stringify(JSON.stringify({ ...envelope, config: spendConfig, ledger: spendLedger }))}); localStorage.removeItem('finance-tools.workspace.rejected'); true`);
+  await go(`${base}/index.html`);
+  const spendView = () => evaluate(`(() => { const o = document.querySelector('.home-overview'); return { actions: [...(o?.querySelectorAll('.home-actions li') || [])].map(li => li.textContent), suggest: o?.querySelector('.home-suggest')?.textContent, button: o?.querySelector('.home-suggest button')?.textContent, slider: o?.querySelector('.home-slider input')?.value, how: [...(o?.querySelectorAll('details .notice') || [])].map(p => p.textContent).join(' | ') }; })()`);
+  const sv = await spendView();
+  const toSave = sv.actions.filter(a => a.includes('到儲蓄'));
+  check('savings purposes sharing an account get one merged transfer line from the salary account', toSave.length === 1 && toSave[0].startsWith('從薪轉轉') && toSave[0].includes('緊急預備金、一般儲蓄') && !sv.actions.some(a => a.includes('餘額不夠')), JSON.stringify(sv.actions));
+  const planned = sv.how.match(/每期發薪後從薪轉：(.+?)，合計 ([\d,]+)元/);
+  const plannedSum = planned ? [...planned[1].matchAll(/(?:轉|留) ([\d,]+)元/g)].reduce((s, m) => s + Number(m[1].replace(/,/g, '')), 0) : -1;
+  check('standing transfer plan adds up to the allocated total', planned && plannedSum === Number(planned[2].replace(/,/g, '')), sv.how.slice(0, 300));
+  check('living suggestion: median of the last 3 cycles from card spending only (22,000)', sv.suggest?.includes('近 3 期實際花費中位數 22,000元') && sv.button === '預算改成 22,000元', JSON.stringify(sv));
+  await evaluate(`document.querySelector('.home-suggest button').click(); true`);
+  await go(`${base}/index.html`);
+  const applied = await spendView();
+  check('applying the suggestion sets the living budget and survives reload', applied.slider === '22000' && !applied.button, JSON.stringify({ slider: applied.slider, button: applied.button }));
+
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);

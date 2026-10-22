@@ -42,6 +42,49 @@ const Planning = (() => {
     const gapCents = Math.max(0, targetCents - balance);
     return { baseMonthlyCents: base, targetMonths, targetCents, balanceCents: balance, gapCents, coverageMonths: base > 0 ? balance / base : null, monthlyCents: Math.ceil(gapCents / PLANNING_RULES.emergencyFillMonths) };
   };
+  // 生活花費的唯一判斷：已入帳的支出、不是固定項目產生的、記在計入生活花費的帳戶。
+  // 沒指定帳戶的舊帳目無從歸屬，一律算進來；信用卡繳款記成轉帳，不是支出，所以刷卡不會算兩次
+  const isLivingSpend = (e, accountIds) => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && (!e.account || accountIds.has(e.account));
+  const livingSpendCents = (entries, accountIds, from, to) => entries
+    .filter(e => isLivingSpend(e, accountIds) && e.date >= from && e.date < to)
+    .reduce((s, e) => s + Math.abs(Money.entryTWDCents(e) ?? 0), 0);
+  // 哪些帳戶的支出算生活花費：使用者有勾選就照勾選；沒勾選時自動判斷——
+  //   算：生活費、固定支出、薪資入帳帳戶，信用卡（刷卡就是花費），其他可動用帳戶（例如現金）
+  //   不算：只搭配儲蓄用途的帳戶（緊急預備金、一般儲蓄、成本目標；在那裡付款多半是動用存款）、投資等不算可動用的帳戶
+  //   accounts：[{ id, nature, liquid }]
+  const livingSpendAccounts = ({ accounts, chosenIds = [], spendIds = [], savingIds = [] }) => {
+    const chosen = chosenIds.filter(id => accounts.some(a => a.id === id));
+    if (chosen.length) return { ids: new Set(chosen), auto: false };
+    const spend = new Set(spendIds), saving = new Set(savingIds);
+    return { ids: new Set(accounts.filter(a => spend.has(a.id) || a.nature === 'credit' || (a.liquid && !saving.has(a.id))).map(a => a.id)), auto: true };
+  };
+  // 近幾個完整發薪週期的生活花費與建議預算：中位數（不被單次大額拉高），無條件進位到百元。
+  // 只算開始記帳之後的完整週期，不然記帳前的空白週期會被當成「沒花錢」
+  const livingSpendHistory = ({ entries, accountIds, payday, today, cycles = PLANNING_RULES.livingSuggestCycles }) => {
+    const started = entries.filter(e => e.status !== 'projected' && e.type !== 'wishlist' && e.date).map(e => e.date).sort()[0];
+    const past = [];
+    let c = payCycle(today, payday);
+    while (started && past.length < cycles) {
+      const [y, m, d] = c.start.split('-').map(Number);
+      c = payCycle(new Date(y, m - 1, d - 1), payday);
+      if (c.start < started) break;
+      past.push({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next) });
+    }
+    if (!past.length) return { cycles: [], medianCents: null, suggestedCents: null };
+    const sorted = past.map(p => p.spentCents).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const medianCents = sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+    return { cycles: past, medianCents, suggestedCents: Math.ceil(medianCents / 10000) * 10000 };
+  };
+  // 帳戶裡本期還要用來付支出的錢：還沒扣的固定支出＋生活費預算還沒花的部分。
+  // 同一個帳戶也放存款時，餘額依分配順序（固定支出→生活費→緊急預備金→儲蓄→目標）先留給這些支出，剩下的才算存款
+  const spendingNeedByAccount = ({ fixedAccountId, livingAccountId, fixedDueRemainingCents, livingBudgetCents, livingSpentCents }) => {
+    const need = {};
+    const add = (id, cents) => { if (id) need[id] = (need[id] || 0) + Math.max(0, Math.round(cents || 0)); };
+    add(fixedAccountId, fixedDueRemainingCents);
+    add(livingAccountId, (livingBudgetCents || 0) - (livingSpentCents || 0));
+    return need;
+  };
   // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
   const purposeLabel = (key) => {
     const purpose = ALLOCATION_PURPOSES.find(p => p.key === key);
@@ -93,7 +136,11 @@ const Planning = (() => {
   const allocationStatus = (row, cycle, facts = {}) => {
     if (facts.noData) return { level: 'none', text: '尚未記帳或填寫帳戶餘額，暫不判斷進度' };
     // action: one imperative line for the homepage; a row short on income has none (the homepage verdict covers it)
-    const out = (level, text, tag, action) => ({ level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text, action: level === 'ok' || row.shortfallCents > 0 ? undefined : action });
+    // transfer：這個解方是「轉錢到某帳戶」；首頁改用 transferPlan 依帳戶合併後的指示，不逐列重複
+    const out = (level, text, tag, action, transfer) => {
+      const shown = level === 'ok' || row.shortfallCents > 0 ? undefined : action;
+      return { level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text, action: shown, ...(shown && transfer ? { transfer: true } : {}) };
+    };
     const target = row.allocatedCents;
     if (row.key === 'fixed') {
       const remaining = Math.max(0, (facts.dueTotalCents || 0) - (facts.paidCents || 0));
@@ -102,7 +149,7 @@ const Planning = (() => {
       const unconfirmed = Math.min(remaining, Math.max(0, facts.unconfirmedCents || 0));
       const confirmNote = unconfirmed > 0 ? `；其中 ${fmt(unconfirmed)} 已過扣款日，扣款後到帳本按「確認入帳」` : '';
       const lack = remaining - Math.max(0, facts.balanceCents || 0);
-      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入${confirmNote}`, '餘額不足', `扣款日前轉 ${fmt(lack)} 到${facts.accountName}`);
+      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入${confirmNote}`, '餘額不足', `扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, true);
       return out(unconfirmed > 0 ? 'watch' : 'ok', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠${confirmNote}`, '待確認入帳', `固定支出扣款後到帳本按「確認入帳」（${fmt(unconfirmed)}）`);
     }
     if (row.key === 'living') {
@@ -116,7 +163,7 @@ const Planning = (() => {
       const over = spent > target ? `，超出生活費預算 ${fmt(spent - target)}，已動用未分配的錢` : (spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '');
       const lowBalance = (facts.balanceCents ?? Infinity) < target - spent ? `；${facts.accountName}餘額只剩 ${fmt(Math.max(0, facts.balanceCents))}，不夠剩下的生活費` : '';
       return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`, spent > target ? '超出預算' : (over ? '花得比進度快' : '餘額偏低'),
-        over ? `剩 ${cycle.daysLeft} 天每天最多花 ${fmt(perDay)}` : `轉 ${fmt(target - spent - Math.max(0, facts.balanceCents))} 到${facts.accountName}當生活費`);
+        over ? `剩 ${cycle.daysLeft} 天每天最多花 ${fmt(perDay)}` : `轉 ${fmt(target - spent - Math.max(0, facts.balanceCents))} 到${facts.accountName}當生活費`, !over);
     }
     if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', tag: '收入不夠分配', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
     if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`, '無法追蹤', `${row.label}改搭配薪資以外的帳戶`);
@@ -124,9 +171,52 @@ const Planning = (() => {
     if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
     const projected = Math.max(0, facts.projectedInCents || 0);
     if (moved + projected >= target) return out('watch', `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}；轉帳後到帳本按「確認入帳」`, '待確認入帳', `固定儲蓄轉帳後到帳本按「確認入帳」（${fmt(projected)}）`);
-    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, '待轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`);
+    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, '待轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
     const pendingNote = projected > 0 ? `（其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認）` : '';
-    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`, '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`);
+    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`, '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
+  };
+  // 每期轉帳指示的唯一算法，依目的帳戶合併（首頁「要做的事」與分配狀態的已轉入金額都讀這裡）：
+  //   plannedCents＝每期要轉進該帳戶的分配額；薪資入帳帳戶的用途不用轉（stay，金額計入 stayCents）
+  //     非 stay 的 plannedCents 加總＋stayCents＝已分配的收入
+  //   stay 帳戶只回報支出缺額（薪資帳戶餘額不夠付本期剩下的支出，要從別的帳戶補）；那裡的存款分不出轉入多少，不追蹤
+  //   remainingCents＝本期還要轉：
+  //     支出用途（固定支出、生活費）補到夠付本期剩下的支出：spendingNeed－可用餘額
+  //     儲蓄用途（緊急預備金、儲蓄、成本目標）每期都要存入：分配額－本期已轉入－固定儲蓄預計轉入
+  //   同帳戶多用途時，本期轉入的錢依分配順序先算支出用途、剩下的才算存入；本期存入的錢不算可用餘額
+  //   accounts[id]＝{ balanceCents, movedInCents（本期已入帳的淨轉入）, projectedInCents（固定儲蓄預測轉入） }
+  const SPEND_KEYS = ['fixed', 'living'];
+  const transferPlan = ({ rows, stayAccountIds = [], accounts = {}, spendingNeed = {} }) => {
+    const stay = new Set(stayAccountIds.filter(Boolean));
+    const byAccount = new Map();
+    for (const row of rows) {
+      if (!(row.allocatedCents > 0)) continue;
+      if (!byAccount.has(row.accountId)) byAccount.set(row.accountId, []);
+      byAccount.get(row.accountId).push(row);
+    }
+    const transfers = [], rowFacts = {};
+    let stayCents = 0;
+    for (const [accountId, list] of byAccount) {
+      const plannedCents = list.reduce((s, r) => s + r.allocatedCents, 0);
+      const isStay = stay.has(accountId);
+      if (isStay) stayCents += plannedCents;
+      const a = accounts[accountId] || {};
+      const spendRows = list.filter(r => SPEND_KEYS.includes(r.key));
+      const spendAlloc = spendRows.reduce((s, r) => s + r.allocatedCents, 0);
+      let movedSave = Math.max(0, Math.round(a.movedInCents || 0) - spendAlloc);
+      let projected = Math.max(0, Math.round(a.projectedInCents || 0));
+      const spendLackCents = spendRows.length ? Math.max(0, (spendingNeed[accountId] || 0) - Math.max(0, Math.round(a.balanceCents || 0) - movedSave)) : 0;
+      let remainingCents = spendLackCents;
+      for (const r of isStay ? [] : list.filter(r => !SPEND_KEYS.includes(r.key))) {
+        const moved = Math.min(movedSave, r.allocatedCents);
+        movedSave -= moved;
+        const proj = Math.min(projected, r.allocatedCents - moved);
+        projected -= proj;
+        rowFacts[r.key] = { movedInCents: moved, projectedInCents: proj };
+        remainingCents += r.allocatedCents - moved - proj;
+      }
+      transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay });
+    }
+    return { transfers, stayCents, rowFacts };
   };
   // 首頁結論：只回答「這個月夠不夠、能存多少、差多少怎麼補」，數字全取自同一份分配結果（allocateMonthly）
   const homeVerdict = ({ allocation, emergency }) => {
@@ -251,5 +341,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, allocateMonthly, payCycle, allocationStatus, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();
