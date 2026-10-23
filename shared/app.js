@@ -166,6 +166,9 @@ const App = (() => {
       const fromFlow = key === 'saving' ? config.recurringCashFlows.find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
       config.dashboard[field] = [fromFlow, fallback && config.dashboard[fallback]].find(valid) || first;
     }
+    // 生活費現金帳戶（空＝不使用）；刪掉的帳戶或跟生活費帳戶相同時改回不使用
+    const cashId = config.dashboard.livingCashAccountId;
+    config.dashboard.livingCashAccountId = valid(cashId) && cashId !== config.dashboard.livingAccountId ? cashId : '';
     // 計入生活花費的帳戶（空＝自動判斷）；刪掉的帳戶在載入時移除
     config.dashboard.livingSpendAccountIds = (Array.isArray(config.dashboard.livingSpendAccountIds) ? config.dashboard.livingSpendAccountIds : []).filter(valid);
     if (!Array.isArray(config.dashboard.summaryCards)) config.dashboard.summaryCards = structuredClone(DEFAULT_CONFIG.dashboard.summaryCards);
@@ -371,15 +374,20 @@ const App = (() => {
   const accountRoles = (recurring = recurringSummary()) => {
     const d = config.dashboard;
     return {
-      spendIds: [d.livingAccountId, d.fixedExpenseAccountId, ...recurring.items.filter(f => f.type === 'income').map(f => f.accountId)],
+      spendIds: [d.livingAccountId, d.livingCashAccountId, d.fixedExpenseAccountId, ...recurring.items.filter(f => f.type === 'income').map(f => f.accountId)],
       savingIds: [d.emergencyAccountId, d.savingAccountId, ...Object.keys(d.scenarioSelections).filter(id => d.scenarioSelections[id]).map(id => d.scenarioAccountMap[id])]
     };
   };
   // 計入生活花費的帳戶，規則在 Planning.livingSpendAccounts；使用者勾選存在 dashboard.livingSpendAccountIds
-  const livingSpendAccountIds = (recurring = recurringSummary()) => Planning.livingSpendAccounts({
-    accounts: config.accountProfiles.map(a => ({ id: a.id, nature: a.nature, liquid: isLiquidNature(a.nature) })),
-    chosenIds: config.dashboard.livingSpendAccountIds || [], ...accountRoles(recurring)
-  });
+  // 生活費現金帳戶的支出一定算生活花費（錢就是生活費提領出來的），自選時也加進去
+  const livingSpendAccountIds = (recurring = recurringSummary()) => {
+    const result = Planning.livingSpendAccounts({
+      accounts: config.accountProfiles.map(a => ({ id: a.id, nature: a.nature, liquid: isLiquidNature(a.nature) })),
+      chosenIds: config.dashboard.livingSpendAccountIds || [], ...accountRoles(recurring)
+    });
+    if (config.dashboard.livingCashAccountId) result.ids.add(config.dashboard.livingCashAccountId);
+    return result;
+  };
   // 存花習慣裡的「儲蓄帳戶」：只搭配儲蓄用途的帳戶，加上投資等不算可動用、也不是信用卡的帳戶；
   // 同時是支出帳戶的不算（單一帳戶包辦一切時，分不出哪些錢是存款）
   const savingsAccountIds = (recurring = recurringSummary()) => {
@@ -429,7 +437,8 @@ const App = (() => {
   // 本期還要付的支出依帳戶（Planning.spendingNeedByAccount）；livingBudgetCents 沒給時用生活費預算
   const spendNeedNow = (plan, facts, livingBudgetCents = plan.expenses.livingCents) => Planning.spendingNeedByAccount({
     fixedAccountId: config.dashboard.fixedExpenseAccountId, livingAccountId: config.dashboard.livingAccountId,
-    fixedDueRemainingCents: facts.dueRemainingCents, livingBudgetCents, livingSpentCents: facts.livingSpentCents
+    fixedDueRemainingCents: facts.dueRemainingCents, livingBudgetCents, livingSpentCents: facts.livingSpentCents,
+    livingCashAccountId: config.dashboard.livingCashAccountId, livingCashBalanceCents: facts.balances[config.dashboard.livingCashAccountId] || 0
   });
   // 緊急預備金的可用餘額：同帳戶先留本期還要付的支出；首頁、健檢與 FIRE 都經 emergencyPlan 讀這裡
   const emergencyAvailableCents = (plan = monthlyPlan(), facts = cycleFacts(new Date(), plan.recurring)) => {
@@ -455,7 +464,13 @@ const App = (() => {
       let facts = base;
       if (row.key === 'fixed') facts = { ...base, dueTotalCents: f.dueTotalCents, paidCents: f.paidCents, unconfirmedCents: f.unconfirmedCents };
       // 同帳戶也付固定支出時，餘額先留給還沒扣的固定支出（分配順序），兩列缺額加總才等於轉帳指示
-      else if (row.key === 'living') facts = { ...base, balanceCents: base.balanceCents - (row.accountId === d.fixedExpenseAccountId ? f.dueRemainingCents : 0), spentCents: f.livingSpentCents, spareCents: health.allocation.unallocatedCents };
+      // 生活費現金是從生活費帳戶領出來的，餘額合計；要轉錢時仍轉到生活費帳戶
+      else if (row.key === 'living') {
+        const cashId = d.livingCashAccountId;
+        facts = { ...base, accountName: cashId ? `${base.accountName}（含${accountName(cashId)}）` : base.accountName,
+          balanceCents: base.balanceCents - (row.accountId === d.fixedExpenseAccountId ? f.dueRemainingCents : 0) + (cashId ? f.balances[cashId] || 0 : 0),
+          spentCents: f.livingSpentCents, spareCents: health.allocation.unallocatedCents };
+      }
       else facts = { ...base, ...(transfers.rowFacts[row.key] || {}), sharedWithIncome: incomeAccounts.has(row.accountId) };
       statuses[row.key] = Planning.allocationStatus(row, f.cycle, facts);
     }
@@ -850,13 +865,19 @@ const App = (() => {
       el('div', { class: 'toolbar' }, [
         // 每個分配用途（含之後新增的）都列出來；已選的成本目標也在這裡，跟「選擇成本目標」存同一個設定
         ...ALLOCATION_PURPOSES.map(p => el('label', {}, [document.createTextNode(`${p.label}　`), accountSelect(config.dashboard[p.field], e => { config.dashboard[p.field] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])),
+        // 從生活費帳戶領出來的現金：餘額與生活費帳戶合計，支出算生活花費；分配與轉帳仍只到生活費帳戶
+        el('label', { title: '從生活費帳戶提領的現金：餘額與生活費帳戶合計、支出算生活花費；分配與轉帳仍只到生活費帳戶' }, [document.createTextNode('生活費現金（從生活費帳戶提領）　'),
+          el('select', { onchange: e => { config.dashboard.livingCashAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); } }, [
+            el('option', { value: '', text: '不使用', selected: config.dashboard.livingCashAccountId ? undefined : 'selected' }),
+            ...config.accountProfiles.filter(a => a.id !== config.dashboard.livingAccountId).map(a => el('option', { value: a.id, text: a.name, selected: config.dashboard.livingCashAccountId === a.id ? 'selected' : undefined }))
+          ])]),
         ...goals.map(g => el('label', {}, [document.createTextNode(`${g.label}（成本目標）　`), accountSelect(g.accountId, e => { config.dashboard.scenarioAccountMap[g.key] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })]))
       ]),
       // 實際生活花費從哪些帳戶算；全部取消勾選＝改回自動
       el('div', { class: 'toolbar living-spend-accounts' }, [
         document.createTextNode(`生活花費計入帳戶（${spendAccounts.auto ? '自動判斷' : '自選'}）　`),
         ...config.accountProfiles.map(a => el('label', {}, [
-          el('input', { type: 'checkbox', value: a.id, checked: spendAccounts.ids.has(a.id) ? 'checked' : undefined, onchange: e => { const ids = new Set(spendAccounts.ids); if (e.target.checked) ids.add(a.id); else ids.delete(a.id); config.dashboard.livingSpendAccountIds = [...ids]; IO.markDirty(); renderAllocationDashboard(); } }),
+          el('input', { type: 'checkbox', value: a.id, checked: spendAccounts.ids.has(a.id) ? 'checked' : undefined, disabled: a.id === config.dashboard.livingCashAccountId ? 'disabled' : undefined, title: a.id === config.dashboard.livingCashAccountId ? '生活費現金一定計入' : undefined, onchange: e => { const ids = new Set(spendAccounts.ids); if (e.target.checked) ids.add(a.id); else ids.delete(a.id); config.dashboard.livingSpendAccountIds = [...ids]; IO.markDirty(); renderAllocationDashboard(); } }),
           document.createTextNode(` ${a.name}`)
         ])),
         spendAccounts.auto ? null : el('button', { type: 'button', class: 'btn small', text: '改回自動', onclick: () => { config.dashboard.livingSpendAccountIds = []; IO.markDirty(); renderAllocationDashboard(); } })

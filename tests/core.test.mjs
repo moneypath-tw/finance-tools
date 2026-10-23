@@ -1134,6 +1134,37 @@ test('轉帳指示與分配狀態同一數字：固定支出與生活費同帳�
   }
 });
 
+test('生活費現金：還沒花的生活費先算在現金，現金不夠的才留在生活費帳戶；轉帳指示與狀態同一數字', () => {
+  const P = api.Planning;
+  const cycle = P.payCycle(new Date(2026, 9, 22), 5);
+  const living = { key: 'living', label: '生活費', allocatedCents: 2000000, requestedCents: 2000000, shortfallCents: 0, accountId: 'bank' };
+  const base = { livingAccountId: 'bank', livingBudgetCents: 2000000, livingSpentCents: 500000, livingCashAccountId: 'cash' };
+  // 還沒花 15,000：現金 5,000 先抵，銀行留 10,000；現金比剩下的多時銀行不用留
+  assert.deepEqual({ ...P.spendingNeedByAccount({ ...base, livingCashBalanceCents: 500000 }) }, { cash: 500000, bank: 1000000 });
+  assert.deepEqual({ ...P.spendingNeedByAccount({ ...base, livingCashBalanceCents: 2000000 }) }, { cash: 1500000, bank: 0 });
+  // 沒設現金帳戶、或跟生活費帳戶相同時跟原本一樣
+  assert.deepEqual({ ...P.spendingNeedByAccount({ ...base, livingCashAccountId: '', livingCashBalanceCents: 500000 }) }, { bank: 1500000 });
+  assert.deepEqual({ ...P.spendingNeedByAccount({ ...base, livingCashAccountId: 'bank', livingCashBalanceCents: 500000 }) }, { bank: 1500000 });
+  const yuan = (s) => Number(s.match(/轉 ([\d,]+)元/)?.[1].replace(/,/g, '') || 0) * 100;
+  for (const [bank, cash] of [[300000, 500000], [1200000, 500000], [0, 0]]) {
+    const need = P.spendingNeedByAccount({ ...base, livingCashBalanceCents: cash });
+    const plan = P.transferPlan({ rows: [living], accounts: { bank: { balanceCents: bank }, cash: { balanceCents: cash } }, spendingNeed: need });
+    const l = P.allocationStatus(living, cycle, { accountName: 'A', balanceCents: bank + cash, spentCents: 500000 });
+    assert.equal(l.transfer ? yuan(l.action) : 0, plan.transfers[0].remainingCents, `bank ${bank} cash ${cash}`);
+  }
+});
+
+test('生活費現金帳戶被刪除時載入改回不使用', () => {
+  const V = api.Validation;
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.dashboard.livingCashAccountId = 'deleted';
+  const workspace = { config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) };
+  assert.equal(V.validateWorkspace(workspace).valid, false);
+  V.repairWorkspace(workspace, api.DEFAULT_CONFIG);
+  assert.equal(config.dashboard.livingCashAccountId, '');
+  assert.equal(V.validateWorkspace(workspace).valid, true);
+});
+
 test('每期收支報告：帳戶間轉帳不算收支；轉進儲蓄、轉回動用、從儲蓄帳戶直接付款分開算', () => {
   const P = api.Planning;
   const e = (type, date, yuan, extra) => ({ type, date, amountCents: (type === 'expense' ? -yuan : yuan) * 100, currency: 'TWD', rateToTWD: 1, status: 'realized', ...extra });
