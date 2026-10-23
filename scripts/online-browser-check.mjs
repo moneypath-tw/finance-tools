@@ -388,6 +388,19 @@ try {
   // 5 天 4 晚 2 人：機票 20,000＋住宿 ¥20,000×4×0.2＝16,000＋(210＋420＋2,100)×10＝27,300 → 63,300
   check('trip budget: 5 days × 2 people with a JPY lodging item totals 63,300 and survives reload', tripTyped && tripView.lodging === '16,000元' && tripView.text.includes('總額：63,300元') && !/\bnull\b/.test(tripView.text), JSON.stringify({ tripTyped, lodging: tripView.lodging, text: tripView.text.slice(0, 300) }));
 
+  // target time (2026-10-23): every scenario offers 目標年紀／幾年後／年月; "3 years" is stored as a month and the chosen mode survives reload
+  const missingTarget = [];
+  for (const id of scenarioIds) { await pickScenario(id); await sleep(60); if (!(await evaluate(`!!document.querySelector('#estimator-body .target-time select')`))) missingTarget.push(id); }
+  await pickScenario('buy_house'); await sleep(80);
+  const targetSel = `document.querySelector('#estimator-body .target-time select')`, targetInput = `document.querySelector('#estimator-body .target-time input')`;
+  const targetTyped = await setTrip(targetSel, 'years') && await setTrip(targetInput, '3');
+  await go(`${base}/index.html`);
+  await evaluate(`document.querySelector('[data-tab=estimator]').click(); true`);
+  await pickScenario('buy_house'); await sleep(80);
+  const targetView = await evaluate(`({ mode: ${targetSel}?.value, value: ${targetInput}?.value, note: ${targetSel}?.closest('.field')?.querySelector('small')?.textContent })`);
+  const in3 = new Date(); const expectMonth = `${in3.getFullYear() + 3} 年 ${String(in3.getMonth() + 1).padStart(2, '0')} 月`;
+  check('target time: every scenario has the age/years/month picker; 3 years ahead kept after reload', missingTarget.length === 0 && targetTyped && targetView.mode === 'years' && targetView.value === '3' && targetView.note?.startsWith(expectMonth), JSON.stringify({ missingTarget, targetTyped, targetView, expectMonth }));
+
   // 5. framing: a page that embeds the app gets replaced by the app itself
   await go(`${base}/README.md`);
   await evaluate(`document.body.innerHTML = '<iframe src="index.html" width="400" height="300"></iframe>'; true`);

@@ -827,6 +827,21 @@ test('發薪週期：從最近一次發薪日起算，跨年與小月月底都�
   assert.deepEqual([eom.start, eom.next], ['2026-02-28', '2026-03-31']);
 });
 
+// 2026-10-23 使用者：成本試算每個情境都要能用目標年紀／幾年後／年月規劃
+test('目標時間：年紀、幾年後、年月換算成同一個年月，反向換算對得回來', () => {
+  const now = new Date(2026, 9, 23), P = api.Planning;
+  assert.equal(P.targetMonthFrom('age', 35, now, 30), '2031-10');
+  assert.equal(P.targetMonthFrom('years', 5, now, 30), '2031-10');
+  assert.equal(P.targetMonthFrom('years', 1.5, now, 30), '2028-04');
+  assert.equal(P.targetMonthFrom('month', '2030-06', now, 30), '2030-06');
+  assert.equal(P.targetMonthFrom('years', 0, now, 30), '2026-11'); // 至少下個月
+  assert.equal(P.targetMonthFrom('age', 30, now, 30), '2026-11');
+  assert.equal(P.targetMonthFrom('years', 0.25, new Date(2026, 11, 31), 30), '2027-03'); // 跨年、月底
+  const d = P.describeTargetMonth('2031-10', now, 30);
+  assert.deepEqual([d.years, d.age], [5, 35]);
+  for (const age of [31, 40, 65]) assert.equal(Math.round(P.describeTargetMonth(P.targetMonthFrom('age', age, now, 30), now, 30).age), age);
+});
+
 test('分配狀態：依已過天數與實際帳務判斷並給建議', () => {
   const cycle = { elapsedDays: 15, totalDays: 30, daysLeft: 16, ratio: 0.5 };
   const row = (key, allocated, shortfall = 0) => ({ key, allocatedCents: allocated, requestedCents: allocated + shortfall, shortfallCents: shortfall });
