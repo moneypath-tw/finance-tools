@@ -205,11 +205,16 @@ const Planning = (() => {
   };
   // 帳戶裡本期還要用來付支出的錢：還沒扣的固定支出＋生活費預算還沒花的部分。
   // 同一個帳戶也放存款時，餘額依分配順序（固定支出→生活費→緊急預備金→儲蓄→目標）先留給這些支出，剩下的才算存款
-  const spendingNeedByAccount = ({ fixedAccountId, livingAccountId, fixedDueRemainingCents, livingBudgetCents, livingSpentCents }) => {
+  // 生活費現金帳戶（從生活費帳戶提領的現金）：還沒花的生活費先算在現金裡，現金不夠的部分才留在生活費帳戶，
+  // 不然領了現金，生活費帳戶餘額變少，會被當成不夠而叫人再轉錢
+  const spendingNeedByAccount = ({ fixedAccountId, livingAccountId, fixedDueRemainingCents, livingBudgetCents, livingSpentCents, livingCashAccountId, livingCashBalanceCents }) => {
     const need = {};
     const add = (id, cents) => { if (id) need[id] = (need[id] || 0) + Math.max(0, Math.round(cents || 0)); };
     add(fixedAccountId, fixedDueRemainingCents);
-    add(livingAccountId, (livingBudgetCents || 0) - (livingSpentCents || 0));
+    const living = Math.max(0, Math.round((livingBudgetCents || 0) - (livingSpentCents || 0)));
+    const fromCash = livingCashAccountId && livingCashAccountId !== livingAccountId ? Math.min(living, Math.max(0, Math.round(livingCashBalanceCents || 0))) : 0;
+    if (fromCash) add(livingCashAccountId, fromCash);
+    add(livingAccountId, living - fromCash);
     return need;
   };
   // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單

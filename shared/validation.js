@@ -258,6 +258,7 @@ const Validation = (() => {
     data.ledger.entries.forEach((entry, index) => { ["account", "fromAccount", "toAccount"].forEach((key) => { if (entry[key] !== undefined && entry[key] !== null && !accountKeys.has(entry[key])) errors.push(error(`ledger.entries[${index}].${key}`, "MISSING_ACCOUNT", "帳本指定的帳戶不存在")); }); });
     const dashboard = data.config.dashboard || {};
     ALLOCATION_PURPOSES.map(p => p.field).forEach((key) => { if (dashboard[key] !== undefined && dashboard[key] !== null && !accountIds.has(dashboard[key])) errors.push(error(`config.dashboard.${key}`, "MISSING_ACCOUNT", "首頁指定帳戶不存在")); });
+    if (dashboard.livingCashAccountId && !accountIds.has(dashboard.livingCashAccountId)) errors.push(error("config.dashboard.livingCashAccountId", "MISSING_ACCOUNT", "生活費現金帳戶不存在"));
     const flows = data.config.recurringCashFlows || [];
     errors.push(...validateRecurringFlows(flows).errors);
     flows.forEach((flow, index) => { ["accountId", "fromAccountId"].forEach((key) => { if (flow[key] !== undefined && !accountKeys.has(flow[key])) errors.push(error(`config.recurringCashFlows[${index}].${key}`, "MISSING_ACCOUNT", "固定項目指定的帳戶不存在")); }); });
@@ -304,6 +305,8 @@ const Validation = (() => {
       if (dashboard[key] === undefined || dashboard[key] === null || accountIds.includes(dashboard[key])) continue;
       dashboard[key] = accountIds[0] ?? null; repaired++;
     }
+    // 生活費現金是選用的：帳戶被刪除時改回不使用
+    if (dashboard.livingCashAccountId && !accountIds.includes(dashboard.livingCashAccountId)) { dashboard.livingCashAccountId = ''; repaired++; }
     const repairFields = (target, fallback, errors) => errors.forEach(({ path }) => {
       if (!target || !fallback || !Object.prototype.hasOwnProperty.call(fallback, path)) return;
       target[path] = structuredClone(fallback[path]); repaired++;
