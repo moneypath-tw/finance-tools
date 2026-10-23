@@ -7,6 +7,8 @@
 //   其中固定支出 = 計畫中從這個帳戶扣的固定支出；生活花費 = 推算流出 − 固定支出
 // 推算流出為負時是「多出」（利息、退款、計畫外收入），不當成負的支出。
 // 帳戶互轉沒有記錄時，單一帳戶會一邊多花、一邊多存，但全部帳戶加總不受影響，所以總覽以加總為主。
+// 新增的帳戶（第一次出現在核對紀錄）期初以 0 計：錢通常是從其他帳戶轉入，排除它會讓加總多算一筆「用掉」。
+// 以前填過、這次或上次漏填的帳戶期初／期末不明，仍不計入。
 // 核對日期不固定（月初、月中都可能），比較各期時用每 30 天的換算值。
 
 const Snapshots = (() => {
@@ -47,20 +49,23 @@ const Snapshots = (() => {
     return out;
   };
 
-  // 相鄰兩次核對之間的期間，最新的在前。只計入兩次都有填餘額的帳戶。
+  // 相鄰兩次核對之間的期間，最新的在前。計入兩次都有填餘額的帳戶，以及第一次出現的新帳戶（isNew，期初 0）。
   const periods = (snapshots, flows) => {
     const sorted = [...(snapshots || [])].sort((a, b) => a.date.localeCompare(b.date));
     const result = [];
+    const seen = new Set();
     for (let i = 1; i < sorted.length; i++) {
       const a = sorted[i - 1], b = sorted[i];
+      Object.keys(a.balances || {}).forEach((id) => seen.add(id));
       const days = Math.round((dateValue(b.date) - dateValue(a.date)) / DAY);
       const plan = planned(flows, a.date, b.date);
       const accounts = Object.keys(b.balances || {})
-        .filter((id) => Number.isInteger(a.balances?.[id]) && Number.isInteger(b.balances[id]))
+        .filter((id) => Number.isInteger(b.balances[id]) && (Number.isInteger(a.balances?.[id]) || !seen.has(id)))
         .map((id) => {
-          const startCents = a.balances[id], endCents = b.balances[id];
+          const isNew = !seen.has(id);
+          const startCents = isNew ? 0 : a.balances[id], endCents = b.balances[id];
           const { inCents = 0, fixedOutCents = 0 } = plan[id] || {};
-          return { id, startCents, endCents, changeCents: endCents - startCents, inCents, fixedOutCents,
+          return { id, isNew, startCents, endCents, changeCents: endCents - startCents, inCents, fixedOutCents,
                    outflowCents: startCents + inCents - endCents };
         });
       const sum = (key) => accounts.reduce((s, x) => s + x[key], 0);

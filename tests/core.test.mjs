@@ -610,9 +610,20 @@ test('核對：最新期間在前，負值代表多出，每 30 天換算', () =
   assert.equal(ps[0].total.outflowPer30Cents, 60000);
 });
 
-test('核對：只計入兩次都有填的帳戶；格式檢查擋下重複日期與非整數', () => {
-  const ps = Snap.periods([{ id: 'a', date: '2026-01-01', balances: { x: 1 } }, { id: 'b', date: '2026-01-02', balances: { x: 1, y: 5 } }], []);
-  assert.deepEqual([...ps[0].accounts.map(a => a.id)], ['x']);
+test('核對：新帳戶期初以 0 計入，以前填過但漏填的帳戶不計；格式檢查擋下重複日期與非整數', () => {
+  // 開新帳戶 y 並從 x 轉入 30,000：x 看起來用掉 30,000，y 期初 0 抵銷，加總不變
+  const ps = Snap.periods([
+    { id: 'a', date: '2026-01-01', balances: { x: 5000000 } },
+    { id: 'b', date: '2026-01-02', balances: { x: 2000000, y: 3000000 } },
+    { id: 'c', date: '2026-01-03', balances: { y: 3000000 } },
+    { id: 'd', date: '2026-01-04', balances: { x: 2000000, y: 3000000 } }
+  ], []);
+  const first = ps[2];
+  assert.deepEqual([...first.accounts.map(a => [a.id, a.isNew, a.startCents])], [['x', false, 5000000], ['y', true, 0]]);
+  assert.equal(first.total.outflowCents, 0);
+  // x 在 c 漏填：c→d 期初不明，不當成新帳戶
+  assert.deepEqual([...ps[1].accounts.map(a => a.id)], ['y']);
+  assert.deepEqual([...ps[0].accounts.map(a => a.id)], ['y']);
   assert.equal(Snap.validate(undefined).length, 0);
   assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: { x: 1.5 } }]).length);
   assert.ok(Snap.validate([{ id: 'a', date: '2026-01-01', balances: {} }, { id: 'b', date: '2026-01-01', balances: {} }]).length);
