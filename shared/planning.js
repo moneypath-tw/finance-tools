@@ -253,9 +253,11 @@ const Planning = (() => {
     if (facts.noData) return { level: 'none', text: '尚未記帳或填寫帳戶餘額，暫不判斷進度' };
     // action: one imperative line for the homepage; a row short on income has none (the homepage verdict covers it)
     // transfer：這個解方是「轉錢到某帳戶」；首頁改用 transferPlan 依帳戶合併後的指示，不逐列重複
+    // text 可傳陣列＝[結論, 原因, 參考數字…]：分配表第一行粗體、其餘小字；其他地方用 text（各行以「；」接起）
     const out = (level, text, tag, action, transfer) => {
       const shown = level === 'ok' || row.shortfallCents > 0 ? undefined : action;
-      return { level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}；${text}` : text, action: shown, ...(shown && transfer ? { transfer: true } : {}) };
+      const lines = [].concat(row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}` : [], text);
+      return { level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: lines.join('；'), lines, action: shown, ...(shown && transfer ? { transfer: true } : {}) };
     };
     const target = row.allocatedCents;
     if (row.key === 'fixed') {
@@ -274,12 +276,21 @@ const Planning = (() => {
       const expected = Math.round(target * cycle.ratio);
       // 每日可花取整數元並無條件捨去，不高估能花的錢
       const perDay = Math.floor(Math.max(0, spendable - spent) / Math.max(1, cycle.daysLeft) / 100) * 100;
-      const progress = `第 ${cycle.elapsedDays}／${cycle.totalDays} 天，已花 ${fmt(spent)}（進度 ${fmt(expected)}）`;
-      if (spent > spendable) return out('short', `${progress}，已超出本期可花用 ${fmt(spent - spendable)}`, '超支', `生活費已超支 ${fmt(spent - spendable)}，剩 ${cycle.daysLeft} 天只花必要開銷`);
-      const over = spent > target ? `，超出生活費預算 ${fmt(spent - target)}，已動用未分配的錢` : (spent > expected * 1.1 ? `，比進度多花 ${fmt(spent - expected)}` : '');
-      const lowBalance = (facts.balanceCents ?? Infinity) < target - spent ? `；${facts.accountName}餘額只剩 ${fmt(Math.max(0, facts.balanceCents))}，不夠剩下的生活費` : '';
-      return out(over || lowBalance ? 'watch' : 'ok', `${progress}${over}；剩 ${cycle.daysLeft} 天每日可花 ${fmt(perDay)}${lowBalance}`, spent > target ? '超出預算' : (over ? '花得比進度快' : '餘額偏低'),
-        over ? `剩 ${cycle.daysLeft} 天每天最多花 ${fmt(perDay)}` : `轉 ${fmt(target - spent - Math.max(0, facts.balanceCents))} 到${facts.accountName}當生活費`, !over);
+      // 結論（要做什麼）→ 原因 → 參考數字；第 X／Y 天已在分配表上方的本期說明
+      const pace = `已花 ${fmt(spent)}，照天數平均到今天約 ${fmt(expected)}`;
+      if (spent > spendable) return out('short', [`已超支 ${fmt(spent - spendable)}，剩 ${cycle.daysLeft} 天只花必要開銷`, `因為已花 ${fmt(spent)}，超過本期可花的 ${fmt(spendable)}（預算＋未分配的錢）`], '超支', `生活費已超支 ${fmt(spent - spendable)}，剩 ${cycle.daysLeft} 天只花必要開銷`);
+      const lack = target - spent - Math.max(0, facts.balanceCents ?? Infinity);
+      const lowBalance = lack > 0 ? `${facts.accountName}只有 ${fmt(Math.max(0, facts.balanceCents))}，這期生活費還有 ${fmt(target - spent)}沒花` : '';
+      const daily = `剩 ${cycle.daysLeft} 天，每日可花 ${fmt(perDay)}`;
+      const over = spent > target || spent > expected * 1.1;
+      let lines;
+      if (spent > target) lines = [`已超出生活費預算 ${fmt(spent - target)}；${daily}`, `因為已花 ${fmt(spent)}，預算 ${fmt(target)}，超出的部分正在用未分配的錢`];
+      else if (spent > expected * 1.1) lines = [`花得比平均快；${daily}`, `因為${pace}，多了 ${fmt(spent - expected)}`];
+      else if (lowBalance) lines = [`先轉 ${fmt(lack)} 到${facts.accountName}`, `因為${lowBalance}`, `轉完後${daily}（${pace}）`];
+      else lines = [`生活費正常；${daily}`, pace];
+      if (over && lowBalance) lines.push(`另外${lowBalance}，要轉入 ${fmt(lack)}`);
+      return out(over || lowBalance ? 'watch' : 'ok', lines, spent > target ? '超出預算' : (over ? '花得比進度快' : '餘額偏低'),
+        over ? `剩 ${cycle.daysLeft} 天每天最多花 ${fmt(perDay)}` : `轉 ${fmt(lack)} 到${facts.accountName}當生活費`, !over);
     }
     if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', tag: '收入不夠分配', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
     if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`, '無法追蹤', `${row.label}改搭配薪資以外的帳戶`);

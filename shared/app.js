@@ -1065,7 +1065,7 @@ const App = (() => {
           el('td', {}, [document.createTextNode(r.label), r.required ? el('span', { class: 'badge', text: '必備' }) : null, !r.required ? el('div', { class: 'notice', text: `目標 ${Money.formatTWD(r.targetCents)}・帳戶已有 ${Money.formatTWD(r.savedCents)}（已扣同帳戶本月支出與緊急預備金）・${r.targetMonth}` }) : null]),
           el('td', { text: accountName(r.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(r.requestedCents) }),
           el('td', { class: 'mono', text: Money.formatTWD(r.allocatedCents) }),
-          el('td', { class: `allocation-status status-${progress.statuses[r.key].level}`, text: progress.statuses[r.key].text })
+          el('td', { class: `allocation-status status-${progress.statuses[r.key].level}` }, (progress.statuses[r.key].lines || [progress.statuses[r.key].text]).map((line, i) => el('div', { class: i ? 'status-detail' : 'status-headline', text: line })))
         ])))
       ])]),
       selectedGoalLists,

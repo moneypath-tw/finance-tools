@@ -833,7 +833,7 @@ test('分配狀態：依已過天數與實際帳務判斷並給建議', () => {
   const S = (r, f, c = cycle) => api.Planning.allocationStatus(r, c, { accountName: '主要銀行', ...f });
   // 生活費：1 萬預算過半月，花 5,000 正常、6,000 超前、1.2 萬超支
   assert.equal(S(row('living', 1000000), { spentCents: 500000 }).level, 'ok');
-  assert.match(S(row('living', 1000000), { spentCents: 500000 }).text, /剩 16 天每日可花 312元/);
+  assert.match(S(row('living', 1000000), { spentCents: 500000 }).text, /剩 16 天，每日可花 312元/);
   assert.equal(S(row('living', 1000000), { spentCents: 600000 }).level, 'watch');
   assert.equal(S(row('living', 1000000), { spentCents: 1200000 }).level, 'short');
   assert.equal(S(row('living', 1000000), { spentCents: 100000, balanceCents: 200000 }).level, 'watch'); // 帳戶不夠剩下的生活費
@@ -854,7 +854,25 @@ test('分配狀態文字：沒有應扣款與只因餘額不足時不出現 0 �
   const S = (key, f) => api.Planning.allocationStatus({ key, allocatedCents: 1000000, requestedCents: 1000000, shortfallCents: 0 }, cycle, { accountName: '主要銀行', ...f }).text;
   assert.equal(S('fixed', { dueTotalCents: 0, paidCents: 0, balanceCents: 0 }), '本期沒有要扣的固定支出');
   const low = S('living', { spentCents: 0, balanceCents: 0 });
-  assert.ok(!low.includes('多花') && low.includes('不夠剩下的生活費'), low);
+  assert.ok(!low.includes('多花') && low.startsWith('先轉 10,000元 到主要銀行；因為主要銀行只有 0元'), low);
+});
+
+// 2026-10-23 使用者回報「第 14／31 天，已花 0元（進度 2,258元）…不夠剩下的生活費」難懂：結論先行、缺多少直接寫
+test('分配狀態：生活費帳戶餘額不夠時先講要轉多少，再講每日可花', () => {
+  const cycle = { elapsedDays: 14, totalDays: 31, daysLeft: 18, ratio: 14 / 31 };
+  const living = { key: 'living', allocatedCents: 500000, requestedCents: 500000, shortfallCents: 0 };
+  const s = api.Planning.allocationStatus(living, cycle, { accountName: '台新', spentCents: 0, spareCents: 74200, balanceCents: 100000 });
+  assert.deepEqual([...s.lines], ['先轉 4,000元 到台新', '因為台新只有 1,000元，這期生活費還有 5,000元沒花', '轉完後剩 18 天，每日可花 319元（已花 0元，照天數平均到今天約 2,258元）']);
+  assert.equal(s.text, s.lines.join('；'));
+  assert.equal(s.action, '轉 4,000元 到台新當生活費');
+  // 每種狀況第一行都是結論、第二行以「因為」講原因（正常時第二行只是參考數字）
+  const L = (f) => api.Planning.allocationStatus(living, cycle, { accountName: '台新', spareCents: 74200, ...f }).lines;
+  assert.match(L({ spentCents: 550000 })[0], /^已超出生活費預算 500元；/);
+  assert.match(L({ spentCents: 300000 })[0], /^花得比平均快；/);
+  assert.match(L({ spentCents: 300000 })[1], /^因為已花 3,000元/);
+  assert.match(L({ spentCents: 700000 })[0], /^已超支 /);
+  assert.match(L({ spentCents: 300000, balanceCents: 0 })[2], /^另外台新只有 0元.*要轉入 2,000元$/);
+  assert.match(L({ spentCents: 100000 })[0], /^生活費正常；/);
 });
 
 // 取代 package.json 逐檔 node --check：index.html 載入的每支腳本與 sw.js 都要能編譯
