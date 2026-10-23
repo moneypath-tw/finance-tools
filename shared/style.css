@@ -238,11 +238,26 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .goal-picker { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(130px, 180px) minmax(130px, 170px); gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--rule); }
 .goal-picker select, .goal-picker input[type="month"], .compact-settings select { min-height: 38px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; font-family: var(--serif); }
 .badge { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 0.72rem; }
-.allocation-short { background: rgba(161, 62, 69, 0.06); }
+/* 分配表：左側 3px 色條＝狀態（沿用主色綠／超限橙／負值紅），不足的列加極淡底色 */
+.allocation-table td:first-child { border-left: 3px solid transparent; }
+.allocation-row.level-ok td:first-child { border-left-color: var(--accent); }
+.allocation-row.level-watch td:first-child { border-left-color: var(--over-limit); }
+.allocation-row.level-short td:first-child { border-left-color: var(--negative); }
+.allocation-row.level-short { background: rgba(161, 62, 69, 0.05); }
+.allocation-label { font-weight: 600; }
+.allocation-account { margin-top: 2px; font-size: 0.78rem; color: var(--ink-soft); }
+.allocation-amount { white-space: nowrap; }
 .allocation-status { font-size: 0.86rem; line-height: 1.5; }
+/* 原因類別：跟 .badge 同形狀，顏色依狀態 */
+.status-tag { display: inline-block; margin-right: 6px; padding: 0 7px; border-radius: 10px; font-size: 0.72rem; font-weight: 500; vertical-align: 1px; }
+.status-tag.tag-watch { background: #FCF1EA; color: var(--over-limit); }
+.status-tag.tag-short { background: #FCF0F2; color: var(--negative); }
 .allocation-status.status-short { color: var(--negative); }
 .allocation-status.status-watch { color: var(--over-limit); }
 .allocation-status.status-none { color: var(--ink-soft); }
+/* 結論一行粗體，原因與參考數字小字灰色，一眼分出主旨與因果 */
+.allocation-status .status-headline { font-weight: 600; }
+.allocation-status .status-detail { font-size: 0.8rem; color: var(--ink-soft); }
 .estimate-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #EADFC8; border-radius: 10px; background: #FCF9F2; font-size: 0.88rem; }
 .estimate-notice p { margin: 0; flex: 1 1 280px; }
 /* 首頁結論（結論模式）：一句結論、分配長條、生活費滑桿、緊急預備金進度、要做的事 */
@@ -416,7 +431,17 @@ footer.io-bar span { color: var(--ink-soft); font-size: 0.85rem; }
   .dashboard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-card-setting-row { grid-template-columns: 1fr; align-items: stretch; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
   .goal-picker { grid-template-columns: 1fr; }
-  table.allocation-table { min-width: 650px; }
+  /* 手機：每列堆疊成「用途｜金額」一行、狀態佔滿下一行；色條移到整列左側 */
+  table.allocation-table, table.allocation-table tbody { display: block; }
+  table.allocation-table thead { display: none; }
+  table.allocation-table tr { display: grid; grid-template-columns: 1fr auto; border-left: 3px solid transparent; border-bottom: 1px solid var(--rule); }
+  table.allocation-table td { border-bottom: none; }
+  table.allocation-table td:first-child { border-left: none; }
+  table.allocation-table .allocation-amount { text-align: right; }
+  table.allocation-table .allocation-status { grid-column: 1 / -1; padding-top: 0; }
+  .allocation-row.level-ok { border-left-color: var(--accent); }
+  .allocation-row.level-watch { border-left-color: var(--over-limit); }
+  .allocation-row.level-short { border-left-color: var(--negative); }
   .estimator-controls { align-items: stretch; }
   .estimator-controls .field, .estimator-controls .control-check { width: 100%; }
   .scenario-actions .btn { flex: 1 1 140px; }

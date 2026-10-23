@@ -236,7 +236,7 @@ try {
   // the 分配狀態 summary card shows the worst row of the allocation table and names the rows that need action
   const statusCard = await evaluate(`(() => {
     const card = [...document.querySelectorAll('#allocation-dashboard .dashboard-mini-card')].find(c => c.querySelector('h3').textContent === '分配狀態');
-    const rows = [...document.querySelectorAll('#allocation-dashboard .allocation-table tbody tr')].map(tr => ({ label: tr.cells[0].firstChild.textContent, level: tr.cells[4].className.split(' ').pop().replace('status-', '') }));
+    const rows = [...document.querySelectorAll('#allocation-dashboard .allocation-table tbody tr')].map(tr => ({ label: tr.cells[0].firstChild.textContent, level: tr.querySelector('.allocation-status').className.split(' ').pop().replace('status-', '') }));
     return { value: card?.querySelector('.dashboard-mini-value').textContent, note: card?.querySelector('.notice').textContent, cls: card?.className, rows };
   })()`);
   const rank = { ok: 0, watch: 1, short: 2 };
