@@ -258,6 +258,10 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 /* 結論一行粗體，原因與參考數字小字灰色，一眼分出主旨與因果 */
 .allocation-status .status-headline { font-weight: 600; }
 .allocation-status .status-detail { font-size: 0.8rem; color: var(--ink-soft); }
+/* 目標時間：填法選單與數值並排 */
+.target-time { display: flex; gap: 6px; }
+.target-time select { flex: 0 0 auto; }
+.target-time input { flex: 1 1 auto; min-width: 0; }
 .estimate-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #EADFC8; border-radius: 10px; background: #FCF9F2; font-size: 0.88rem; }
 .estimate-notice p { margin: 0; flex: 1 1 280px; }
 /* 首頁結論（結論模式）：一句結論、分配長條、生活費滑桿、緊急預備金進度、要做的事 */

@@ -154,8 +154,8 @@ const App = (() => {
   const recurringKinds = { salary: '正職薪資', part_time: '兼職薪資', freelance: '接案收入', other_income: '其他收入', fixed_expense: '固定支出' };
   const ensureDashboard = () => {
     const first = config.accountProfiles[0]?.id || null;
-    config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {} });
-    for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
+    config.dashboard = fillDefaults(config.dashboard, { scenarioSelections: {}, scenarioAccountMap: {}, scenarioTargetMonths: {}, targetInputModes: {} });
+    for (const key of ['scenarioSelections', 'scenarioAccountMap', 'scenarioTargetMonths', 'targetInputModes']) if (!config.dashboard[key] || typeof config.dashboard[key] !== 'object' || Array.isArray(config.dashboard[key])) config.dashboard[key] = {};
     // 選進分配的成本目標要有自己的月份；沒有時會跟著健檢目標月份變，改健檢日期會悄悄改動分配（2026-10-22 紅隊）。
     // 補上目前實際使用的月份，數字不變、之後兩者分開
     for (const [id, on] of Object.entries(config.dashboard.scenarioSelections)) if (on && !Validation.isValidMonth(config.dashboard.scenarioTargetMonths[id]) && Validation.isValidMonth(config.quickPlan?.goalTargetMonth)) config.dashboard.scenarioTargetMonths[id] = config.quickPlan.goalTargetMonth;
@@ -626,6 +626,30 @@ const App = (() => {
     el('label', { text: label }),
     el('input', { type: 'number', class: 'mono', value, onchange: (ev) => onchange(Number(ev.target.value)) })
   ]);
+  // 目標時間的唯一輸入元件：可填目標年紀／幾年後／年月，一律換算成年月交給 onMonth；選的填法依 modeKey 記在 dashboard.targetInputModes
+  const TARGET_MODES = [['age', '目標年紀'], ['years', '幾年後'], ['month', '年月']];
+  const targetTimeField = ({ label, modeKey, month, onMonth, defaultMode = 'month', className = 'field' }) => {
+    const modes = config.dashboard.targetInputModes;
+    const mode = TARGET_MODES.some(([v]) => v === modes[modeKey]) ? modes[modeKey] : defaultMode;
+    const now = new Date(), currentAge = syncCurrentAgeFromBirthYear();
+    const { years, age } = Planning.describeTargetMonth(month, now, currentAge);
+    const yearsText = Math.round(years * 10) / 10;
+    const commit = (raw) => {
+      const next = Planning.targetMonthFrom(mode, mode === 'month' ? raw : Number(raw), now, currentAge);
+      if (Validation.isValidMonth(next)) onMonth(next);
+    };
+    return el('div', { class: className }, [
+      el('label', { text: label }),
+      el('div', { class: 'target-time' }, [
+        el('select', { 'aria-label': `${label}的填法`, onchange: e => { modes[modeKey] = e.target.value; IO.markDirty(); renderAll(); } },
+          TARGET_MODES.map(([v, t]) => el('option', { value: v, text: t, selected: v === mode ? 'selected' : undefined }))),
+        mode === 'month'
+          ? el('input', { type: 'month', value: month, onchange: e => commit(e.target.value) })
+          : el('input', { type: 'number', class: 'mono', min: mode === 'age' ? String(currentAge + 1) : '0.5', step: mode === 'age' ? '1' : '0.5', value: mode === 'age' ? Math.round(age) : yearsText, onchange: e => commit(e.target.value) })
+      ]),
+      el('small', { class: 'notice', text: `${month.replace('-', ' 年 ')} 月・約 ${Math.round(age)} 歲・${yearsText} 年後` })
+    ]);
+  };
 
   // ---------- 全站檢視模式 ----------
   const normalizeViewMode = () => {
@@ -847,7 +871,7 @@ const App = (() => {
         return el('div', { class: 'goal-picker' }, [
           el('label', {}, [el('input', { type: 'checkbox', checked: selected ? 'checked' : undefined, onchange: e => { config.dashboard.scenarioSelections[s.scenarioId] = e.target.checked; if (e.target.checked && !Validation.isValidMonth(config.dashboard.scenarioTargetMonths[s.scenarioId])) config.dashboard.scenarioTargetMonths[s.scenarioId] = targetMonth; IO.markDirty(); renderAllocationDashboard(); } }), document.createTextNode(` ${s.label}`)]),
           selected ? accountSelect(accountId, e => { config.dashboard.scenarioAccountMap[s.scenarioId] = e.target.value; IO.markDirty(); renderAllocationDashboard(); }) : null,
-          selected ? el('input', { type: 'month', value: targetMonth, onchange: e => { if (Validation.isValidMonth(e.target.value)) config.dashboard.scenarioTargetMonths[s.scenarioId] = e.target.value; else delete config.dashboard.scenarioTargetMonths[s.scenarioId]; IO.markDirty(); renderAllocationDashboard(); } }) : null
+          selected ? targetTimeField({ label: '目標時間', modeKey: s.scenarioId, month: targetMonth, onMonth: m => { config.dashboard.scenarioTargetMonths[s.scenarioId] = m; IO.markDirty(); renderAllocationDashboard(); } }) : null
         ]);
       })
     ]);
@@ -1091,9 +1115,8 @@ const App = (() => {
     const hasAccountAssets = derivedLiquidAssets > 0 || ledger.entries.length > 0;
     if (!['month', 'age'].includes(q.goalDeadlineMode)) q.goalDeadlineMode = 'month';
     if (!Number.isFinite(q.goalTargetAge) || q.goalTargetAge <= q.currentAge) q.goalTargetAge = Math.min(120, Math.max(q.currentAge + 1, 30));
-    const ageDeadlineDate = new Date();
-    ageDeadlineDate.setMonth(ageDeadlineDate.getMonth() + Math.max(1, Math.ceil((q.goalTargetAge - q.currentAge) * 12)));
-    const ageTargetMonth = Money.ym(ageDeadlineDate);
+    // 舊存檔的「希望完成年齡」；新的輸入一律存成 goalTargetMonth（targetTimeField）
+    const ageTargetMonth = Planning.targetMonthFrom('age', q.goalTargetAge, new Date(), q.currentAge);
     const effectiveTargetMonth = q.goalDeadlineMode === 'age' ? ageTargetMonth : q.goalTargetMonth;
     if (!['none', 'manual'].includes(q.goalScenarioId) && !scenarios.some(s => s.scenarioId === q.goalScenarioId)) q.goalScenarioId = 'none';
     const linkedGoal = scenarios.find(s => s.scenarioId === q.goalScenarioId);
@@ -1103,7 +1126,7 @@ const App = (() => {
     // 與首頁進度條同一算法（emergencyPlan 預設的可用餘額）。首訪沒帳戶時曾改用範例的可動用資產 5 萬，編輯模式兩處月數不一致（2026-10-22）
     const emergencyReserveCents = emergencyPlan(planForHealth).balanceCents;
     const effectivePlan = { ...q, monthlyEssentialExpenseCents: expensesForHealth.essentialCents, monthlyOtherExpenseCents: expensesForHealth.otherCents, emergencyBaseCents: expensesForHealth.emergencyBaseCents, goalTargetMonth: effectiveTargetMonth, goalAmountTodayCents: linkedGoalAmount, inflationAnnualRate: linkedGoal ? 0 : config.inflationRates.TW, monthlyNetIncomeCents: planForHealth.incomeCents, liquidAssetsCents: hasAccountAssets ? derivedLiquidAssets : q.liquidAssetsCents, emergencyReserveCents };
-    return { planForHealth, derivedLiquidAssets, hasAccountAssets, ageTargetMonth, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result: Planning.assess(effectivePlan) };
+    return { planForHealth, derivedLiquidAssets, hasAccountAssets, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result: Planning.assess(effectivePlan) };
   };
 
   const renderHealth = () => {
@@ -1113,7 +1136,7 @@ const App = (() => {
     form.innerHTML = '';
     const q = config.quickPlan;
     renderAllocationDashboard();
-    const { planForHealth, derivedLiquidAssets, hasAccountAssets, ageTargetMonth, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result } = healthAssessment();
+    const { planForHealth, derivedLiquidAssets, hasAccountAssets, effectiveTargetMonth, linkedGoal, noGoal, linkedGoalAmount, linkedGoalInvalid, result } = healthAssessment();
     const { recurring: recurringForHealth, expenses: expensesForHealth, hasRecurringIncome } = planForHealth;
     const derivedField = (label, cents, note) => el('div', { class: 'field' }, [el('label', { text: label }), el('span', { class: 'mono readonly-value', text: Money.formatTWD(cents) }), el('small', { class: 'notice', text: note })]);
     const goalSourceField = el('div', { class: 'field wide' }, [
@@ -1135,13 +1158,8 @@ const App = (() => {
       hasAccountAssets ? derivedField('可動用資產', derivedLiquidAssets, '由流動性帳戶餘額自動加總；緊急預備金另看指定帳戶') : healthMoneyField('可動用資產（元）', 'liquidAssetsCents'),
       goalSourceField,
       noGoal ? empty() : linkedGoal ? (linkedGoalInvalid ? el('p', { class: 'neg', text: '成本試算目前無法計算，請先修正情境設定。' }) : derivedField('成本試算目標總額', linkedGoalAmount, '由成本試算情境自動更新')) : healthMoneyField('如果今天完成，總共要花多少（元）', 'goalAmountTodayCents'),
-      noGoal ? empty() : el('div', { class: 'field' }, [el('label', { text: '完成期限標準' }), el('select', { onchange: e => { q.goalDeadlineMode = e.target.value; IO.markDirty(); renderHealth(); } }, [
-        el('option', { value: 'month', text: '希望完成月份', selected: q.goalDeadlineMode === 'month' ? 'selected' : undefined }),
-        el('option', { value: 'age', text: '希望完成年齡', selected: q.goalDeadlineMode === 'age' ? 'selected' : undefined })
-      ])]),
-      noGoal ? empty() : q.goalDeadlineMode === 'month'
-        ? el('div', { class: 'field' }, [el('label', { text: '希望完成月份' }), el('input', { type: 'month', value: q.goalTargetMonth, onchange: (e) => { if (Validation.isValidMonth(e.target.value)) q.goalTargetMonth = e.target.value; IO.markDirty(); renderHealth(); } })])
-        : el('div', { class: 'field' }, [el('label', { text: '希望完成年齡' }), el('input', { type: 'number', min: String(Math.ceil(q.currentAge + 1)), max: '120', step: '1', value: q.goalTargetAge, onchange: e => { q.goalTargetAge = Math.min(120, Math.max(Math.ceil(q.currentAge + 1), Number(e.target.value))); IO.markDirty(); renderHealth(); } }), el('small', { class: 'notice', text: `依目前 ${q.currentAge} 歲推算，約為 ${ageTargetMonth.replace('-', ' 年 ')} 月` })]),
+      noGoal ? empty() : targetTimeField({ label: '希望完成時間', modeKey: 'quickPlan', defaultMode: q.goalDeadlineMode, month: effectiveTargetMonth,
+        onMonth: m => { q.goalTargetMonth = m; q.goalDeadlineMode = 'month'; IO.markDirty(); renderHealth(); } }),
       el('details', {}, [
         el('summary', { text: '進階假設（可選）' }),
         el('div', { class: 'field' }, [el('label', { text: '台灣年通膨率（小數，成本試算共用）' }), el('input', { type: 'number', step: '0.001', value: config.inflationRates.TW, onchange: (e) => { config.inflationRates.TW = Number(e.target.value); IO.markDirty(); renderAll(); } })]),
@@ -2062,6 +2080,12 @@ const App = (() => {
     ]);
   };
 
+  // 清單型與期別型共用；跟首頁「選擇成本目標」的目標時間是同一個設定
+  const scenarioTargetField = (scenario) => targetTimeField({
+    label: scenario.applyInflation ? '目標時間（與首頁此目標同一設定，通膨換算到這時候）' : '目標時間（與首頁此目標同一設定）',
+    modeKey: scenario.scenarioId, month: scenarioTargetMonth(scenario),
+    onMonth: m => { config.dashboard.scenarioTargetMonths[scenario.scenarioId] = m; IO.markDirty(); renderEstimator(); }
+  });
   const renderOneTimeScenario = (scenario) => {
     const root = $('#estimator-body');
     // 旅費缺匯率時換算不了台幣：仍顯示設定與項目讓使用者補上，結果區留空（錯誤訊息由 renderEstimator 顯示）
@@ -2117,10 +2141,7 @@ const App = (() => {
       ]) : empty(),
       result && el('div', { class: 'result-block' }, [
         el('p', {}, [document.createTextNode('總額：'), el('span', { class: 'mono big', text: Money.formatTWD(result.total) })]),
-        scenario.applyInflation ? el('div', { class: 'field' }, [
-          el('label', { text: '目標月份（與首頁此目標同一設定，通膨換算到這個月）' }),
-          el('input', { type: 'month', value: scenarioTargetMonth(scenario), onchange: e => { if (Validation.isValidMonth(e.target.value)) { config.dashboard.scenarioTargetMonths[scenario.scenarioId] = e.target.value; IO.markDirty(); renderEstimator(); } } })
-        ]) : null,
+        scenarioTargetField(scenario),
         scenario.applyInflation ? el('p', {}, [document.createTextNode('通膨後總額：'), el('span', { class: 'mono big', text: Money.formatTWD(result.inflated) })]) : null,
         scenario.applyInflation ? inflationSourceNote(scenario.inflationKey) : null,
         result.afterLoan !== null ? el('p', {}, [document.createTextNode('貸後金額：'), el('span', { class: 'mono', text: Money.formatTWD(result.afterLoan) })]) : null,
@@ -2220,13 +2241,20 @@ const App = (() => {
       ])),
       el('button', { class: 'btn small editor-only', text: '＋新增期別', onclick: () => { scenario.periods.push({ label: `新期別 ${scenario.periods.length + 1}`, overrides: {} }); IO.markDirty(); renderEstimator(); } }),
       el('div', { class: 'result-block' }, [
-        el('p', {}, [document.createTextNode('全期合計：'), el('span', { class: 'mono big', text: Money.formatTWD(result.grandTotal) })])
+        el('p', {}, [document.createTextNode('全期合計：'), el('span', { class: 'mono big', text: Money.formatTWD(result.grandTotal) })]),
+        scenarioTargetField(scenario)
       ]),
       renderAchievabilityBlock(result.grandTotal)
     );
   };
 
   const numField = (label, value, onchange) => numberField(label, value, onchange, 'field estimator-field');
+  // 養老金與 FIRE 以退休年齡計算：三種填法換算回整數歲
+  const retireAgeField = (scenario) => targetTimeField({
+    label: '預計退休時間', modeKey: scenario.scenarioId, defaultMode: 'age', className: 'field estimator-field',
+    month: Planning.targetMonthFrom('age', scenario.retireAge, new Date(), syncCurrentAgeFromBirthYear()),
+    onMonth: m => { scenario.retireAge = Math.round(Planning.describeTargetMonth(m, new Date(), syncCurrentAgeFromBirthYear()).age); IO.markDirty(); renderEstimator(); }
+  });
 
   const renderRetirementFundScenario = (scenario) => {
     const root = $('#estimator-body');
@@ -2235,7 +2263,7 @@ const App = (() => {
     root.append(
       el('div', { class: 'estimator-field-grid' }, [
         el('div', { class: 'field estimator-field' }, [el('label', { text: '目前年齡（由出生年份推算）' }), el('span', { class: 'mono readonly-value', text: `${scenario.currentAge} 歲` })]),
-        numField('預計退休年齡', scenario.retireAge, (v) => { scenario.retireAge = v; IO.markDirty(); renderEstimator(); }),
+        retireAgeField(scenario),
         numField('預計身故年齡', scenario.deathAge, (v) => { scenario.deathAge = v; IO.markDirty(); renderEstimator(); }),
         numField('每月生活費（元）', Money.toYuan(scenario.monthlyLivingCostCents), (v) => { scenario.monthlyLivingCostCents = Money.toCents(v); IO.markDirty(); renderEstimator(); }),
         numField('目前已存金額（元）', Money.toYuan(scenario.currentSavedCents || 0), (v) => { scenario.currentSavedCents = Money.toCents(v); IO.markDirty(); renderEstimator(); })
@@ -2265,7 +2293,7 @@ const App = (() => {
       el('label', { class: 'field' }, [el('input', { type: 'checkbox', checked: linked ? 'checked' : undefined, onchange: (ev) => { scenario.linkLedger = ev.target.checked; IO.markDirty(); renderEstimator(); } }), document.createTextNode(' 與帳本、首頁連動（月薪、月支出、已存資產、其他目標、緊急預備金）')]),
       el('div', { class: 'estimator-field-grid' }, [
         shown('目前年齡（由出生年份推算）', `${scenario.startAge} 歲`, '個人參數的出生年份'),
-        numField('預計退休年齡', scenario.retireAge, (v) => { scenario.retireAge = v; IO.markDirty(); renderEstimator(); }),
+        retireAgeField(scenario),
         numField('預期壽命', scenario.deathAge, (v) => { scenario.deathAge = v; IO.markDirty(); renderEstimator(); }),
         linkedMoney('目前月薪', 'currentMonthlySalaryCents', src.salary, '固定收入（勞健保扣除後）'),
         linkedMoney('目前月支出', 'currentMonthlyExpenseCents', src.expense, '固定支出＋每月生活開銷'),

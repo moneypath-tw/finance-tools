@@ -33,6 +33,7 @@ const DEFAULT_CONFIG = {
     scenarioSelections: {},
     scenarioAccountMap: {},
     scenarioTargetMonths: {},
+    targetInputModes: {},
     summaryCards: [
       { id: 'income', source: 'income', label: '月收入', visible: true, builtIn: true },
       { id: 'fixed-expense', source: 'fixedExpense', label: '固定支出', visible: true, builtIn: true },

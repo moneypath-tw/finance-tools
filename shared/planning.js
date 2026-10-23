@@ -8,6 +8,17 @@ const Planning = (() => {
     const [y, m] = targetMonth.split('-').map(Number);
     return Math.max(0, (y - fromDate.getFullYear()) * 12 + (m - 1 - fromDate.getMonth()));
   };
+  // 目標時間三種填法（age 目標年紀／years 幾年後／month 年月）一律換算成年月存；至少下個月
+  const targetMonthFrom = (mode, value, now, currentAge) => {
+    if (mode !== 'age' && mode !== 'years') return value;
+    const d = addMonths(now.getFullYear(), now.getMonth() + 1, Math.max(1, mode === 'age' ? Math.ceil((value - currentAge) * 12) : Math.round(value * 12)));
+    return `${d.year}-${String(d.month).padStart(2, '0')}`;
+  };
+  // 反向：年月 → 幾年後、屆時年紀，給輸入欄旁的換算說明
+  const describeTargetMonth = (month, now, currentAge) => {
+    const years = monthsBetween(now, month) / 12;
+    return { years, age: currentAge + years };
+  };
   const futureValue = (todayCents, annualInflation, months) => Math.round(todayCents * Math.pow(1 + annualInflation, months / 12));
   const realRate = (nominal, inflation) => (1 + nominal) / (1 + inflation) - 1;
   const requiredMonthlyContribution = (targetFutureCents, currentCents, annualReturn, months) => {
@@ -469,5 +480,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();
