@@ -437,6 +437,12 @@ const App = (() => {
     return (facts.balances[id] || 0) - (spendNeedNow(plan, facts)[id] || 0);
   };
   // 分配表各列的「狀態」與本期轉帳指示；數字都取自 currentMonthSavingsHealth 算好的 cycleFacts
+  // 本期最後一天（下次發薪日前一天），MM/DD
+  const cycleLastDay = (next) => {
+    const d = new Date(`${next}T00:00:00`);
+    d.setDate(d.getDate() - 1);
+    return Money.ymd(d).slice(5).replace('-', '/');
+  };
   const allocationStatuses = (health) => {
     const f = health.facts;
     const d = config.dashboard;
@@ -1058,15 +1064,16 @@ const App = (() => {
       el('div', { class: 'dashboard-summary editor-only' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可在摘要卡設定重新勾選。' })]),
       renderSummaryCardSettings(),
       loanOverview,
-      el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${progress.cycle.next.slice(5).replace('-', '/')} 前（${progress.payday ? `依「${progress.payday.name}」每月 ${progress.payday.day} 日發薪` : '尚未設定固定收入，以每月 1 日起算'}）・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天（${Math.round(progress.cycle.ratio * 100)}%）；狀態只看已入帳的帳目與實際餘額` }),
+      el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${cycleLastDay(progress.cycle.next)}・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天・${progress.payday ? `每月 ${progress.payday.day} 日發薪（${progress.payday.name}）` : '尚未設定固定收入，以每月 1 日起算'}・只計已入帳的帳目` }),
+      // 三欄：用途（帳戶小字）／本期分配／狀態；左側色條＝狀態，一眼看出哪列要處理
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'allocation-table' }, [
-        el('thead', {}, [el('tr', {}, [el('th', { text: '用途' }), el('th', { text: '搭配帳戶' }), el('th', { text: '每月需要' }), el('th', { text: '建議分配' }), el('th', { text: '狀態' })])]),
-        el('tbody', {}, allocation.rows.map(r => el('tr', { class: r.shortfallCents > 0 ? 'allocation-short' : '' }, [
-          el('td', {}, [document.createTextNode(r.label), r.required ? el('span', { class: 'badge', text: '必備' }) : null, !r.required ? el('div', { class: 'notice', text: `目標 ${Money.formatTWD(r.targetCents)}・帳戶已有 ${Money.formatTWD(r.savedCents)}（已扣同帳戶本月支出與緊急預備金）・${r.targetMonth}` }) : null]),
-          el('td', { text: accountName(r.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(r.requestedCents) }),
-          el('td', { class: 'mono', text: Money.formatTWD(r.allocatedCents) }),
-          el('td', { class: `allocation-status status-${progress.statuses[r.key].level}` }, (progress.statuses[r.key].lines || [progress.statuses[r.key].text]).map((line, i) => el('div', { class: i ? 'status-detail' : 'status-headline', text: line })))
-        ])))
+        el('thead', {}, [el('tr', {}, [el('th', { text: '用途' }), el('th', { text: '本期分配' }), el('th', { text: '狀態' })])]),
+        el('tbody', {}, allocation.rows.map(r => { const st = progress.statuses[r.key]; return el('tr', { class: `allocation-row level-${st.level}` }, [
+          el('td', {}, [el('div', { class: 'allocation-label', text: r.label }), el('div', { class: 'allocation-account', text: accountName(r.accountId) }),
+            !r.required ? el('div', { class: 'allocation-account', text: `目標 ${Money.formatTWD(r.targetCents)}・已有 ${Money.formatTWD(r.savedCents)}・${r.targetMonth} 前` }) : null]),
+          el('td', { class: 'mono allocation-amount', text: Money.formatTWD(r.allocatedCents) }),
+          el('td', { class: `allocation-status status-${st.level}` }, (st.lines || [st.text]).map((line, i) => el('div', { class: i ? 'status-detail' : 'status-headline' }, [i || !st.tag ? null : el('span', { class: `status-tag tag-${st.level}`, text: st.tag }), document.createTextNode(line)])))
+        ]); }))
       ])]),
       selectedGoalLists,
       requiredSettings, optionalGoals,

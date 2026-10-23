@@ -256,7 +256,8 @@ const Planning = (() => {
     // text 可傳陣列＝[結論, 原因, 參考數字…]：分配表第一行粗體、其餘小字；其他地方用 text（各行以「；」接起）
     const out = (level, text, tag, action, transfer) => {
       const shown = level === 'ok' || row.shortfallCents > 0 ? undefined : action;
-      const lines = [].concat(row.shortfallCents > 0 ? `收入只夠分配 ${fmt(row.allocatedCents)}` : [], text);
+      // 收入不夠是結構性的附帶說明，放最後一行，不搶結論與直接原因
+      const lines = [...[].concat(text), ...(row.shortfallCents > 0 ? [`收入只夠分配 ${fmt(row.allocatedCents)}（需要 ${fmt(row.requestedCents)}）`] : [])];
       return { level, tag: level === 'ok' ? undefined : (row.shortfallCents > 0 ? '收入不夠分配' : tag), text: lines.join('；'), lines, action: shown, ...(shown && transfer ? { transfer: true } : {}) };
     };
     const target = row.allocatedCents;
@@ -265,10 +266,10 @@ const Planning = (() => {
       if (!(facts.dueTotalCents > 0)) return out('ok', '本期沒有要扣的固定支出');
       if (remaining <= 0) return out('ok', `本期固定支出 ${fmt(facts.dueTotalCents)} 已全部扣款`);
       const unconfirmed = Math.min(remaining, Math.max(0, facts.unconfirmedCents || 0));
-      const confirmNote = unconfirmed > 0 ? `；其中 ${fmt(unconfirmed)} 已過扣款日，扣款後到帳本按「確認入帳」` : '';
+      const confirmNote = unconfirmed > 0 ? [`其中 ${fmt(unconfirmed)} 已過扣款日，扣款後到帳本按「確認入帳」`] : [];
       const lack = remaining - Math.max(0, facts.balanceCents || 0);
-      if (lack > 0) return out('short', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}，請在扣款日前轉入${confirmNote}`, '餘額不足', `扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, true);
-      return out(unconfirmed > 0 ? 'watch' : 'ok', `本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠${confirmNote}`, '待確認入帳', `固定支出扣款後到帳本按「確認入帳」（${fmt(unconfirmed)}）`);
+      if (lack > 0) return out('short', [`扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, `因為本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}`, ...confirmNote], '餘額不足', `扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, true);
+      return out(unconfirmed > 0 ? 'watch' : 'ok', [`本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠`, ...confirmNote], '待確認入帳', `固定支出扣款後到帳本按「確認入帳」（${fmt(unconfirmed)}）`);
     }
     if (row.key === 'living') {
       const spent = Math.max(0, facts.spentCents || 0);
@@ -293,14 +294,14 @@ const Planning = (() => {
         over ? `剩 ${cycle.daysLeft} 天每天最多花 ${fmt(perDay)}` : `轉 ${fmt(lack)} 到${facts.accountName}當生活費`, !over);
     }
     if (target <= 0) return row.shortfallCents > 0 ? { level: 'short', tag: '收入不夠分配', text: `收入付完前面的用途後沒有剩，這期無法提撥（需要 ${fmt(row.requestedCents)}）` } : out('ok', '本期不需提撥');
-    if (facts.sharedWithIncome) return out('watch', `${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少；建議改搭配獨立帳戶`, '無法追蹤', `${row.label}改搭配薪資以外的帳戶`);
+    if (facts.sharedWithIncome) return out('watch', [`建議改搭配薪資以外的帳戶`, `因為${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少`], '無法追蹤', `${row.label}改搭配薪資以外的帳戶`);
     const moved = Math.max(0, facts.movedInCents || 0);
     if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
     const projected = Math.max(0, facts.projectedInCents || 0);
-    if (moved + projected >= target) return out('watch', `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}；轉帳後到帳本按「確認入帳」`, '待確認入帳', `固定儲蓄轉帳後到帳本按「確認入帳」（${fmt(projected)}）`);
+    if (moved + projected >= target) return out('watch', [`轉帳後到帳本按「確認入帳」`, `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}，帳本還沒確認`], '待確認入帳', `固定儲蓄轉帳後到帳本按「確認入帳」（${fmt(projected)}）`);
     if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, '待轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
-    const pendingNote = projected > 0 ? `（其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認）` : '';
-    return out('short', `第 ${cycle.elapsedDays} 天仍差 ${fmt(target - moved)} 未轉入${facts.accountName}${pendingNote}`, '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
+    const pendingNote = projected > 0 ? [`其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認`] : [];
+    return out('short', [`先轉 ${fmt(target - moved)} 到${facts.accountName}`, `因為第 ${cycle.elapsedDays} 天了，本期還差 ${fmt(target - moved)} 沒轉入`, ...pendingNote], '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
   };
   // 每期轉帳指示的唯一算法，依目的帳戶合併（首頁「要做的事」與分配狀態的已轉入金額都讀這裡）：
   //   plannedCents＝每期要轉進該帳戶的分配額；薪資入帳帳戶的用途不用轉（stay，金額計入 stayCents）

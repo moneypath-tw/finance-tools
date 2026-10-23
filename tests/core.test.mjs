@@ -844,9 +844,9 @@ test('分配狀態：依已過天數與實際帳務判斷並給建議', () => {
   // 儲蓄類：發薪後 3 天內提醒先轉，過了仍未轉就不足；跟薪資同帳戶分不出來
   assert.equal(S(row('saving', 300000), { movedInCents: 300000 }).level, 'ok');
   assert.equal(S(row('saving', 300000), { movedInCents: 0 }, { ...cycle, elapsedDays: 2 }).level, 'watch');
-  assert.match(S(row('saving', 300000), { movedInCents: 100000 }).text, /仍差 2,000元/);
+  assert.match(S(row('saving', 300000), { movedInCents: 100000 }).text, /^先轉 2,000元 到主要銀行；因為第 15 天了，本期還差 2,000元/);
   assert.match(S(row('emergency', 300000), { sharedWithIncome: true }).text, /薪資入帳/);
-  assert.match(S(row('saving', 100000, 200000), { movedInCents: 100000 }).text, /^收入只夠分配 1,000元/);
+  assert.match(S(row('saving', 100000, 200000), { movedInCents: 100000 }).lines.at(-1), /^收入只夠分配 1,000元（需要 3,000元）/);
 });
 
 test('分配狀態文字：沒有應扣款與只因餘額不足時不出現 0 元的誤導說法', () => {
@@ -903,7 +903,7 @@ test('分配狀態：沒有任何帳務資料時不判斷進度；固定儲蓄�
   assert.equal(S(row('saving', 500000), { movedInCents: 0, projectedInCents: 500000 }).level, 'watch');
   const partial = S(row('emergency', 700000), { movedInCents: 0, projectedInCents: 500000 });
   assert.equal(partial.level, 'short');
-  assert.match(partial.text, /仍差 7,000元.*預計轉入 5,000元/);
+  assert.match(partial.text, /^先轉 7,000元 到儲蓄帳戶；.*還差 7,000元.*預計轉入 5,000元/);
 });
 
 test('分配狀態：生活費的每日可花把未分配的錢算進來，超出預算但沒超過可花用只算留意', () => {
