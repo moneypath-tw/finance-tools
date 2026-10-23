@@ -1894,10 +1894,10 @@ const App = (() => {
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '全部帳戶變動' }), el('p', { class: 'mono big', text: Money.formatTWD(t.changeCents) }),
             el('p', { class: 'notice', text: `計畫存入 ${Money.formatTWD(t.inCents)}` })])
         ]),
-        el('p', { class: 'notice', text: '「用掉」是推算值：期初＋計畫存入（固定出入帳）−期末，不是逐筆明細。帳戶之間互轉沒有記錄時，個別帳戶會一邊多花、一邊多存，但全部加總不受影響；利息、退款、計畫外收入會讓數字變成「多出」。' }),
+        el('p', { class: 'notice', text: '「用掉」是推算值：期初＋計畫存入（固定出入帳）−期末，不是逐筆明細。帳戶之間互轉沒有記錄時，個別帳戶會一邊多花、一邊多存，但全部加總不受影響；利息、退款、計畫外收入會讓數字變成「多出」。第一次核對的新帳戶期初以 0 計（視為從其他帳戶轉入）；之前填過、這次或上次沒填的帳戶不計入。' }),
         el('details', {}, [el('summary', { text: '各帳戶明細（互轉未記錄時僅供參考）' }), el('div', { class: 'table-scroll' }, [el('table', {}, [
           el('thead', {}, [el('tr', {}, ['帳戶', '期初', '計畫存入', '期末', '推算用掉'].map(h => el('th', { text: h })))]),
-          el('tbody', {}, p.accounts.map(a => el('tr', {}, [el('td', { text: nameOf(a.id) }),
+          el('tbody', {}, p.accounts.map(a => el('tr', {}, [el('td', { text: a.isNew ? `${nameOf(a.id)}（新帳戶，期初以 0 計）` : nameOf(a.id) }),
             ...[a.startCents, a.inCents, a.endCents].map(v => el('td', { class: 'mono', text: Money.formatTWD(v) })),
             el('td', { class: 'mono', text: outflowText(a.outflowCents) })])))
         ])])]),
