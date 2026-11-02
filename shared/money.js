@@ -577,10 +577,10 @@ const Money = (() => {
   };
 
   // Month-by-month student loan timeline. Entries are half a year each and the last one ends at graduationAge.
-  // Interest before collection starts is paid by the government (第 8 條). Two points the rules leave open use
-  // the costlier reading by default (user decision 2026-11-02), both switchable in repayment:
-  //   interestAfterNotice 'student' — after the 異動 stops collection, the student pays the monthly interest;
-  //   mergedTerm 'deduct_paid' — the merged loan's term subtracts months already collected.
+  // Interest before collection starts is paid by the government (第 8 條). Both points below are switchable in
+  // repayment (user kept both options, 2026-11-02):
+  //   interestAfterNotice 'student' — unwritten; costlier reading by default: after the 異動 the student pays interest;
+  //   mergedTerm 'deduct_paid' — confirmed by the user with the bank: the merged term subtracts months collected.
   const calcStudentLoanPlan = (periods, repayment, currentAge, options = {}) => {
     const ref = REFERENCE_DATA.twStudentLoan;
     const G = Number(repayment.graduationAge);
