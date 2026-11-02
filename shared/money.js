@@ -525,7 +525,7 @@ const Money = (() => {
   // graduates later. 臺銀 merges the unpaid loans of a student still studying in Taiwan and starts them after
   // the final stage (復學 is a listed case for 償還期限異動), so any leave followed by 復學 keeps one loan.
   // Only a leave never followed by 復學 starts repayment, leaveRepaymentDelayYears after the leave began
-  // (辦法第 11 條). Ages count back from graduationAge at 0.5 year per entry, since entries carry no dates.
+  // (辦法第 11 條). Ages count back from graduationAge at semesterYears per entry, since entries carry no dates.
   const leaveGap = () => ({ kind: 'leave', label: '休學一學期', isLeaveOfAbsence: true, overrides: {} });
 
   // Older saves marked a semester itself as 休學, which dropped that grade. After 復學 the student still takes
@@ -550,7 +550,7 @@ const Money = (() => {
   // 異動 is filed: lateNoticeMonths after the deadline, or after 復學 when the leave outlasted the deadline.
   const studentLoanLeaveRuns = (periods, graduationAge) => {
     const n = periods.length;
-    const startOf = (i) => Number(graduationAge) - (n - i) * 0.5;
+    const startOf = (i) => Number(graduationAge) - (n - i) * REFERENCE_DATA.twStudentLoan.semesterYears;
     const delay = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
     const runs = [];
     periods.forEach((p, i) => {
@@ -585,7 +585,7 @@ const Money = (() => {
     const ref = REFERENCE_DATA.twStudentLoan;
     const G = Number(repayment.graduationAge);
     const n = periods.length;
-    const startMonth = (i) => Math.round((G - (n - i) * 0.5) * 12);
+    const startMonth = (i) => Math.round((G - (n - i) * ref.semesterYears) * 12);
     const borrowed = periods.filter(p => !p.isLeaveOfAbsence).length;
     let amounts = periods.map(p => p.isLeaveOfAbsence ? 0 : Math.max(0, Math.round(Number(p.total) || 0)));
     if (options.manualPrincipalCents != null) {

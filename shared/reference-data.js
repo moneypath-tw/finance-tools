@@ -46,6 +46,7 @@ const REFERENCE_DATA = {
     // 臺銀還款須知：繼續就學者未償各階段貸款以最後教育階段身分合併計算；「復學」為償還期限異動情形之一
     // （檢附註冊證明）。故復學後仍為一筆、畢業後起繳（2026-11-02 查證，學校轉載之臺銀文件）。
     leaveRepaymentDelayYears: 2,
+    semesterYears: 0.5, // one semester entry or one leave gap on the student-loan timeline
     leaveDeferralNote: '休學是學期之間的空檔，復學後接續原年級、畢業延後。復學後要在休學滿 2 年（服義務役為退伍滿 2 年）前通知承貸銀行，貸款才會併成一筆、畢業後起繳；錯過期限或休學超過 2 年，銀行會先開始扣款，直到檢附註冊證明辦妥償還期限異動。實際以承貸銀行為準。',
     leaveRetrievedAt: '2026-11-02',
     source: '教育部高級中等以上學校學生就學貸款辦法及臺灣銀行就學貸款公告',
