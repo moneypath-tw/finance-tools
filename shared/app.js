@@ -70,7 +70,7 @@ const App = (() => {
     currentScenarioId = scenarios.some(s => s.scenarioId === config.ui?.currentScenarioId) ? config.ui.currentScenarioId : scenarios[0]?.scenarioId;
     return true;
   };
-  const updateStorageStatus = ({ message, ok, lastSavedAt, bindingName }) => {
+  const updateStorageStatus = ({ message, ok, lastSavedAt, bindingName, fileStale }) => {
     const box = document.querySelector('#storage-status');
     const text = document.querySelector('#storage-status-text');
     if (box) box.classList.toggle('failed', !ok);
@@ -78,8 +78,9 @@ const App = (() => {
     const indicator = document.querySelector('#save-indicator');
     const indicatorText = document.querySelector('#save-indicator-text');
     const locationButton = document.querySelector('#choose-storage-location');
-    if (indicator) indicator.classList.toggle('failed', !ok);
-    if (indicatorText) indicatorText.textContent = lastSavedAt
+    if (indicator) indicator.classList.toggle('failed', !ok || !!fileStale);
+    // 綁定檔案沒寫成功時不顯示「已綁定」，直接顯示原因（檔案才是單一權威，不能讓人以為已同步）
+    if (indicatorText) indicatorText.textContent = fileStale ? `綁定檔案 ${bindingName} 未更新，點一下頁面即可重新授權` : lastSavedAt
       ? `上次保存 ${new Date(lastSavedAt).toLocaleString('zh-Hant-TW')}${bindingName ? `・已綁定 ${bindingName}` : '・瀏覽器本機'}`
       : message;
     if (locationButton) locationButton.textContent = bindingName ? `更改保存位置・${bindingName}` : '選擇本機保存位置';
@@ -191,19 +192,13 @@ const App = (() => {
       for (const [id, cents] of Object.entries(s.balances || {})) if (Number.isInteger(cents)) out[id] = { date: s.date, cents };
     return out;
   };
-  const entryDeltas = (entry) => {
-    const amount = Money.entryTWDCents(entry);
-    if (amount === null || entry.type === 'wishlist') return [];
-    if (entry.type === 'transfer') return [[entry.fromAccount, -Math.abs(amount)], [entry.toAccount, Math.abs(amount)]];
-    return entry.account ? [[entry.account, amount]] : [];
-  };
   const getAccountBalances = (includeProjected = false) => {
     ensureAccountProfiles();
     const snap = latestSnapshotByAccount();
     const balances = Object.fromEntries(config.accountProfiles.map(a => [a.id, snap[a.id] ? snap[a.id].cents : (a.initialBalanceCents || 0)]));
     for (const entry of ledger.entries) {
       if (!includeProjected && entry.status === 'projected') continue;
-      for (const [id, cents] of entryDeltas(entry)) {
+      for (const [id, cents] of Money.entryDeltas(entry)) {
         if (!id || (snap[id] && entry.date <= snap[id].date)) continue;
         balances[id] = (balances[id] || 0) + cents;
       }
@@ -370,7 +365,7 @@ const App = (() => {
     for (const e of ledger.entries) {
       if (e.status === 'projected' || !(e.date >= cycle.start && e.date <= cycle.today) || (snap && e.date <= snap.date)) continue;
       if (e.type !== 'transfer' && !withFlows) continue;
-      for (const [id, delta] of entryDeltas(e)) if (id === accountId) cents -= delta;
+      for (const [id, delta] of Money.entryDeltas(e)) if (id === accountId) cents -= delta;
     }
     if (snap && snap.date >= cycle.start) {
       for (const ev of Money.flowEvents(items, cycle.start, snap.date)) {
@@ -443,14 +438,18 @@ const App = (() => {
     const cycleIdx = Planning.cycleIndexOf(cycle.start, cycle.payday);
     const fixedIds = [...new Set([...Object.keys(dueByAccount), ...Object.keys(reserve)])];
     // 現在應有＝本期還沒扣的＋本期結束時應留；本期開始時應有＝本期全部要扣的＋本期結束時應留
-    const fixedNeedByAccount = {}, fixedStartLackByAccount = {};
+    // fixedEarlyByAccount：本期建議多存（不強制）＝及早存的平均份額（Planning.fixedReserve.earlyAt）超過必要不足額的部分
+    const fixedNeedByAccount = {}, fixedStartLackByAccount = {}, fixedEarlyByAccount = {};
     for (const id of fixedIds) {
       const after = reserve[id] ? reserve[id].heldAt(cycleIdx) : 0;
+      const start = balanceAtCycleStart(id, cycle, balances, { withFlows: true, items: recurring.items });
       fixedNeedByAccount[id] = (dueRemainingByAccount[id] || 0) + after;
-      fixedStartLackByAccount[id] = Math.max(0, (dueByAccount[id] || 0) + after - balanceAtCycleStart(id, cycle, balances, { withFlows: true, items: recurring.items }));
+      fixedStartLackByAccount[id] = Math.max(0, (dueByAccount[id] || 0) + after - start);
+      const early = reserve[id] ? reserve[id].earlyAt(cycleIdx, start - (dueByAccount[id] || 0)) : 0;
+      if (early > fixedStartLackByAccount[id]) fixedEarlyByAccount[id] = early - fixedStartLackByAccount[id];
     }
     const spendAccounts = livingSpendAccountIds(recurring);
-    const livingSpentCents = Planning.livingSpendCents(ledger.entries.filter(inCycle), spendAccounts.ids, cycle.start, cycle.next);
+    const livingSpentCents = Planning.livingSpendCents(ledger.entries.filter(inCycle), spendAccounts.ids, cycle.start, cycle.next, recurring.items);
     // 每個帳戶本期已入帳的淨轉入，與固定儲蓄的預測轉入（本期內、帳本尚未確認）
     // 每個帳戶都要有一筆：本期沒有轉帳的帳戶也要帶實際餘額，不然會被當成 0 而叫人補錢
     const transferFacts = Object.fromEntries(Object.keys(balances).map(id => [id, { balanceCents: balances[id], movedInCents: 0, projectedInCents: 0 }]));
@@ -462,20 +461,29 @@ const App = (() => {
     }
     const incomeAccountIds = [...new Set([mainIncome?.accountId, ...recurring.items.filter(f => f.type === 'income').map(f => f.accountId)].filter(Boolean))];
     const noData = !ledger.entries.some(e => e.status !== 'projected' && e.type !== 'wishlist') && !Object.values(balances).some(Boolean);
-    return { mainIncome, cycle, balances, dueTotalCents, paidCents, unconfirmedCents, dueRemainingCents: Math.max(0, dueTotalCents - paidCents), fixedNeedByAccount, fixedStartLackByAccount, spendAccounts, livingSpentCents, transferFacts, incomeAccountIds, noData };
+    return { mainIncome, cycle, balances, dueTotalCents, paidCents, unconfirmedCents, dueRemainingCents: Math.max(0, dueTotalCents - paidCents), fixedNeedByAccount, fixedStartLackByAccount, fixedEarlyByAccount, spendAccounts, livingSpentCents, transferFacts, incomeAccountIds, noData };
   };
-  // 生活花費推估的唯一來源（首頁建議值、最低生活費、帳本都讀這裡）：
-  // 帳戶核對累積夠多天時，用核對推算（期初＋計畫存入−期末−固定支出），否則用逐筆帳目近幾期的中位數
+  // 生活花費推估的唯一來源（首頁建議值、最低生活費、帳本都讀這裡），本機歷史紀錄優先：
+  //   1. 逐筆帳目近幾個完整發薪週期的中位數；2. 逐筆帳目從第一筆到昨天換算每 30 天（週期還沒走完時）；
+  //   3. 帳戶核對推算（期初＋計畫存入−期末−固定支出）。三種都已扣掉固定支出（手記的固定支出由 Planning.fixedEntryMatch 配對排除）
   const livingEstimate = (recurring, spendIds, payday) => {
-    const history = Planning.livingSpendHistory({ entries: ledger.entries, accountIds: spendIds, payday, today: new Date() });
+    const now = new Date();
+    const history = Planning.livingSpendHistory({ entries: ledger.entries, accountIds: spendIds, payday, today: now, items: recurring.items });
+    // 近 93 天同一筆固定收支記了兩次（排程帳目已確認＋另外手記）：帳戶餘額會少算，首頁提醒刪掉一筆
+    const duplicates = Planning.fixedEntryMatch({ entries: ledger.entries, items: recurring.items, from: Money.ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 93)), to: Money.ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)) }).duplicates;
+    return { ...livingEstimateSource(history, recurring), duplicates };
+  };
+  const livingEstimateSource = (history, recurring) => {
+    const roundUp = (cents) => Math.ceil(cents / 10000) * 10000;
+    if (history.medianCents > 0) return { source: 'entries', history, monthlyCents: history.medianCents, suggestedCents: history.suggestedCents, text: `近 ${history.cycles.length} 期實際花費中位數 ${Money.formatTWD(history.medianCents)}（已扣掉固定支出）` };
+    if (history.rolling?.per30Cents > 0) return { source: 'entries', history, monthlyCents: history.rolling.per30Cents, suggestedCents: roundUp(history.rolling.per30Cents), text: `逐筆帳目 ${history.rolling.from.slice(5).replace('-', '/')} 起 ${history.rolling.days} 天，生活花費每 30 天約 ${Money.formatTWD(history.rolling.per30Cents)}（已扣掉固定支出）` };
     const snap = Snapshots.livingEstimate(Snapshots.periods(ledger.snapshots, recurring.items));
     if (snap) {
       const monthlyCents = Math.max(0, snap.livingPer30Cents);
-      return { source: 'snapshot', history, monthlyCents, suggestedCents: Math.ceil(monthlyCents / 10000) * 10000, text: `帳戶核對近 ${snap.days} 天推算，生活花費每 30 天約 ${Money.formatTWD(monthlyCents)}（用掉的錢扣掉固定支出）` };
+      return { source: 'snapshot', history, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `帳戶核對近 ${snap.days} 天推算，生活花費每 30 天約 ${Money.formatTWD(monthlyCents)}（用掉的錢扣掉固定支出）` };
     }
-    // 逐筆帳目近幾期一筆生活花費都沒有（只用帳戶核對的人）＝沒有資料，不能建議把預算改成 0
-    if (history.suggestedCents === null || !(history.medianCents > 0)) return { source: null, history, monthlyCents: null, suggestedCents: null, text: null };
-    return { source: 'entries', history, monthlyCents: history.medianCents, suggestedCents: history.suggestedCents, text: `近 ${history.cycles.length} 期實際花費中位數 ${Money.formatTWD(history.medianCents)}` };
+    // 沒有任何生活花費資料（只用帳戶核對且天數不夠）＝不能建議把預算改成 0
+    return { source: null, history, monthlyCents: null, suggestedCents: null, text: null };
   };
   // 本期還要付的支出依帳戶（Planning.spendingNeedByAccount）；livingBudgetCents 沒給時用生活費預算
   const spendNeedNow = (plan, facts, livingBudgetCents = plan.expenses.livingCents) => Planning.spendingNeedByAccount({
@@ -802,7 +810,7 @@ const App = (() => {
     const fmt = Money.formatTWD;
     const today = new Date();
     const { cycle } = health.facts;
-    const common = { entries: ledger.entries, livingIds: spendAccounts.ids, savingIds: savingsAccountIds(recurring), openingCents: config.accountProfiles.reduce((s, a) => s + (a.initialBalanceCents || 0), 0) };
+    const common = { entries: ledger.entries, items: recurring.items, livingIds: spendAccounts.ids, savingIds: savingsAccountIds(recurring), openingCents: config.accountProfiles.reduce((s, a) => s + (a.initialBalanceCents || 0), 0) };
     const reports = Planning.cycleReports({ ...common, cycles: Planning.pastCycles({ entries: ledger.entries, payday: cycle.payday, today, count: PLANNING_RULES.habitCycles }) });
     const [current] = Planning.cycleReports({ ...common, cycles: [cycle] });
     const habits = Planning.habitInsights({ reports, current, recommendedSavingCents: health.recommendedSavingCents });
@@ -1095,12 +1103,13 @@ const App = (() => {
     const floorsView = floors.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-floors' }, [
       el('summary', { text: `扣款帳戶最低餘額（緩衝 ${config.dashboard.fixedBufferMonths} 個月）` }),
       el('div', { class: 'table-scroll' }, [el('table', {}, [
-        el('thead', {}, [el('tr', {}, ['帳戶', '下次扣款', '扣款前一天至少', '扣款後至少留', '目前餘額'].map(h => el('th', { text: h })))]),
+        el('thead', {}, [el('tr', {}, ['帳戶', '下次扣款', '扣款前一天至少', '扣款後至少留', '目前餘額', '本期建議多存'].map(h => el('th', { text: h })))]),
         el('tbody', {}, floors.map(f => el('tr', {}, [el('td', { text: accountName(f.accountId) }), el('td', { class: 'mono', text: `${f.nextDate.slice(5).replace('-', '/')}　扣 ${Money.formatTWD(f.debitCents)}` }),
           el('td', { class: 'mono', text: Money.formatTWD(f.beforeCents) }), el('td', { class: 'mono', text: Money.formatTWD(f.afterCents) }),
-          el('td', { class: `mono${(balances[f.accountId] || 0) < f.beforeCents ? ' neg' : ''}`, text: Money.formatTWD(balances[f.accountId] || 0) })])))
+          el('td', { class: `mono${(balances[f.accountId] || 0) < f.beforeCents ? ' neg' : ''}`, text: Money.formatTWD(balances[f.accountId] || 0) }),
+          el('td', { class: 'mono', text: savingsHealth.facts.fixedEarlyByAccount[f.accountId] ? Money.formatTWD(savingsHealth.facts.fixedEarlyByAccount[f.accountId]) : '—' })])))
       ])]),
-      el('p', { class: 'notice', text: '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝；扣款後至少留＝扣完後仍要在的預存與緩衝。年繳、季繳的項目每月預存「金額÷週期」，扣款前剛好存滿。' }),
+      el('p', { class: 'notice', text: '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝；扣款後至少留＝扣完後仍要在的預存與緩衝。年繳、季繳的項目每月預存「金額÷週期」，扣款前剛好存滿。本期建議多存不強制：進度已達標但離整筆還有差距時，把差額平均分到扣款前的每一期，早存比晚存好。' }),
       savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
     ]) : null;
     const bar = el('div', { class: 'home-bar', role: 'img', 'aria-label': verdict.segments.map(s => `${s.label} ${Money.formatTWD(s.cents)}`).join('、') }, verdict.segments.map(s => {
@@ -1138,6 +1147,7 @@ const App = (() => {
         el('progress', { max: String(em.targetMonths), value: String(Math.min(em.months, em.targetMonths)) })
       ]),
       el('p', { class: 'home-goal', text: `最低生活費每月約 ${Money.formatTWD(minimumLivingCents)}（必要固定支出 ${Money.formatTWD(essentialPartCents)}＋生活花費 ${Money.formatTWD(livingPartCents)}${living.source ? '' : '，尚無實際花費，暫用預算'}）` }),
+      living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，固定出入帳的排程帳目已確認，又另外手記了一筆同金額的帳，帳戶餘額會算錯，請到帳本刪掉其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : el('p', { class: 'home-ok', text: '目前不用做任何事' }),
       habitsView.node,
@@ -1950,7 +1960,8 @@ const App = (() => {
     );
 
     // 必須傳算好的固定項目（recurringSummary().items）：原始設定沒有換算後的金額，固定支出會被算成 0
-    const periods = Snapshots.periods(ledger.snapshots, recurringSummary().items);
+    // 傳 ledger.entries 才會自動對帳（total.unrecordedCents：餘額變化與排程＋手記帳目的差額）
+    const periods = Snapshots.periods(ledger.snapshots, recurringSummary().items, ledger.entries);
     if (!periods.length) {
       box.append(el('p', { class: 'notice', text: '再核對一次之後，就能看到這段期間用掉多少。' }));
     } else {
@@ -1960,7 +1971,7 @@ const App = (() => {
       const recurring = recurringSummary();
       const living = livingEstimate(recurring, livingSpendAccountIds(recurring).ids, currentPayCycle(new Date(), recurring).cycle.payday);
       const essentialCents = recurring.items.some(f => f.type === 'expense') ? recurring.essentialExpenseCents : 0;
-      if (living.source === 'snapshot') box.append(el('p', { class: 'notice', text: `${living.text}；加上必要固定支出 ${Money.formatTWD(essentialCents)}，最低生活費每月約 ${Money.formatTWD(essentialCents + living.monthlyCents)}。` }));
+      if (living.source) box.append(el('p', { class: 'notice', text: `${living.text}；加上必要固定支出 ${Money.formatTWD(essentialCents)}，最低生活費每月約 ${Money.formatTWD(essentialCents + living.monthlyCents)}。` }));
       if (assets.length >= 2) {
         // 總資產折線：用 createElementNS 畫（不經 innerHTML），數值只來自 assetSeries
         const NS = 'http://www.w3.org/2000/svg', w = 400, h = 140, pad = 16;
@@ -1993,7 +2004,7 @@ const App = (() => {
         ])])]),
         el('h3', { text: '各期比較' }),
         el('div', { class: 'table-scroll' }, [el('table', {}, [
-          el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '生活花費', '每 30 天', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
+          el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '生活花費', '每 30 天', '對帳', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
           el('tbody', {}, periods.map(x => {
             const pt = assets.find(a => a.date === x.to) || {};
             const per30 = (cents) => (x.days > 0 ? Math.round(cents * 30 / x.days) : null);
@@ -2002,13 +2013,14 @@ const App = (() => {
               el('td', { class: 'mono', text: Money.formatTWD(x.total.fixedOutCents) }),
               el('td', { class: 'mono', text: outflowText(x.total.livingCents) }),
               el('td', { class: 'mono', text: per30(x.total.livingCents) === null ? '—' : outflowText(per30(x.total.livingCents)) }),
+              el('td', { class: `mono${x.total.unrecordedCents ? ' neg' : ''}`, text: !x.total.unrecordedCents ? '對得上' : `${x.total.unrecordedCents < 0 ? '支出' : '收入'}少記 ${Money.formatTWD(Math.abs(x.total.unrecordedCents))}` }),
               el('td', { class: `mono${pt.changeCents < 0 ? ' neg' : ''}`, text: pt.changeCents === null || pt.changeCents === undefined ? '—' : Money.formatTWD(pt.changeCents) }),
               el('td', { class: `mono${pt.changePer30Cents < 0 ? ' neg' : ''}`, text: pt.changePer30Cents === null || pt.changePer30Cents === undefined ? '—' : Money.formatTWD(pt.changePer30Cents) }),
               el('td', { class: pt.trend === 'down' ? 'neg' : '', text: { up: '進步', down: '退步', flat: '持平' }[pt.trend] || '—' }),
               el('td', { text: x.note })]);
           }))
         ])]),
-        el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
+        el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）。對帳＝餘額變化與「固定出入帳排程＋這段期間的逐筆帳目」比對；推算用掉已含固定支出，自己手記的同金額固定收支會配對掉，不會重複扣。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
       );
     }
     if (sorted.length) {
@@ -2791,14 +2803,16 @@ const App = (() => {
     IO.configurePersistence(workspaceSnapshot, updateStorageStatus);
     initEnterToCommit();
     const saved = IO.loadWorkspace();
-    if (saved && !restoreWorkspace(saved)) {
+    // 瀏覽器裡沒有資料、或驗證失敗以預設值開啟時，開啟時不自動寫綁定檔案（不能用預設值蓋掉檔案裡的真實資料）
+    const restored = !!saved && restoreWorkspace(saved);
+    if (saved && !restored) {
       // 不能靜默改用預設值：下一次自動保存就會覆寫使用者原本的資料
       try { localStorage.setItem('finance-tools.workspace.rejected', JSON.stringify(saved)); } catch {}
       const detail = lastRestoreErrors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('\n');
       if (confirm(`本機工作區資料驗證失敗，暫以預設值開啟：\n${detail}\n\n原始資料已另存於瀏覽器（finance-tools.workspace.rejected）。是否立即下載原始資料備份？`)) IO.exportJson(saved, 'finance_tools_workspace_rejected');
     }
     syncCurrentAgeFromBirthYear();
-    IO.initializeFileBinding().then(() => renderPersonalSettings());
+    IO.initializeFileBinding({ sync: restored }).then(() => renderPersonalSettings());
     IO.requestPersistentStorage();
     initTabs();
     materializeDueRecurringEntries();

@@ -55,10 +55,32 @@ const Planning = (() => {
   };
   // 生活花費的唯一判斷：已入帳的支出、不是固定項目產生的、記在計入生活花費的帳戶。
   // 沒指定帳戶的舊帳目無從歸屬，一律算進來；信用卡繳款記成轉帳，不是支出，所以刷卡不會算兩次
-  const isLivingSpend = (e, accountIds) => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && (!e.account || accountIds.has(e.account));
-  const livingSpendCents = (entries, accountIds, from, to) => entries
-    .filter(e => isLivingSpend(e, accountIds) && e.date >= from && e.date < to)
-    .reduce((s, e) => s + Math.abs(Money.entryTWDCents(e) ?? 0), 0);
+  // 紅隊：手動記的支出可能就是固定支出（例如自己記了一筆房租），直接加總會把固定支出算成生活花費；
+  // 手記的薪水也已在排程裡，核對對帳時會重複計入。
+  // fixedEntryMatch：期間 [from, to) 內每一筆排定的固定支出與收入（Money.flowEvents，與帳本預測同一份），
+  //   配對一筆同類型、同帳戶（或沒填帳戶）、同金額、同期間、非排程產生的實際帳目；配到的不算生活花費、不重複對帳。
+  //   duplicates＝排程帳目已確認、又另外手記了一筆＝同一筆錢記了兩次，帳戶餘額會少算
+  const fixedEntryMatch = ({ entries, items = [], from, to }) => {
+    const matched = new Set(), duplicates = [];
+    if (!items.length) return { matched, duplicates };
+    const last = Money.ymd(new Date(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10) - 1));
+    const byId = new Map(entries.map(e => [e.id, e]));
+    const manual = entries.filter(e => (e.type === 'expense' || e.type === 'income') && e.status !== 'projected' && !e.recurringFlowId && e.date >= from && e.date < to).sort((a, b) => a.date.localeCompare(b.date));
+    for (const ev of Money.flowEvents(items, from, last)) {
+      if (ev.type !== 'expense' && ev.type !== 'income') continue;
+      const hit = manual.find(e => !matched.has(e.id) && e.type === ev.type && (!e.account || e.account === ev.accountId) && Math.abs(Money.entryTWDCents(e) ?? 0) === ev.cents);
+      if (!hit) continue;
+      matched.add(hit.id);
+      if (byId.get(ev.id)?.status === 'realized') duplicates.push({ entryId: hit.id, flowId: ev.flowId, date: hit.date, cents: ev.cents });
+    }
+    return { matched, duplicates };
+  };
+  const isLivingSpend = (e, accountIds, fixedIds) => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && !(fixedIds && fixedIds.has(e.id)) && (!e.account || accountIds.has(e.account));
+  const livingSpendCents = (entries, accountIds, from, to, items = []) => {
+    const { matched } = fixedEntryMatch({ entries, items, from, to });
+    return entries.filter(e => isLivingSpend(e, accountIds, matched) && e.date >= from && e.date < to)
+      .reduce((s, e) => s + Math.abs(Money.entryTWDCents(e) ?? 0), 0);
+  };
   // 哪些帳戶的支出算生活花費：使用者有勾選就照勾選；沒勾選時自動判斷——
   //   算：生活費、固定支出、薪資入帳帳戶，信用卡（刷卡就是花費），其他可動用帳戶（例如現金）
   //   不算：只搭配儲蓄用途的帳戶（緊急預備金、一般儲蓄、成本目標；在那裡付款多半是動用存款）、投資等不算可動用的帳戶
@@ -89,10 +111,21 @@ const Planning = (() => {
     return past;
   };
   // 近幾個完整發薪週期的生活花費與建議預算：中位數（不被單次大額拉高），無條件進位到百元
-  const livingSpendHistory = ({ entries, accountIds, payday, today, cycles = PLANNING_RULES.livingSuggestCycles }) => {
-    const past = pastCycles({ entries, payday, today, count: cycles }).map(c => ({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next) }));
+  // 週期從第一筆手記支出開始算（只有收入或排程帳目的週期不算，不然會被當成「沒花錢」把中位數拉成 0）。
+  // rolling：從第一筆手記支出（最多回溯 maxDays 天）到昨天的生活花費換算每 30 天，滿 minDays 天才算；
+  //   發薪週期還沒走完（例如 5 號發薪、整個 10 月都記了）時也能推估。null＝天數不夠
+  const livingSpendHistory = ({ entries, accountIds, payday, today, items = [], cycles = PLANNING_RULES.livingSuggestCycles, minDays = 14, maxDays = 93 }) => {
+    const recorded = entries.filter(e => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && e.date);
+    const past = pastCycles({ entries: recorded, payday, today, count: cycles }).map(c => ({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next, items) }));
     const medianCents = median(past.map(p => p.spentCents));
-    return { cycles: past, medianCents, suggestedCents: medianCents === null ? null : Math.ceil(medianCents / 10000) * 10000 };
+    const todayYmd = Money.ymd(today);
+    const earliest = Money.ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate() - maxDays));
+    const first = recorded.map(e => e.date).filter(d => d < todayYmd).sort()[0];
+    const from = first && first > earliest ? first : earliest;
+    const days = first ? Math.round((new Date(`${todayYmd}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000) : 0;
+    const spent = days >= minDays ? livingSpendCents(entries, accountIds, from, todayYmd, items) : 0;
+    const rolling = days >= minDays ? { from, days, spentCents: spent, per30Cents: Math.round(spent * 30 / days) } : null;
+    return { cycles: past, medianCents, suggestedCents: medianCents === null ? null : Math.ceil(medianCents / 10000) * 10000, rolling };
   };
   // 每期收支報告（存花習慣的唯一資料來源）。互轉不是收入也不是支出，但要看錢有沒有真的放進儲蓄：
   //   savedCents＝收入－全部支出（＝帳面淨資產增加；帳戶間轉帳互相抵銷）
@@ -100,7 +133,7 @@ const Planning = (() => {
   //   spentFromSavingsCents＝直接從儲蓄帳戶付的支出（也是動用存款）
   //   netWorthEndCents＝期初帳面淨資產（帳戶期初餘額合計）＋到期末為止的收入－支出；投資帳戶不含市價變動
   //   byCategory：生活花費依分類加總（isLivingSpend）
-  const cycleReports = ({ entries, cycles, livingIds, savingIds, openingCents = 0 }) => {
+  const cycleReports = ({ entries, cycles, livingIds, savingIds, openingCents = 0, items = [] }) => {
     const saving = new Set(savingIds);
     const cents = (e) => Math.abs(Money.entryTWDCents(e) ?? 0);
     const realized = entries.filter(e => e.status !== 'projected' && e.type !== 'wishlist' && e.date);
@@ -112,7 +145,8 @@ const Planning = (() => {
       const toSavingsCents = sum(e => e.type === 'transfer' && saving.has(e.toAccount) && !saving.has(e.fromAccount));
       const withdrawnCents = sum(e => e.type === 'transfer' && saving.has(e.fromAccount) && !saving.has(e.toAccount));
       const byCategory = {};
-      for (const e of inside) if (isLivingSpend(e, livingIds)) byCategory[e.category || '未分類'] = (byCategory[e.category || '未分類'] || 0) + cents(e);
+      const { matched } = fixedEntryMatch({ entries, items, from: c.start, to: c.next });
+      for (const e of inside) if (isLivingSpend(e, livingIds, matched)) byCategory[e.category || '未分類'] = (byCategory[e.category || '未分類'] || 0) + cents(e);
       const flowsToEnd = realized.filter(e => e.date < c.next).reduce((s, e) => s + (e.type === 'income' ? cents(e) : e.type === 'expense' ? -cents(e) : 0), 0);
       return {
         start: c.start, next: c.next, incomeCents, expenseCents,
@@ -223,7 +257,7 @@ const Planning = (() => {
   //   每個固定支出（金額 P、每 c 個月扣一次）每個發薪週期預存 P÷c，扣款所在週期要整筆 P；
   //   另外常留 bufferMonths 個月的「每月平均扣款」當緩衝（扣款前後都要在）。
   //   週期以發薪日切（payday）：發薪日在扣款日之前時，扣款所在週期的收入就付得出，不必上一期先留。
-  // 回傳 { [accountId]: { monthlyCents, bufferCents, flows: [{ item, next }], heldAt(cycleIdx) } }；
+  // 回傳 { [accountId]: { monthlyCents, bufferCents, flows: [{ item, next }], heldAt(cycleIdx), earlyAt(cycleIdx, heldCents) } }；
   //   next＝fromYmd 當天或之後的下一次扣款 { date, cents, cycle }；heldAt＝在那個週期結束時應已存好的錢（含緩衝）
   const cycleIndexOf = (ymd, payday = 1) => (+ymd.slice(0, 4)) * 12 + (+ymd.slice(5, 7)) - 1 - (+ymd.slice(8, 10) < Math.min(payday, new Date(+ymd.slice(0, 4), +ymd.slice(5, 7), 0).getDate()) ? 1 : 0);
   const fixedReserve = ({ items, fromYmd, payday = 1, bufferMonths = 0 }) => {
@@ -249,6 +283,21 @@ const Planning = (() => {
         const k = cycleIndexOf(next.date, payday) - cycleIdx;
         return s + (k <= 0 ? next.cents : Math.ceil(next.cents * Math.max(0, next.cycle - k) / next.cycle / 100) * 100);
       }, 0);
+      // 及早存（不強制）：heldCents＝週期開始時帳戶裡已留給之後扣款的錢（不含本期要扣的）。
+      // 先補足緩衝，其餘依扣款日由近到遠分給各項目；每個項目還差的錢平均分到「本期到扣款所在週期」每一期。
+      // 即使上期末已達 heldAt 的進度，只要離整筆還有差距，本期仍建議存入平均份額——早存比晚存好
+      a.earlyAt = (cycleIdx, heldCents) => {
+        let held = Math.max(0, Math.round(heldCents || 0));
+        let cents = Math.max(0, a.bufferCents - held);
+        held = Math.max(0, held - a.bufferCents);
+        for (const { next } of [...a.flows].sort((x, y) => x.next.date.localeCompare(y.next.date))) {
+          const used = Math.min(held, next.cents);
+          held -= used;
+          const left = Math.max(0, cycleIndexOf(next.date, payday) - cycleIdx) + 1;
+          cents += Math.ceil((next.cents - used) / left / 100) * 100;
+        }
+        return cents;
+      };
     }
     return out;
   };
@@ -538,5 +587,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

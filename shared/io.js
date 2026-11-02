@@ -17,9 +17,20 @@ const IO = (() => {
   const DB_NAME = 'finance-tools-local';
   const HISTORY_LIMIT = 20;
   let lastSavedAt = null;
+  // 綁定檔案最後一次真的寫入成功的時間；與 lastSavedAt（瀏覽器本機）分開，狀態列才不會在檔案沒更新時仍顯示「已綁定」
+  // （2026-11-02：瀏覽器重開後寫入權限失效，檔案停在 10/22，狀態列卻一直顯示已綁定）
+  let fileSavedAt = null;
+  let fileStale = false;
+  let reauthArmed = false;
 
   const notifyStatus = (message, ok = true) => {
-    if (statusListener) statusListener({ message, ok, lastSavedAt, bindingName: boundFileHandle?.name || null });
+    if (statusListener) statusListener({ message, ok, lastSavedAt, bindingName: boundFileHandle?.name || null, fileSavedAt, fileStale: !!boundFileHandle && fileStale });
+  };
+  // 重新授權必須由使用者操作觸發（瀏覽器規定）：權限失效時，下一次點擊頁面就請求授權並把目前資料寫進檔案
+  const armReauth = () => {
+    if (reauthArmed || !globalThis.document) return;
+    reauthArmed = true;
+    document.addEventListener('click', () => { reauthArmed = false; saveBoundFile({ requestPermission: true }); }, { once: true, capture: true });
   };
   const currentEnvelope = () => ({ schemaVersion: 1, savedAt: new Date().toISOString(), ...(stateProvider ? stateProvider() : {}) });
   const saveCurrent = () => {
@@ -78,7 +89,7 @@ const IO = (() => {
       tx.onerror = () => { db.close(); reject(tx.error); };
     });
   };
-  const initializeFileBinding = async () => {
+  const initializeFileBinding = async ({ sync = false } = {}) => {
     try {
       const db = await openHistoryDb();
       boundFileHandle = await new Promise((resolve, reject) => {
@@ -88,6 +99,9 @@ const IO = (() => {
         req.onerror = () => reject(req.error);
         tx.oncomplete = () => db.close();
       });
+      // 開啟時就把瀏覽器裡的資料同步進檔案：有權限直接寫；沒有就標成未同步並等下一次點擊授權。
+      // sync 只在本機資料驗證通過時為 true：驗證失敗以預設值開啟時不能拿預設值蓋掉檔案
+      if (boundFileHandle && sync) await saveBoundFile();
       return boundFileHandle;
     } catch { boundFileHandle = null; return null; }
   };
@@ -102,10 +116,14 @@ const IO = (() => {
       await writable.write(JSON.stringify(envelope, null, 2));
       await writable.close();
       lastSavedAt = envelope.savedAt;
+      fileSavedAt = envelope.savedAt;
+      fileStale = false;
       notifyStatus(`本機與 ${boundFileHandle.name} 已同步`);
       return true;
     } catch (err) {
-      notifyStatus(`瀏覽器資料已保存；綁定檔案未更新：${err.message}`, false);
+      fileStale = true;
+      if (err.message === '需要重新授權綁定檔案') armReauth();
+      notifyStatus(`瀏覽器資料已保存；綁定檔案 ${boundFileHandle.name} 未更新：${err.message}（點一下頁面即可重新授權）`, false);
       return false;
     }
   };
@@ -131,7 +149,7 @@ const IO = (() => {
     await saveBindingHandle(null);
     notifyStatus('已解除檔案綁定；仍會自動保存於瀏覽器本機資料');
   };
-  const getBindingInfo = () => ({ supported: !!globalThis.showSaveFilePicker, name: boundFileHandle?.name || null, lastSavedAt });
+  const getBindingInfo = () => ({ supported: !!globalThis.showSaveFilePicker, name: boundFileHandle?.name || null, lastSavedAt, fileSavedAt, fileStale: !!boundFileHandle && fileStale });
   const markDirty = () => {
     dirty = true;
     saveCurrent();

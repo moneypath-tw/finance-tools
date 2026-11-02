@@ -33,6 +33,14 @@ const Money = (() => {
   };
   // 帳目換成台幣；缺匯率等無法換算時回 null，由呼叫端決定略過或當 0
   const entryTWDCents = (e) => { try { return toTWDCents(e.amountCents, e.currency, e.rateToTWD); } catch { return null; } };
+  // 一筆帳目對各帳戶餘額的影響 [[accountId, cents], ...]（帳戶餘額、核對對帳的唯一算法）；
+  // 支出的 amountCents 本身帶負號，轉帳是轉出帳戶減、轉入帳戶加
+  const entryDeltas = (entry) => {
+    const amount = entryTWDCents(entry);
+    if (amount === null || entry.type === 'wishlist') return [];
+    if (entry.type === 'transfer') return [[entry.fromAccount, -Math.abs(amount)], [entry.toAccount, Math.abs(amount)]];
+    return entry.account ? [[entry.account, amount]] : [];
+  };
 
   // 依 key 分組加總（key 可以是分類、帳戶、年月...），加總前一律先換算成台幣，避免混幣別直接相加
   const groupSum = (entries, keyFn, filterFn = () => true) => {
@@ -831,7 +839,7 @@ const Money = (() => {
   };
 
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
+    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
     getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
