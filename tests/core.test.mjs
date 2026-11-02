@@ -392,6 +392,43 @@ test('學貸依現行年金法估算月繳、年限與年齡啟用狀態', () =>
   assert.equal(api.Money.calcStudentLoanRepayment(10000000, 8, { ...repayment, termPlan: 'low_income' }, 25).termYears, 16);
 });
 
+test('學貸休學：未滿 2 年復學併為一筆，滿 2 年拆兩筆，休學未復學依休學起算', () => {
+  const T = 3000000;
+  const sem = (leave) => ({ total: leave ? 0 : T, isLeaveOfAbsence: !!leave });
+  const repayment = { graduationAge: 24, graceYears: 2, annualRate: 0.00775, termPlan: 'standard' };
+  const M = api.Money;
+  // No leave: identical to the single-loan calculation.
+  const none = Array.from({ length: 8 }, () => sem(false));
+  const base = M.calcStudentLoanRepayment(8 * T, 8, repayment, 23);
+  const plain = M.calcStudentLoanTranchePlan(none, repayment, 23);
+  assert.equal(plain.tranches.length, 0);
+  assert.equal(plain.monthlyPaymentCents, base.monthlyPaymentCents);
+  assert.equal(plain.repaymentStartAge, 26);
+  // 2 leave semesters (1 year) then 復學: continued study, one loan of 6 semesters.
+  const short = [sem(), sem(), sem(1), sem(1), sem(), sem(), sem(), sem()];
+  const s = M.splitStudentLoanTranches(short, 24);
+  assert.deepEqual(JSON.parse(JSON.stringify(s.map(t => [t.principalCents, t.borrowedSemesters, t.startAge]))), [[6 * T, 6, null]]);
+  // 4 leave semesters (2 years): periods start at 19; leave starts at 20, so the first 2 semesters start at 22.
+  const long = [sem(), sem(), sem(1), sem(1), sem(1), sem(1), sem(), sem(), sem(), sem()];
+  const l = M.splitStudentLoanTranches(long, 24);
+  assert.deepEqual(JSON.parse(JSON.stringify(l.map(t => [t.principalCents, t.borrowedSemesters, t.startAge, t.afterLeave]))),
+    [[2 * T, 2, 22, true], [4 * T, 4, null, false]]);
+  const at23 = M.calcStudentLoanTranchePlan(long, repayment, 23);
+  assert.equal(at23.status, 'repaying');
+  assert.equal(at23.tranches[0].termYears, 2);
+  assert.equal(at23.monthlyPaymentCents, at23.tranches[0].monthlyPaymentCents);
+  assert.equal(at23.tranches[1].repaymentStartAge, 26);
+  assert.equal(at23.principalCents, 6 * T);
+  const at25 = M.calcStudentLoanTranchePlan(long, repayment, 25);
+  assert.equal(at25.status, 'waiting');
+  assert.equal(at25.monthlyPaymentCents, at25.tranches[1].monthlyPaymentCents);
+  assert.equal(M.calcStudentLoanTranchePlan(long, repayment, 27).monthlyPaymentCents, at25.tranches[1].monthlyPaymentCents);
+  // Trailing leave with no 復學: one loan, starting 2 years after the leave began (22 - 0.5 + 2).
+  const trailing = M.calcStudentLoanTranchePlan([sem(), sem(), sem(), sem(1)], { ...repayment, graduationAge: 22 }, 20);
+  assert.equal(trailing.repaymentStartAge, 23.5);
+  assert.equal(trailing.borrowedSemesters, 3);
+});
+
 test('房貸可計算寬限期、正常月繳、總利息與升息壓力', () => {
   const mortgage = { purchaseAge: 30, annualRate: 0.03, termYears: 30, graceYears: 2 };
   const plan = api.Money.calcMortgageRepayment(1000000000, mortgage, 30);

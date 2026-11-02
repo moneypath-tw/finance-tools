@@ -514,11 +514,66 @@ const Money = (() => {
       ? principal / termMonths
       : principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -termMonths)));
     const totalRepaymentCents = monthlyPaymentCents * termMonths;
-    const repaymentStartAge = Number(repayment.graduationAge) + Number(repayment.graceYears);
+    const repaymentStartAge = repayment.startAge != null ? Number(repayment.startAge) : Number(repayment.graduationAge) + Number(repayment.graceYears);
     const repaymentEndAge = repaymentStartAge + termMonths / 12;
     const age = Number(currentAge);
     const status = age < repaymentStartAge ? 'waiting' : (age >= repaymentEndAge ? 'completed' : 'repaying');
     return { principalCents: principal, borrowedSemesters: semesters, termMonths, termYears: termMonths / 12, annualRate, monthlyPaymentCents, totalRepaymentCents, totalInterestCents: Math.max(0, totalRepaymentCents - principal), repaymentStartAge, repaymentEndAge, status };
+  };
+
+  // Split borrowed semesters into separately repaid tranches (辦法第 11 條). A leave run shorter than
+  // leaveRepaymentDelayYears that ends in 復學 counts as continued study, so it does not split. A leave run
+  // that reaches the delay, or that never ends in 復學, starts the earlier loans at leave start + delay.
+  // Ages are counted back from graduationAge at 0.5 year per period, since periods carry no dates.
+  const splitStudentLoanTranches = (periods, graduationAge) => {
+    const delayYears = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
+    const n = periods.length;
+    const leaveStartAge = (idx) => Number(graduationAge) - (n - idx) * 0.5;
+    const tranches = [];
+    let current = { principalCents: 0, borrowedSemesters: 0 };
+    let leaveRun = 0;
+    let leaveStartIdx = -1;
+    const closeOnLeave = () => {
+      if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: leaveStartAge(leaveStartIdx) + delayYears, afterLeave: true });
+      current = { principalCents: 0, borrowedSemesters: 0 };
+    };
+    periods.forEach((p, idx) => {
+      if (p.isLeaveOfAbsence) {
+        if (leaveRun === 0) leaveStartIdx = idx;
+        leaveRun += 1;
+        return;
+      }
+      if (leaveRun * 0.5 >= delayYears) closeOnLeave();
+      leaveRun = 0;
+      current.principalCents += Math.max(0, Math.round(Number(p.total) || 0));
+      current.borrowedSemesters += 1;
+    });
+    if (leaveRun > 0) closeOnLeave();
+    if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: null, afterLeave: false });
+    return tranches;
+  };
+
+  // Combine tranche plans into the single shape the UI and fixed-expense sync read. monthlyPaymentCents is
+  // what is due now (sum of tranches being repaid), or the next tranche's payment when none is.
+  const calcStudentLoanTranchePlan = (periods, repayment, currentAge) => {
+    const tranches = splitStudentLoanTranches(periods, repayment.graduationAge);
+    if (tranches.length <= 1) {
+      const only = tranches[0] || { principalCents: 0, borrowedSemesters: 1, startAge: null };
+      return { ...calcStudentLoanRepayment(only.principalCents, only.borrowedSemesters, { ...repayment, startAge: only.startAge }, currentAge), tranches: [] };
+    }
+    const plans = tranches.map(t => ({ ...calcStudentLoanRepayment(t.principalCents, t.borrowedSemesters, { ...repayment, startAge: t.startAge }, currentAge), afterLeave: t.afterLeave }));
+    const sum = (key) => plans.reduce((s, p) => s + p[key], 0);
+    const repaying = plans.filter(p => p.status === 'repaying');
+    const upcoming = plans.filter(p => p.status === 'waiting').sort((a, b) => a.repaymentStartAge - b.repaymentStartAge);
+    const status = repaying.length ? 'repaying' : (upcoming.length ? 'waiting' : 'completed');
+    const monthlyPaymentCents = repaying.length ? repaying.reduce((s, p) => s + p.monthlyPaymentCents, 0) : (upcoming[0]?.monthlyPaymentCents || 0);
+    const termMonths = sum('termMonths');
+    return {
+      principalCents: sum('principalCents'), borrowedSemesters: sum('borrowedSemesters'), termMonths, termYears: termMonths / 12,
+      annualRate: plans[0].annualRate, monthlyPaymentCents, totalRepaymentCents: sum('totalRepaymentCents'), totalInterestCents: sum('totalInterestCents'),
+      repaymentStartAge: Math.min(...plans.map(p => p.repaymentStartAge)), repaymentEndAge: Math.max(...plans.map(p => p.repaymentEndAge)),
+      status, tranches: plans
+    };
   };
 
   const calcMortgageRepayment = (principalCents, mortgage, currentAge) => {
@@ -655,6 +710,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, splitStudentLoanTranches, calcStudentLoanTranchePlan, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

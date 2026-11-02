@@ -42,6 +42,11 @@ const REFERENCE_DATA = {
     effectiveFrom: '2026-08-01', borrowerAnnualRate: 0.00775,
     standardGraceYears: 2, yearsPerBorrowedSemester: 1,
     extendedTermMultiplier: 1.5, lowIncomeTermMultiplier: 2,
+    // 辦法第 11 條：休學滿 2 年之次日起攤還；未滿 2 年復學屬「繼續在國內就學」，可延至畢業後償還。
+    // 復學後是否另成一筆，辦法與臺銀未明文（2026-11-02 查證），故只在休學滿 2 年時拆成兩筆。
+    leaveRepaymentDelayYears: 2,
+    leaveDeferralNote: '休學滿 2 年未復學，休學前的貸款先起繳；復學後可通知承貸銀行變更起算日，實際以銀行為準。',
+    leaveRetrievedAt: '2026-11-02',
     source: '教育部高級中等以上學校學生就學貸款辦法及臺灣銀行就學貸款公告',
     sourceUrl: 'https://edu.law.moe.gov.tw/LawContent.aspx?id=FL008414',
     bankUrl: 'https://sloan.bot.com.tw/customer/login/SLoanLogin.action',
