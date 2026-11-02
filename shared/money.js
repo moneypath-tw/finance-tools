@@ -507,7 +507,7 @@ const Money = (() => {
     const semesters = Math.max(1, Math.trunc(Number(borrowedSemesters) || 1));
     const ref = REFERENCE_DATA.twStudentLoan;
     const multiplier = repayment.termPlan === 'low_income' ? ref.lowIncomeTermMultiplier : (repayment.termPlan === 'extended' ? ref.extendedTermMultiplier : 1);
-    const termMonths = Math.max(12, Math.round(semesters * 12 * multiplier));
+    const termMonths = repayment.termMonths != null ? Math.max(1, Math.round(Number(repayment.termMonths))) : Math.max(12, Math.round(semesters * 12 * multiplier));
     const annualRate = Math.max(0, Number(repayment.annualRate) || 0);
     const monthlyRate = annualRate / 12;
     const monthlyPaymentCents = principal === 0 ? 0 : Math.ceil(monthlyRate === 0
@@ -521,58 +521,149 @@ const Money = (() => {
     return { principalCents: principal, borrowedSemesters: semesters, termMonths, termYears: termMonths / 12, annualRate, monthlyPaymentCents, totalRepaymentCents, totalInterestCents: Math.max(0, totalRepaymentCents - principal), repaymentStartAge, repaymentEndAge, status };
   };
 
-  // Split borrowed semesters into separately repaid tranches (辦法第 11 條). A leave run shorter than
-  // leaveRepaymentDelayYears that ends in 復學 counts as continued study, so it does not split. A leave run
-  // that reaches the delay, or that never ends in 復學, starts the earlier loans at leave start + delay.
-  // Ages are counted back from graduationAge at 0.5 year per period, since periods carry no dates.
-  const splitStudentLoanTranches = (periods, graduationAge) => {
-    const delayYears = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
-    const n = periods.length;
-    const leaveStartAge = (idx) => Number(graduationAge) - (n - idx) * 0.5;
-    const tranches = [];
-    let current = { principalCents: 0, borrowedSemesters: 0 };
-    let leaveRun = 0;
-    let leaveStartIdx = -1;
-    const closeOnLeave = () => {
-      if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: leaveStartAge(leaveStartIdx) + delayYears, afterLeave: true });
-      current = { principalCents: 0, borrowedSemesters: 0 };
-    };
-    periods.forEach((p, idx) => {
-      if (p.isLeaveOfAbsence) {
-        if (leaveRun === 0) leaveStartIdx = idx;
-        leaveRun += 1;
-        return;
+  // A leave is a gap between semesters, not a semester: after 復學 the student resumes the same grade and
+  // graduates later. 臺銀 merges the unpaid loans of a student still studying in Taiwan and starts them after
+  // the final stage (復學 is a listed case for 償還期限異動), so any leave followed by 復學 keeps one loan.
+  // Only a leave never followed by 復學 starts repayment, leaveRepaymentDelayYears after the leave began
+  // (辦法第 11 條). Ages count back from graduationAge at 0.5 year per entry, since entries carry no dates.
+  const leaveGap = () => ({ kind: 'leave', label: '休學一學期', isLeaveOfAbsence: true, overrides: {} });
+
+  // Older saves marked a semester itself as 休學, which dropped that grade. After 復學 the student still takes
+  // it, so restore the semester and put a leave gap before it. Mutates periods; returns how many moved.
+  const migrateLeaveMarks = (periods) => {
+    let moved = 0;
+    for (let i = periods.length - 1; i >= 0; i -= 1) {
+      const p = periods[i];
+      if (p && p.isLeaveOfAbsence && p.kind !== 'leave') {
+        delete p.isLeaveOfAbsence;
+        periods.splice(i, 0, leaveGap());
+        moved += 1;
       }
-      if (leaveRun * 0.5 >= delayYears) closeOnLeave();
-      leaveRun = 0;
-      current.principalCents += Math.max(0, Math.round(Number(p.total) || 0));
-      current.borrowedSemesters += 1;
-    });
-    if (leaveRun > 0) closeOnLeave();
-    if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: null, afterLeave: false });
-    return tranches;
+    }
+    return moved;
   };
 
-  // Combine tranche plans into the single shape the UI and fixed-expense sync read. monthlyPaymentCents is
-  // what is due now (sum of tranches being repaid), or the next tranche's payment when none is.
-  const calcStudentLoanTranchePlan = (periods, repayment, currentAge) => {
-    const tranches = splitStudentLoanTranches(periods, repayment.graduationAge);
-    if (tranches.length <= 1) {
-      const only = tranches[0] || { principalCents: 0, borrowedSemesters: 1, startAge: null };
-      return { ...calcStudentLoanRepayment(only.principalCents, only.borrowedSemesters, { ...repayment, startAge: only.startAge }, currentAge), tranches: [] };
+  // Each run of leave gaps, with the date the bank starts collecting (辦法第 11 條: 事實完成日後滿 2 年之次日;
+  // 休學 counts from the leave start, 服義務役 from the end of service, 第 2 款). Settings live on the first gap.
+  // A student who returns and notifies the bank before that date owes nothing until graduation + grace
+  // (第 11 條但書「應於償還期起算日前通知承貸銀行」). Otherwise the bank collects from the deadline until the
+  // 異動 is filed: lateNoticeMonths after the deadline, or after 復學 when the leave outlasted the deadline.
+  const studentLoanLeaveRuns = (periods, graduationAge) => {
+    const n = periods.length;
+    const startOf = (i) => Number(graduationAge) - (n - i) * 0.5;
+    const delay = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
+    const runs = [];
+    periods.forEach((p, i) => {
+      if (!p.isLeaveOfAbsence) return;
+      const last = runs[runs.length - 1];
+      if (last && last.endIdx === i) last.endIdx = i + 1;
+      else runs.push({ startIdx: i, endIdx: i + 1, first: p });
+    });
+    return runs.map(({ startIdx, endIdx, first }) => {
+      const startAge = startOf(startIdx);
+      const endAge = startOf(endIdx);
+      const returned = endIdx < n;
+      const military = first.leaveReason === 'military';
+      const deadlineAge = (military ? endAge : startAge) + delay;
+      const lateNoticeMonths = Math.max(0, Math.trunc(Number(first.lateNoticeMonths ?? 1) || 0));
+      const canNotifyInTime = returned && endAge < deadlineAge;
+      const inTime = canNotifyInTime && first.bankNotice !== 'late';
+      return {
+        startIdx, semesters: endIdx - startIdx, startAge, returnAge: returned ? endAge : null, military, deadlineAge,
+        canNotifyInTime, inTime, lateNoticeMonths,
+        collectUntilAge: !returned ? Infinity : (inTime ? null : Math.max(deadlineAge, endAge) + lateNoticeMonths / 12)
+      };
+    });
+  };
+
+  // Month-by-month student loan timeline. Entries are half a year each and the last one ends at graduationAge.
+  // Interest before collection starts is paid by the government (第 8 條). Two points the rules leave open use
+  // the costlier reading by default (user decision 2026-11-02), both switchable in repayment:
+  //   interestAfterNotice 'student' — after the 異動 stops collection, the student pays the monthly interest;
+  //   mergedTerm 'deduct_paid' — the merged loan's term subtracts months already collected.
+  const calcStudentLoanPlan = (periods, repayment, currentAge, options = {}) => {
+    const ref = REFERENCE_DATA.twStudentLoan;
+    const G = Number(repayment.graduationAge);
+    const n = periods.length;
+    const startMonth = (i) => Math.round((G - (n - i) * 0.5) * 12);
+    const borrowed = periods.filter(p => !p.isLeaveOfAbsence).length;
+    let amounts = periods.map(p => p.isLeaveOfAbsence ? 0 : Math.max(0, Math.round(Number(p.total) || 0)));
+    if (options.manualPrincipalCents != null) {
+      // A bank balance has no per-semester split; spread it over the semesters like the estimate.
+      const est = amounts.reduce((s, a) => s + a, 0);
+      const manual = Math.max(0, Math.round(Number(options.manualPrincipalCents) || 0));
+      amounts = periods.map((p, i) => p.isLeaveOfAbsence ? 0 : (est > 0 ? manual * amounts[i] / est : manual / Math.max(1, borrowed)));
     }
-    const plans = tranches.map(t => ({ ...calcStudentLoanRepayment(t.principalCents, t.borrowedSemesters, { ...repayment, startAge: t.startAge }, currentAge), afterLeave: t.afterLeave }));
-    const sum = (key) => plans.reduce((s, p) => s + p[key], 0);
-    const repaying = plans.filter(p => p.status === 'repaying');
-    const upcoming = plans.filter(p => p.status === 'waiting').sort((a, b) => a.repaymentStartAge - b.repaymentStartAge);
-    const status = repaying.length ? 'repaying' : (upcoming.length ? 'waiting' : 'completed');
-    const monthlyPaymentCents = repaying.length ? repaying.reduce((s, p) => s + p.monthlyPaymentCents, 0) : (upcoming[0]?.monthlyPaymentCents || 0);
-    const termMonths = sum('termMonths');
+    const runs = studentLoanLeaveRuns(periods, G);
+    const trailing = runs.find(r => r.returnAge === null);
+    const finalStartAge = trailing ? trailing.deadlineAge : G + Number(repayment.graceYears);
+    const finalMonth = Math.round(finalStartAge * 12);
+    const windows = runs.filter(r => r.returnAge !== null && r.collectUntilAge !== null)
+      .map(r => [Math.round(r.deadlineAge * 12), Math.round(r.collectUntilAge * 12)]);
+    const multiplier = repayment.termPlan === 'low_income' ? ref.lowIncomeTermMultiplier : (repayment.termPlan === 'extended' ? ref.extendedTermMultiplier : 1);
+    const deductPaid = repayment.mergedTerm !== 'full_term';
+    const studentPaysInterest = repayment.interestAfterNotice !== 'government';
+    const termFor = (semesters, paidMonths) => Math.max(1, Math.round(semesters * 12 * multiplier) - (deductPaid ? paidMonths : 0));
+    const monthlyRate = Math.max(0, Number(repayment.annualRate) || 0) / 12;
+    const disburse = new Map();
+    periods.forEach((p, i) => { if (!p.isLeaveOfAbsence) disburse.set(startMonth(i), amounts[i]); });
+
+    let balance = 0;
+    let semesters = 0;
+    let paidMonths = 0;
+    let payment = 0;
+    let mode = 'deferred';
+    let collected = false;
+    const segments = [];
+    for (let m = n > 0 ? startMonth(0) : finalMonth; m < finalMonth; m += 1) {
+      const next = windows.some(([a, b]) => m >= a && m < b) ? 'collecting' : (collected && studentPaysInterest ? 'interest_only' : 'deferred');
+      if (next === 'collecting' && mode !== 'collecting') {
+        payment = calcStudentLoanRepayment(balance, 1, { ...repayment, termMonths: termFor(semesters, paidMonths), startAge: 0 }, 0).monthlyPaymentCents;
+      }
+      mode = next;
+      // Disburse after sizing the payment: collection covers loans already due, not a semester starting this month.
+      if (disburse.has(m)) { balance += disburse.get(m); semesters += 1; }
+      if (mode === 'deferred') continue;
+      let paid;
+      if (mode === 'collecting') {
+        const due = balance * (1 + monthlyRate);
+        paid = Math.min(payment, Math.ceil(due));
+        balance = Math.max(0, due - paid);
+        paidMonths += 1;
+        collected = true;
+      } else {
+        paid = Math.ceil(balance * monthlyRate);
+      }
+      const seg = segments[segments.length - 1];
+      if (seg && seg.kind === mode && seg.toMonth === m) {
+        seg.toMonth = m + 1; seg.paidCents += paid; seg.monthlyPaymentCents = Math.max(seg.monthlyPaymentCents, paid);
+      } else {
+        segments.push({ kind: mode, fromMonth: m, toMonth: m + 1, paidCents: paid, monthlyPaymentCents: paid });
+      }
+    }
+    const fin = calcStudentLoanRepayment(balance, 1, { ...repayment, startAge: finalStartAge, termMonths: termFor(borrowed, paidMonths) }, currentAge);
+    const timeline = segments.map(s => ({ kind: s.kind, fromAge: s.fromMonth / 12, toAge: s.toMonth / 12, monthlyPaymentCents: s.monthlyPaymentCents, paidCents: s.paidCents }));
+    timeline.push({ kind: 'final', fromAge: fin.repaymentStartAge, toAge: fin.repaymentEndAge, monthlyPaymentCents: fin.monthlyPaymentCents, paidCents: fin.totalRepaymentCents });
+
+    const principalCents = Math.round(amounts.reduce((s, a) => s + a, 0));
+    const totalRepaymentCents = timeline.reduce((s, t) => s + t.paidCents, 0);
+    const age = Number(currentAge);
+    const current = timeline.find(t => age >= t.fromAge && age < t.toAge && t.monthlyPaymentCents > 0);
+    const upcoming = timeline.find(t => t.fromAge > age);
+    const active = current || upcoming || timeline[timeline.length - 1];
+    // What missing the notice deadline would cost, for each run that can still be notified in time.
+    const missedNotice = options.skipMissed ? [] : runs.filter(r => r.inTime).map(r => {
+      const late = calcStudentLoanPlan(periods.map((p, i) => i === r.startIdx ? { ...p, bankNotice: 'late' } : p), repayment, currentAge, { ...options, skipMissed: true });
+      const firstCollect = late.timeline.find(t => t.kind === 'collecting');
+      return { startIdx: r.startIdx, deadlineAge: r.deadlineAge, monthlyPaymentCents: firstCollect ? firstCollect.monthlyPaymentCents : 0, extraCents: late.totalRepaymentCents - totalRepaymentCents };
+    });
     return {
-      principalCents: sum('principalCents'), borrowedSemesters: sum('borrowedSemesters'), termMonths, termYears: termMonths / 12,
-      annualRate: plans[0].annualRate, monthlyPaymentCents, totalRepaymentCents: sum('totalRepaymentCents'), totalInterestCents: sum('totalInterestCents'),
-      repaymentStartAge: Math.min(...plans.map(p => p.repaymentStartAge)), repaymentEndAge: Math.max(...plans.map(p => p.repaymentEndAge)),
-      status, tranches: plans
+      principalCents, borrowedSemesters: borrowed, leaveSemesters: n - borrowed,
+      termMonths: fin.termMonths, termYears: fin.termYears, annualRate: fin.annualRate,
+      monthlyPaymentCents: active.monthlyPaymentCents, totalRepaymentCents, totalInterestCents: Math.max(0, totalRepaymentCents - principalCents),
+      repaymentStartAge: active.fromAge, repaymentEndAge: active.toAge,
+      status: current ? 'repaying' : (upcoming ? 'waiting' : 'completed'),
+      timeline, runs, missedNotice
     };
   };
 
@@ -710,6 +801,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, splitStudentLoanTranches, calcStudentLoanTranchePlan, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

@@ -256,22 +256,29 @@ const App = (() => {
     scenario.repayment = fillDefaults(scenario.repayment, {
       graduationAge: 22, graceYears: ref.standardGraceYears, annualRate: ref.borrowerAnnualRate,
       termPlan: 'standard', includeAsFixedExpense: false, paymentDay: 5, accountId: '',
-      principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3
+      principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
+      // Unwritten bank rules default to the costlier reading (user decision 2026-11-02); see Money.calcStudentLoanPlan.
+      interestAfterNotice: 'student', mergedTerm: 'deduct_paid'
     });
     ensureAccountProfiles(); ensureDashboard();
     if (!config.accountProfiles.some(a => a.id === scenario.repayment.accountId)) scenario.repayment.accountId = config.dashboard.fixedExpenseAccountId || config.accountProfiles[0]?.id || '';
+    // Each restored semester now follows a leave gap, so graduation moves half a year later per gap.
+    scenario.repayment.graduationAge += 0.5 * Money.migrateLeaveMarks(scenario.periods);
     return scenario.repayment;
+  };
+  const leaveGap = Money.leaveGap;
+  const loanAgeText = (age) => {
+    if (!Number.isFinite(age)) return '—';
+    const months = Math.round(age * 12);
+    return `${Math.floor(months / 12)} 歲${months % 12 ? ` ${months % 12} 個月` : ''}`;
   };
   const studentLoanPlan = (scenario) => {
     const repayment = ensureStudentLoanRepayment(scenario);
     const result = calcScenario(scenario);
-    const age = config.personalBaseline.currentAge;
-    if (repayment.principalMode === 'manual') {
-      // A bank balance cannot be split into before/after-leave semesters, so manual stays one loan.
-      const borrowedSemesters = scenario.periods.filter(p => !p.isLeaveOfAbsence).length;
-      return { ...Money.calcStudentLoanRepayment(repayment.manualPrincipalCents, borrowedSemesters, repayment, age), tranches: [] };
-    }
-    return Money.calcStudentLoanTranchePlan(result.periods, repayment, age);
+    // Leave settings live on scenario.periods; calcScenario supplies each semester's total.
+    const periods = scenario.periods.map((p, i) => ({ ...p, total: result.periods[i]?.total || 0 }));
+    return Money.calcStudentLoanPlan(periods, repayment, config.personalBaseline.currentAge,
+      repayment.principalMode === 'manual' ? { manualPrincipalCents: repayment.manualPrincipalCents } : {});
   };
   const syncStudentLoanFixedExpense = () => {
     const scenario = scenarios.find(s => s.scenarioId === 'student_loan');
@@ -2201,7 +2208,7 @@ const App = (() => {
           el('option', { value: 'manual', text: '使用銀行目前未償本金', selected: repayment.principalMode === 'manual' ? 'selected' : undefined })
         ])]),
         repayment.principalMode === 'manual' ? numField('銀行目前未償本金（元）', Money.toYuan(repayment.manualPrincipalCents), v => { repayment.manualPrincipalCents = Money.toCents(Math.max(0, v)); refresh(); }) : null,
-        numField('預計畢業年齡', repayment.graduationAge, v => { repayment.graduationAge = Math.max(0, Math.trunc(v)); refresh(); }),
+        numField('預計畢業年齡', repayment.graduationAge, v => { repayment.graduationAge = Math.max(0, Math.round(v * 2) / 2); refresh(); }),
         el('label', { class: 'field estimator-field' }, [el('span', { text: '攤還年限方案' }), el('select', { onchange: e => { repayment.termPlan = e.target.value; refresh(); } }, [
           el('option', { value: 'standard', text: '一般・每貸 1 學期還 1 年', selected: repayment.termPlan === 'standard' ? 'selected' : undefined }),
           el('option', { value: 'extended', text: '專案延長・1.5 倍（須銀行同意）', selected: repayment.termPlan === 'extended' ? 'selected' : undefined }),
@@ -2218,15 +2225,32 @@ const App = (() => {
         el('div', { class: 'summary-block' }, [el('h3', { text: '月繳後固定現金流' }), el('p', { class: `mono big${afterPayment < 0 ? ' neg' : ''}`, text: cashFlowWithoutLoan.incomeCents > 0 ? Money.formatTWD(afterPayment) : '尚無固定收入' }), el('p', { class: 'notice', text: burdenRate === null ? '請先在帳本設定固定收入' : `月繳占固定收入 ${(burdenRate * 100).toFixed(1)}%` })]),
         el('div', { class: 'summary-block' }, [el('h3', { text: '年齡對應狀態' }), el('p', { text: statusText })])
       ]),
-      plan.tranches.length > 1 ? el('div', { class: 'notice student-loan-tranches' }, [
-        el('p', { text: `休學滿 ${REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears} 年，貸款分成 ${plan.tranches.length} 筆分別攤還（預計月繳為目前或下一筆應繳的金額）：` }),
-        el('ul', {}, plan.tranches.map((t, i) => el('li', { text: `第 ${i + 1} 筆${t.afterLeave ? '（休學前）' : '（復學後）'}：本金 ${Money.formatTWD(t.principalCents)}・${t.repaymentStartAge} 歲起・每月 ${Money.formatTWD(t.monthlyPaymentCents)}・${t.termYears} 年` }))),
+      plan.leaveSemesters > 0 ? el('div', { class: 'notice student-loan-leave' }, [
+        el('p', { text: `休學 ${plan.leaveSemesters} 學期：預計畢業年齡已自動延後 ${plan.leaveSemesters / 2} 年。` }),
+        ...plan.runs.map(r => {
+          const missed = plan.missedNotice.find(x => x.startIdx === r.startIdx);
+          const from = `${loanAgeText(r.startAge)}起休學${r.military ? '（服義務役）' : ''}`;
+          if (r.returnAge === null) return el('p', { text: `${from}、未復學：${loanAgeText(r.deadlineAge)}起開始攤還。` });
+          if (r.inTime) return el('p', { class: 'student-loan-deadline', text: `${from}，${loanAgeText(r.returnAge)}復學：請在 ${loanAgeText(r.deadlineAge)}前帶註冊證明通知承貸銀行。錯過的話，會從那時起每月被扣約 ${Money.formatTWD(missed?.monthlyPaymentCents || 0)}，整筆貸款多付約 ${Money.formatTWD(Math.max(0, missed?.extraCents || 0))}。` });
+          return el('p', { text: `${from}，${loanAgeText(r.returnAge)}復學：${r.canNotifyInTime ? '已設定錯過通知期限，' : '休學滿 2 年才復學，'}銀行自 ${loanAgeText(r.deadlineAge)}起扣款，到 ${loanAgeText(r.collectUntilAge)}辦妥償還期限異動才停（已計入下方時間表）。` });
+        }),
+        el('table', { class: 'student-loan-timeline' }, [el('tbody', {}, plan.timeline.filter(t => t.paidCents > 0 || t.kind === 'final').map(t => el('tr', {}, [
+          el('td', { text: `${loanAgeText(t.fromAge)}～${loanAgeText(t.toAge)}` }),
+          el('td', { text: { collecting: '銀行扣款（本金＋利息）', interest_only: '異動後暫停，自付利息', final: '畢業後合併攤還' }[t.kind] }),
+          el('td', { class: 'mono', text: `每月 ${Money.formatTWD(t.monthlyPaymentCents)}` })
+        ])))]),
         el('p', { text: `${REFERENCE_DATA.twStudentLoan.leaveDeferralNote}（查證日 ${REFERENCE_DATA.twStudentLoan.leaveRetrievedAt}）` })
       ]) : null,
-      repayment.principalMode === 'manual' && scenario.periods.some(p => p.isLeaveOfAbsence)
-        ? el('p', { class: 'notice', text: '手動本金不區分休學前後，以單筆估算；休學滿 2 年的分筆請改用「依下方學期估算」。' }) : null,
       el('details', { class: 'compact-settings' }, [el('summary', { text: '進階設定：利率、寬限期、扣款帳戶與還款預備金' }), el('div', { class: 'estimator-field-grid' }, [
         numField('畢業後寬限年數', repayment.graceYears, v => { repayment.graceYears = Math.max(0, v); refresh(); }),
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學辦異動後到畢業前的利息（辦法未明文，請向承貸銀行確認）' }), el('select', { onchange: e => { repayment.interestAfterNotice = e.target.value; refresh(); } }, [
+          el('option', { value: 'student', text: '自己付（保守）', selected: repayment.interestAfterNotice !== 'government' ? 'selected' : undefined }),
+          el('option', { value: 'government', text: '政府付', selected: repayment.interestAfterNotice === 'government' ? 'selected' : undefined })
+        ])]),
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '合併後攤還年限（辦法未明文，請向承貸銀行確認）' }), el('select', { onchange: e => { repayment.mergedTerm = e.target.value; refresh(); } }, [
+          el('option', { value: 'deduct_paid', text: '扣掉已被扣款的月數（保守）', selected: repayment.mergedTerm !== 'full_term' ? 'selected' : undefined }),
+          el('option', { value: 'full_term', text: '全部學期重算', selected: repayment.mergedTerm === 'full_term' ? 'selected' : undefined })
+        ])]),
         numField('學生負擔年利率（小數）', repayment.annualRate, v => { repayment.annualRate = Math.max(0, v); refresh(); }),
         numField('每月扣款日', repayment.paymentDay, v => { repayment.paymentDay = Math.min(31, Math.max(1, Math.trunc(v))); refresh(); }),
         numField('還款預備金月數', repayment.reserveMonths, v => { repayment.reserveMonths = Math.max(0, Math.trunc(v)); refresh(); }),
@@ -2238,10 +2262,38 @@ const App = (() => {
 
   const renderPeriodScenario = (scenario) => {
     const root = $('#estimator-body');
+    const isStudentLoan = scenario.scenarioId === 'student_loan';
+    if (isStudentLoan) ensureStudentLoanRepayment(scenario); // migrate old leave marks before computing
     const result = calcScenario(scenario);
+    // A leave gap delays graduation by half a year, so graduationAge moves with every gap added or removed.
+    const shiftGraduation = (years) => { if (isStudentLoan) scenario.repayment.graduationAge = Math.max(0, scenario.repayment.graduationAge + years); };
+    const insertLeaveAfter = (idx) => { scenario.periods.splice(idx + 1, 0, leaveGap()); shiftGraduation(0.5); syncStudentLoanFixedExpense(); IO.markDirty(); renderEstimator(); };
+    const removePeriod = (idx) => { if (scenario.periods[idx]?.isLeaveOfAbsence) shiftGraduation(-0.5); scenario.periods.splice(idx, 1); if (isStudentLoan) syncStudentLoanFixedExpense(); IO.markDirty(); renderEstimator(); };
+    const setLeave = (idx, key, value) => { scenario.periods[idx][key] = value; syncStudentLoanFixedExpense(); IO.markDirty(); renderEstimator(); };
+    const runs = isStudentLoan ? studentLoanPlan(scenario).runs : [];
+    const leaveControls = (idx) => {
+      const run = runs.find(r => r.startIdx === idx);
+      if (!run) return null;
+      const p = scenario.periods[idx];
+      return el('div', { class: 'estimator-field-grid leave-settings' }, [
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學原因' }), el('select', { onchange: e => setLeave(idx, 'leaveReason', e.target.value) }, [
+          el('option', { value: 'general', text: '一般休學（休學滿 2 年起算）', selected: p.leaveReason !== 'military' ? 'selected' : undefined }),
+          el('option', { value: 'military', text: '服義務役（退伍滿 2 年起算）', selected: p.leaveReason === 'military' ? 'selected' : undefined })
+        ])]),
+        run.canNotifyInTime ? el('label', { class: 'field estimator-field' }, [el('span', { text: `復學後在 ${loanAgeText(run.deadlineAge)}前通知承貸銀行？` }), el('select', { onchange: e => setLeave(idx, 'bankNotice', e.target.value) }, [
+          el('option', { value: 'on_time', text: '會在期限前通知', selected: p.bankNotice !== 'late' ? 'selected' : undefined }),
+          el('option', { value: 'late', text: '錯過期限（試算被扣款）', selected: p.bankNotice === 'late' ? 'selected' : undefined })
+        ])]) : null,
+        run.returnAge !== null && !run.inTime
+          ? numberField(run.canNotifyInTime ? '錯過期限後幾個月辦妥異動' : '復學後幾個月辦妥異動', run.lateNoticeMonths, v => setLeave(idx, 'lateNoticeMonths', Math.max(0, Math.trunc(v))), 'field estimator-field')
+          : null
+      ]);
+    };
     root.innerHTML = '';
     root.append(
-      el('p', { class: 'notice editor-only', text: '此情境為期別型（如學貸），每期套用同一組項目範本，個別期別可覆寫單一項目金額。可標記某期為休學，該期金額自動算 0。' }),
+      el('p', { class: 'notice editor-only', text: isStudentLoan
+        ? '每期套用同一組項目範本，個別期別可覆寫單一項目金額。休學請用學期卡片上的「此學期後休學」插入：休學不佔年級、不計學費，復學後接續下一學期。'
+        : '此情境為期別型，每期套用同一組項目範本，個別期別可覆寫單一項目金額。' }),
       scenario.scenarioId === 'student_loan' ? renderStudentLoanRepaymentBlock(scenario, result) : empty(),
       el('details', { class: 'estimator-section editor-only' }, [
         el('summary', { text: '編輯共用欄目' }),
@@ -2254,18 +2306,17 @@ const App = (() => {
       ]),
       ...result.periods.map((p, idx) => el('div', { class: 'period-block editor-only' + (p.isLeaveOfAbsence ? ' leave' : '') }, [
         el('h4', {}, [
-          el('input', { value: p.label, onchange: e => { scenario.periods[idx].label = e.target.value.trim() || p.label; IO.markDirty(); renderEstimator(); } }),
-          el('label', { class: 'inline-check' }, [
-            el('input', {
-              type: 'checkbox', checked: p.isLeaveOfAbsence ? 'checked' : undefined,
-              onchange: (ev) => { scenario.periods[idx].isLeaveOfAbsence = ev.target.checked; IO.markDirty(); renderEstimator(); }
-            }),
-            document.createTextNode(' 標記為休學')
-          ]),
-          el('button', { class: 'btn small danger', text: '刪除此期', onclick: () => { scenario.periods.splice(idx, 1); IO.markDirty(); renderEstimator(); } })
+          p.isLeaveOfAbsence
+            ? el('span', { text: '休學一學期' })
+            : el('input', { value: p.label, onchange: e => { scenario.periods[idx].label = e.target.value.trim() || p.label; IO.markDirty(); renderEstimator(); } }),
+          isStudentLoan && !p.isLeaveOfAbsence
+            ? el('button', { class: 'btn small', text: '此學期後休學', onclick: () => insertLeaveAfter(idx) })
+            : null,
+          el('button', { class: 'btn small danger', text: p.isLeaveOfAbsence ? '取消這學期休學' : '刪除此期', onclick: () => removePeriod(idx) })
         ]),
+        isStudentLoan && p.isLeaveOfAbsence ? leaveControls(idx) : null,
         p.isLeaveOfAbsence
-          ? el('p', { class: 'notice', text: '休學期間，不計入學費' })
+          ? el('p', { class: 'notice', text: '休學期間不計學費、不佔年級；復學後接續下一學期' })
           : el('div', { class: 'table-scroll' }, [el('table', {}, [el('tbody', {}, p.items.map((i) => el('tr', {}, [
               el('td', { text: i.label }), el('td', { class: 'mono', text: Money.formatTWD(i.amountCents) })
             ])))])]),

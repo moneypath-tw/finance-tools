@@ -392,41 +392,66 @@ test('學貸依現行年金法估算月繳、年限與年齡啟用狀態', () =>
   assert.equal(api.Money.calcStudentLoanRepayment(10000000, 8, { ...repayment, termPlan: 'low_income' }, 25).termYears, 16);
 });
 
-test('學貸休學：未滿 2 年復學併為一筆，滿 2 年拆兩筆，休學未復學依休學起算', () => {
+test('學貸休學時間軸：期限前通知不扣款；錯過期限或休學滿 2 年先被扣款，辦妥異動後畢業再合併攤還', () => {
   const T = 3000000;
-  const sem = (leave) => ({ total: leave ? 0 : T, isLeaveOfAbsence: !!leave });
-  const repayment = { graduationAge: 24, graceYears: 2, annualRate: 0.00775, termPlan: 'standard' };
+  const sem = () => ({ total: T });
+  const gap = (extra = {}) => ({ kind: 'leave', isLeaveOfAbsence: true, total: 0, ...extra });
   const M = api.Money;
-  // No leave: identical to the single-loan calculation.
-  const none = Array.from({ length: 8 }, () => sem(false));
-  const base = M.calcStudentLoanRepayment(8 * T, 8, repayment, 23);
-  const plain = M.calcStudentLoanTranchePlan(none, repayment, 23);
-  assert.equal(plain.tranches.length, 0);
-  assert.equal(plain.monthlyPaymentCents, base.monthlyPaymentCents);
-  assert.equal(plain.repaymentStartAge, 26);
-  // 2 leave semesters (1 year) then 復學: continued study, one loan of 6 semesters.
-  const short = [sem(), sem(), sem(1), sem(1), sem(), sem(), sem(), sem()];
-  const s = M.splitStudentLoanTranches(short, 24);
-  assert.deepEqual(JSON.parse(JSON.stringify(s.map(t => [t.principalCents, t.borrowedSemesters, t.startAge]))), [[6 * T, 6, null]]);
-  // 4 leave semesters (2 years): periods start at 19; leave starts at 20, so the first 2 semesters start at 22.
-  const long = [sem(), sem(), sem(1), sem(1), sem(1), sem(1), sem(), sem(), sem(), sem()];
-  const l = M.splitStudentLoanTranches(long, 24);
-  assert.deepEqual(JSON.parse(JSON.stringify(l.map(t => [t.principalCents, t.borrowedSemesters, t.startAge, t.afterLeave]))),
-    [[2 * T, 2, 22, true], [4 * T, 4, null, false]]);
-  const at23 = M.calcStudentLoanTranchePlan(long, repayment, 23);
-  assert.equal(at23.status, 'repaying');
-  assert.equal(at23.tranches[0].termYears, 2);
-  assert.equal(at23.monthlyPaymentCents, at23.tranches[0].monthlyPaymentCents);
-  assert.equal(at23.tranches[1].repaymentStartAge, 26);
-  assert.equal(at23.principalCents, 6 * T);
-  const at25 = M.calcStudentLoanTranchePlan(long, repayment, 25);
-  assert.equal(at25.status, 'waiting');
-  assert.equal(at25.monthlyPaymentCents, at25.tranches[1].monthlyPaymentCents);
-  assert.equal(M.calcStudentLoanTranchePlan(long, repayment, 27).monthlyPaymentCents, at25.tranches[1].monthlyPaymentCents);
-  // Trailing leave with no 復學: one loan, starting 2 years after the leave began (22 - 0.5 + 2).
-  const trailing = M.calcStudentLoanTranchePlan([sem(), sem(), sem(), sem(1)], { ...repayment, graduationAge: 22 }, 20);
+  const base = { graceYears: 2, annualRate: 0.00775, termPlan: 'standard' };
+  const kinds = (plan) => plan.timeline.map(t => t.kind).join(',');
+  // No leave: identical to the single-loan formula.
+  const eight = Array.from({ length: 8 }, sem);
+  const none = M.calcStudentLoanPlan(eight, { ...base, graduationAge: 22 }, 23);
+  const single = M.calcStudentLoanRepayment(8 * T, 8, { ...base, graduationAge: 22 }, 23);
+  assert.equal(kinds(none), 'final');
+  assert.equal(none.monthlyPaymentCents, single.monthlyPaymentCents);
+  assert.equal(none.totalRepaymentCents, single.totalRepaymentCents);
+  assert.equal(none.repaymentStartAge, 24);
+  assert.equal(none.status, 'waiting');
+  // 大一升大二暑假休學兩年再復學續讀大二（畢業 24 歲）：19 歲休學、21 歲復學，休學滿 2 年當天就到期，
+  // 來不及在期限前通知 → 21 歲起被扣 1 個月，辦妥異動後自付利息到畢業後寬限期滿，26 歲合併攤還。
+  const twoYears = [sem(), sem(), gap(), gap(), gap(), gap(), sem(), sem(), sem(), sem(), sem(), sem()];
+  const plan = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24 }, 25);
+  assert.equal(plan.runs.length, 1);
+  assert.deepEqual([plan.runs[0].startAge, plan.runs[0].returnAge, plan.runs[0].deadlineAge, plan.runs[0].canNotifyInTime], [19, 21, 21, false]);
+  assert.equal(kinds(plan), 'collecting,interest_only,final');
+  assert.equal(plan.timeline[0].fromAge, 21);
+  assert.equal(plan.timeline[0].monthlyPaymentCents, M.calcStudentLoanRepayment(2 * T, 2, base, 0).monthlyPaymentCents);
+  assert.equal(plan.timeline[2].fromAge, 26);
+  assert.equal(plan.termMonths, 95, 'conservative: merged term deducts the month already collected');
+  assert.equal(plan.borrowedSemesters, 8);
+  assert.equal(plan.status, 'repaying', 'at 25 the student pays interest after the 異動');
+  const lenient = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24, interestAfterNotice: 'government', mergedTerm: 'full_term' }, 25);
+  assert.equal(kinds(lenient), 'collecting,final');
+  assert.equal(lenient.termMonths, 96);
+  assert.ok(lenient.totalRepaymentCents < plan.totalRepaymentCents, 'the conservative default costs more');
+  // One-semester leave, notified in time: nothing until graduation; the plan prices a missed deadline.
+  const short = [sem(), gap(), sem()];
+  const onTime = M.calcStudentLoanPlan(short, { ...base, graduationAge: 22 }, 21);
+  assert.equal(kinds(onTime), 'final');
+  assert.equal(onTime.runs[0].deadlineAge, 23);
+  assert.equal(onTime.missedNotice.length, 1);
+  assert.ok(onTime.missedNotice[0].monthlyPaymentCents > 0 && onTime.missedNotice[0].extraCents > 0);
+  // Missed by 3 months: the bank collects 23 → 23.25, then interest only until 24.
+  const late = M.calcStudentLoanPlan([sem(), gap({ bankNotice: 'late', lateNoticeMonths: 3 }), sem()], { ...base, graduationAge: 22 }, 21);
+  assert.equal(kinds(late), 'collecting,interest_only,final');
+  assert.deepEqual([late.timeline[0].fromAge, late.timeline[0].toAge], [23, 23.25]);
+  assert.equal(late.missedNotice.length, 0);
+  // 服義務役 counts from the end of service: leave 21 → 21.5, deadline 23.5.
+  assert.equal(M.calcStudentLoanPlan([sem(), gap({ leaveReason: 'military' }), sem()], { ...base, graduationAge: 22 }, 21).runs[0].deadlineAge, 23.5);
+  // Leave with no 復學: entries start at 20.5; the leave starts at 21.5, repayment at 23.5.
+  const trailing = M.calcStudentLoanPlan([sem(), sem(), gap()], { ...base, graduationAge: 22 }, 25);
+  assert.equal(kinds(trailing), 'final');
   assert.equal(trailing.repaymentStartAge, 23.5);
-  assert.equal(trailing.borrowedSemesters, 3);
+  assert.equal(trailing.termMonths, 24);
+  assert.equal(trailing.status, 'repaying');
+  // Old save format: 大二上 itself ticked as 休學. It becomes a gap before 大二上, and 大二上 is a semester again.
+  const old = structuredClone(api.DEFAULT_SCENARIOS.find(x => x.scenarioId === 'student_loan').periods);
+  old[2].isLeaveOfAbsence = true;
+  assert.equal(M.migrateLeaveMarks(old), 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(old.map(p => [p.label, !!p.isLeaveOfAbsence]))).slice(1, 4),
+    [['大一下', false], ['休學一學期', true], ['大二上', false]]);
+  assert.equal(M.migrateLeaveMarks(old), 0, 'running twice changes nothing');
 });
 
 test('房貸可計算寬限期、正常月繳、總利息與升息壓力', () => {
