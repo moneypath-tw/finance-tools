@@ -257,7 +257,7 @@ const App = (() => {
       graduationAge: 22, graceYears: ref.standardGraceYears, annualRate: ref.borrowerAnnualRate,
       termPlan: 'standard', includeAsFixedExpense: false, paymentDay: 5, accountId: '',
       principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
-      // Unwritten bank rules default to the costlier reading (user decision 2026-11-02); see Money.calcStudentLoanPlan.
+      // interestAfterNotice: unwritten, costlier reading by default; mergedTerm: deducting collected months is confirmed (user, 2026-11-02).
       interestAfterNotice: 'student', mergedTerm: 'deduct_paid'
     });
     ensureAccountProfiles(); ensureDashboard();
@@ -2247,9 +2247,9 @@ const App = (() => {
           el('option', { value: 'student', text: '自己付（保守）', selected: repayment.interestAfterNotice !== 'government' ? 'selected' : undefined }),
           el('option', { value: 'government', text: '政府付', selected: repayment.interestAfterNotice === 'government' ? 'selected' : undefined })
         ])]),
-        el('label', { class: 'field estimator-field' }, [el('span', { text: '合併後攤還年限（辦法未明文，請向承貸銀行確認）' }), el('select', { onchange: e => { repayment.mergedTerm = e.target.value; refresh(); } }, [
-          el('option', { value: 'deduct_paid', text: '扣掉已被扣款的月數（保守）', selected: repayment.mergedTerm !== 'full_term' ? 'selected' : undefined }),
-          el('option', { value: 'full_term', text: '全部學期重算', selected: repayment.mergedTerm === 'full_term' ? 'selected' : undefined })
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '合併後攤還年限' }), el('select', { onchange: e => { repayment.mergedTerm = e.target.value; refresh(); } }, [
+          el('option', { value: 'deduct_paid', text: '扣掉已被扣款的月數（已向銀行確認）', selected: repayment.mergedTerm !== 'full_term' ? 'selected' : undefined }),
+          el('option', { value: 'full_term', text: '全部學期重算（舊算法，供比較）', selected: repayment.mergedTerm === 'full_term' ? 'selected' : undefined })
         ])]),
         numField('學生負擔年利率（小數）', repayment.annualRate, v => { repayment.annualRate = Math.max(0, v); refresh(); }),
         numField('每月扣款日', repayment.paymentDay, v => { repayment.paymentDay = Math.min(31, Math.max(1, Math.trunc(v))); refresh(); }),

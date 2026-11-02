@@ -418,7 +418,7 @@ test('學貸休學時間軸：期限前通知不扣款；錯過期限或休學�
   assert.equal(plan.timeline[0].fromAge, 21);
   assert.equal(plan.timeline[0].monthlyPaymentCents, M.calcStudentLoanRepayment(2 * T, 2, base, 0).monthlyPaymentCents);
   assert.equal(plan.timeline[2].fromAge, 26);
-  assert.equal(plan.termMonths, 95, 'conservative: merged term deducts the month already collected');
+  assert.equal(plan.termMonths, 95, 'confirmed: merged term deducts the month already collected');
   assert.equal(plan.borrowedSemesters, 8);
   assert.equal(plan.status, 'repaying', 'at 25 the student pays interest after the 異動');
   const lenient = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24, interestAfterNotice: 'government', mergedTerm: 'full_term' }, 25);
