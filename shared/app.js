@@ -265,9 +265,13 @@ const App = (() => {
   const studentLoanPlan = (scenario) => {
     const repayment = ensureStudentLoanRepayment(scenario);
     const result = calcScenario(scenario);
-    const borrowedSemesters = scenario.periods.filter(p => !p.isLeaveOfAbsence).length;
-    const principal = repayment.principalMode === 'manual' ? repayment.manualPrincipalCents : result.grandTotal;
-    return Money.calcStudentLoanRepayment(principal, borrowedSemesters, repayment, config.personalBaseline.currentAge);
+    const age = config.personalBaseline.currentAge;
+    if (repayment.principalMode === 'manual') {
+      // A bank balance cannot be split into before/after-leave semesters, so manual stays one loan.
+      const borrowedSemesters = scenario.periods.filter(p => !p.isLeaveOfAbsence).length;
+      return { ...Money.calcStudentLoanRepayment(repayment.manualPrincipalCents, borrowedSemesters, repayment, age), tranches: [] };
+    }
+    return Money.calcStudentLoanTranchePlan(result.periods, repayment, age);
   };
   const syncStudentLoanFixedExpense = () => {
     const scenario = scenarios.find(s => s.scenarioId === 'student_loan');
@@ -2214,6 +2218,13 @@ const App = (() => {
         el('div', { class: 'summary-block' }, [el('h3', { text: '月繳後固定現金流' }), el('p', { class: `mono big${afterPayment < 0 ? ' neg' : ''}`, text: cashFlowWithoutLoan.incomeCents > 0 ? Money.formatTWD(afterPayment) : '尚無固定收入' }), el('p', { class: 'notice', text: burdenRate === null ? '請先在帳本設定固定收入' : `月繳占固定收入 ${(burdenRate * 100).toFixed(1)}%` })]),
         el('div', { class: 'summary-block' }, [el('h3', { text: '年齡對應狀態' }), el('p', { text: statusText })])
       ]),
+      plan.tranches.length > 1 ? el('div', { class: 'notice student-loan-tranches' }, [
+        el('p', { text: `休學滿 ${REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears} 年，貸款分成 ${plan.tranches.length} 筆分別攤還（預計月繳為目前或下一筆應繳的金額）：` }),
+        el('ul', {}, plan.tranches.map((t, i) => el('li', { text: `第 ${i + 1} 筆${t.afterLeave ? '（休學前）' : '（復學後）'}：本金 ${Money.formatTWD(t.principalCents)}・${t.repaymentStartAge} 歲起・每月 ${Money.formatTWD(t.monthlyPaymentCents)}・${t.termYears} 年` }))),
+        el('p', { text: `${REFERENCE_DATA.twStudentLoan.leaveDeferralNote}（查證日 ${REFERENCE_DATA.twStudentLoan.leaveRetrievedAt}）` })
+      ]) : null,
+      repayment.principalMode === 'manual' && scenario.periods.some(p => p.isLeaveOfAbsence)
+        ? el('p', { class: 'notice', text: '手動本金不區分休學前後，以單筆估算；休學滿 2 年的分筆請改用「依下方學期估算」。' }) : null,
       el('details', { class: 'compact-settings' }, [el('summary', { text: '進階設定：利率、寬限期、扣款帳戶與還款預備金' }), el('div', { class: 'estimator-field-grid' }, [
         numField('畢業後寬限年數', repayment.graceYears, v => { repayment.graceYears = Math.max(0, v); refresh(); }),
         numField('學生負擔年利率（小數）', repayment.annualRate, v => { repayment.annualRate = Math.max(0, v); refresh(); }),
