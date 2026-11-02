@@ -87,6 +87,21 @@ const ALLOCATION_PURPOSES = [
 ];
 
 // 買房費用情境：項目金額為起始範例；通膨依目標月份與 inflationRates 複利換算
+// Loan settings defaults: the single source for new scenarios (below) and for filling old saves (App.ensure*).
+// Rates and terms come from REFERENCE_DATA so a rule change is made in one place.
+const STUDENT_LOAN_REPAYMENT_DEFAULTS = Object.freeze({
+  graduationAge: 22, graceYears: REFERENCE_DATA.twStudentLoan.standardGraceYears, annualRate: REFERENCE_DATA.twStudentLoan.borrowerAnnualRate,
+  termPlan: 'standard', includeAsFixedExpense: false, paymentDay: 5, accountId: '',
+  principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
+  // interestAfterNotice: unwritten, costlier reading by default; mergedTerm: deducting collected months is confirmed (user, 2026-11-02).
+  interestAfterNotice: 'student', mergedTerm: 'deduct_paid'
+});
+const MORTGAGE_DEFAULTS = Object.freeze({
+  purchaseAge: 30, annualRate: REFERENCE_DATA.twMortgage.referenceAnnualRate, termYears: REFERENCE_DATA.twMortgage.referenceTermYears, graceYears: 0,
+  principalMode: 'estimated', manualPrincipalCents: 0, includeAsFixedExpense: false,
+  paymentDay: 5, accountId: '', reserveMonths: 6, loanPosition: 'first_home'
+});
+
 const SCENARIO_BUY_HOUSE = {
   schemaVersion: 2,
   currency: 'TWD',
@@ -113,12 +128,7 @@ const SCENARIO_BUY_HOUSE = {
     { label: '保險費', amountCents: 200000 }
   ],
   loanAmountCents: 1050000000,
-  mortgage: {
-    purchaseAge: 30, annualRate: 0.0337, termYears: 30, graceYears: 0,
-    principalMode: 'estimated', manualPrincipalCents: 0,
-    includeAsFixedExpense: false, paymentDay: 5, accountId: '', reserveMonths: 6,
-    loanPosition: 'first_home'
-  }
+  mortgage: { ...MORTGAGE_DEFAULTS }
 };
 
 // 買地自建費用情境，項目與買房情境不同，但共用同一套計算引擎
@@ -221,12 +231,7 @@ const SCENARIO_STUDENT_LOAN = {
     { label: '大四上', overrides: {} },
     { label: '大四下', overrides: {} }
   ],
-  repayment: {
-    graduationAge: 22, graceYears: 2, annualRate: 0.00775,
-    termPlan: 'standard', includeAsFixedExpense: false,
-    paymentDay: 5, accountId: '', principalMode: 'estimated',
-    manualPrincipalCents: 0, reserveMonths: 3
-  }
+  repayment: { ...STUDENT_LOAN_REPAYMENT_DEFAULTS }
 };
 
 // 喪葬費情境：項目金額為起始範例

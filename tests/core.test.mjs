@@ -1110,6 +1110,35 @@ test('單一權威來源：日期字串、匯率換算、預設月工時、固�
   assert.doesNotMatch(src('shared/app.js'), /recurringCashFlows \|\| \[\]|!Array\.isArray\(config\.recurringCashFlows\)/);
 });
 
+test('單一權威來源：外部制度數字只寫在 reference-data.js，預設值與畫面文字都從它讀', () => {
+  const src = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+  const leaves = [];
+  const walk = (o, k) => { if (o && typeof o === 'object') for (const [a, b] of Object.entries(o)) walk(b, `${k}.${a}`); else if (typeof o === 'number') leaves.push([k, o]); };
+  walk(api.REFERENCE_DATA, 'REFERENCE_DATA');
+  // Round numbers (0.5, 2, 30) appear everywhere for other reasons; the distinctive ones can only be copies.
+  const distinctive = leaves.filter(([, v]) => (!Number.isInteger(v) && String(v).split('.')[1].length >= 3) || Math.abs(v) >= 1000);
+  assert.ok(distinctive.length >= 5, 'the check still covers the rates');
+  const files = ['index.html', ...fs.readdirSync(path.join(root, 'shared')).filter(f => f.endsWith('.js') && f !== 'reference-data.js').map(f => `shared/${f}`)];
+  for (const rel of files) {
+    src(rel).split('\n').forEach((line, i) => {
+      if (/^\s*\/\//.test(line)) return;
+      for (const [key, v] of distinctive) {
+        const lit = new RegExp(`(?<![\\w.])${String(v).replace('.', '\\.')}(?![\\w.])`);
+        // `=== value` recognises an old save's stored default (a legacy migration), not a second source.
+        if (lit.test(line) && !new RegExp(`=== ${String(v).replace('.', '\\.')}\\b`).test(line)) assert.fail(`${rel}:${i + 1} 寫死 ${key}=${v}，改讀 REFERENCE_DATA`);
+      }
+    });
+  }
+  // Rule wording with the number typed in (「1.5 倍」「滿 2 年」「還 1 年」) drifts when the rule changes.
+  const app = src('shared/app.js');
+  for (const re of [/[\s'`（・]\d+(\.\d+)? 倍/, /滿 \d+ 年/, /還 \d+ 年/]) assert.doesNotMatch(app, re, `app.js 的規則文字要用 REFERENCE_DATA 帶入數字：${re}`);
+  // New scenarios and old-save filling share one defaults object.
+  const loan = api.DEFAULT_SCENARIOS.find(s => s.scenarioId === 'student_loan');
+  assert.equal(loan.repayment.annualRate, api.REFERENCE_DATA.twStudentLoan.borrowerAnnualRate);
+  assert.equal(loan.repayment.graceYears, api.REFERENCE_DATA.twStudentLoan.standardGraceYears);
+  assert.doesNotMatch(app, /fillDefaults\(scenario\.(repayment|mortgage), \{/, '貸款預設值只寫在 config.js 的 *_DEFAULTS');
+});
+
 test('生活花費帳戶：自動判斷涵蓋常見帳戶組合，自選優先、無效帳戶忽略', () => {
   const P = api.Planning;
   const acc = (id, nature, liquid) => ({ id, nature, liquid });
