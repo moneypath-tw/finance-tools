@@ -502,6 +502,9 @@ h2 { letter-spacing: -0.01em; }
 .summary-block.highlight { border-color: #CBE3D6; }
 .summary-block h3 { margin-bottom: 8px; }
 .health-grid, .dashboard-summary { align-items: stretch; }
+/* Blocks stacked directly in a card (帳本「總覽」after the grid, 2026-11-02) had margin 0 and touched;
+   give them the grid's 12px gap. Direct children only, so grid items keep using the grid gap. */
+.card > :is(.health-grid, .summary-block) + :is(.health-grid, .summary-block) { margin-top: 12px; }
 .dashboard-mini-card { padding: 14px 16px; border-radius: 12px; }
 
 .result-block, .achievability, .estimator-section, .period-block, .loan-overview-home, .mortgage-stress, .linked-note, .student-loan-toggle {

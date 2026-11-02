@@ -521,58 +521,50 @@ const Money = (() => {
     return { principalCents: principal, borrowedSemesters: semesters, termMonths, termYears: termMonths / 12, annualRate, monthlyPaymentCents, totalRepaymentCents, totalInterestCents: Math.max(0, totalRepaymentCents - principal), repaymentStartAge, repaymentEndAge, status };
   };
 
-  // Split borrowed semesters into separately repaid tranches (辦法第 11 條). A leave run shorter than
-  // leaveRepaymentDelayYears that ends in 復學 counts as continued study, so it does not split. A leave run
-  // that reaches the delay, or that never ends in 復學, starts the earlier loans at leave start + delay.
-  // Ages are counted back from graduationAge at 0.5 year per period, since periods carry no dates.
-  const splitStudentLoanTranches = (periods, graduationAge) => {
-    const delayYears = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
-    const n = periods.length;
-    const leaveStartAge = (idx) => Number(graduationAge) - (n - idx) * 0.5;
-    const tranches = [];
-    let current = { principalCents: 0, borrowedSemesters: 0 };
-    let leaveRun = 0;
-    let leaveStartIdx = -1;
-    const closeOnLeave = () => {
-      if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: leaveStartAge(leaveStartIdx) + delayYears, afterLeave: true });
-      current = { principalCents: 0, borrowedSemesters: 0 };
-    };
-    periods.forEach((p, idx) => {
-      if (p.isLeaveOfAbsence) {
-        if (leaveRun === 0) leaveStartIdx = idx;
-        leaveRun += 1;
-        return;
+  // A leave is a gap between semesters, not a semester: after 復學 the student resumes the same grade and
+  // graduates later. 臺銀 merges the unpaid loans of a student still studying in Taiwan and starts them after
+  // the final stage (復學 is a listed case for 償還期限異動), so any leave followed by 復學 keeps one loan.
+  // Only a leave never followed by 復學 starts repayment, leaveRepaymentDelayYears after the leave began
+  // (辦法第 11 條). Ages count back from graduationAge at 0.5 year per entry, since entries carry no dates.
+  const leaveGap = () => ({ kind: 'leave', label: '休學一學期', isLeaveOfAbsence: true, overrides: {} });
+
+  // Older saves marked a semester itself as 休學, which dropped that grade. After 復學 the student still takes
+  // it, so restore the semester and put a leave gap before it. Mutates periods; returns how many moved.
+  const migrateLeaveMarks = (periods) => {
+    let moved = 0;
+    for (let i = periods.length - 1; i >= 0; i -= 1) {
+      const p = periods[i];
+      if (p && p.isLeaveOfAbsence && p.kind !== 'leave') {
+        delete p.isLeaveOfAbsence;
+        periods.splice(i, 0, leaveGap());
+        moved += 1;
       }
-      if (leaveRun * 0.5 >= delayYears) closeOnLeave();
-      leaveRun = 0;
-      current.principalCents += Math.max(0, Math.round(Number(p.total) || 0));
-      current.borrowedSemesters += 1;
-    });
-    if (leaveRun > 0) closeOnLeave();
-    if (current.borrowedSemesters > 0) tranches.push({ ...current, startAge: null, afterLeave: false });
-    return tranches;
+    }
+    return moved;
   };
 
-  // Combine tranche plans into the single shape the UI and fixed-expense sync read. monthlyPaymentCents is
-  // what is due now (sum of tranches being repaid), or the next tranche's payment when none is.
-  const calcStudentLoanTranchePlan = (periods, repayment, currentAge) => {
-    const tranches = splitStudentLoanTranches(periods, repayment.graduationAge);
-    if (tranches.length <= 1) {
-      const only = tranches[0] || { principalCents: 0, borrowedSemesters: 1, startAge: null };
-      return { ...calcStudentLoanRepayment(only.principalCents, only.borrowedSemesters, { ...repayment, startAge: only.startAge }, currentAge), tranches: [] };
-    }
-    const plans = tranches.map(t => ({ ...calcStudentLoanRepayment(t.principalCents, t.borrowedSemesters, { ...repayment, startAge: t.startAge }, currentAge), afterLeave: t.afterLeave }));
-    const sum = (key) => plans.reduce((s, p) => s + p[key], 0);
-    const repaying = plans.filter(p => p.status === 'repaying');
-    const upcoming = plans.filter(p => p.status === 'waiting').sort((a, b) => a.repaymentStartAge - b.repaymentStartAge);
-    const status = repaying.length ? 'repaying' : (upcoming.length ? 'waiting' : 'completed');
-    const monthlyPaymentCents = repaying.length ? repaying.reduce((s, p) => s + p.monthlyPaymentCents, 0) : (upcoming[0]?.monthlyPaymentCents || 0);
-    const termMonths = sum('termMonths');
+  const studentLoanLeaveSchedule = (periods, graduationAge) => {
+    const delayYears = REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears;
+    const n = periods.length;
+    let run = 0;
+    let runStart = -1;
+    let longLeave = false;
+    periods.forEach((p, idx) => {
+      if (p.isLeaveOfAbsence) {
+        if (run === 0) runStart = idx;
+        run += 1;
+        return;
+      }
+      if (run * 0.5 >= delayYears) longLeave = true;
+      run = 0;
+    });
+    const leaveSemesters = periods.filter(p => p.isLeaveOfAbsence).length;
     return {
-      principalCents: sum('principalCents'), borrowedSemesters: sum('borrowedSemesters'), termMonths, termYears: termMonths / 12,
-      annualRate: plans[0].annualRate, monthlyPaymentCents, totalRepaymentCents: sum('totalRepaymentCents'), totalInterestCents: sum('totalInterestCents'),
-      repaymentStartAge: Math.min(...plans.map(p => p.repaymentStartAge)), repaymentEndAge: Math.max(...plans.map(p => p.repaymentEndAge)),
-      status, tranches: plans
+      borrowedSemesters: n - leaveSemesters,
+      leaveSemesters,
+      // Repayment would start before 復學 is registered; the borrower has to file the 異動 with the bank.
+      longLeave,
+      startAge: run > 0 ? Number(graduationAge) - (n - runStart) * 0.5 + delayYears : null
     };
   };
 
@@ -710,6 +702,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, splitStudentLoanTranches, calcStudentLoanTranchePlan, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveSchedule, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
