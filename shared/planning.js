@@ -207,15 +207,60 @@ const Planning = (() => {
   // 同一個帳戶也放存款時，餘額依分配順序（固定支出→生活費→緊急預備金→儲蓄→目標）先留給這些支出，剩下的才算存款
   // 生活費現金帳戶（從生活費帳戶提領的現金）：還沒花的生活費先算在現金裡，現金不夠的部分才留在生活費帳戶，
   // 不然領了現金，生活費帳戶餘額變少，會被當成不夠而叫人再轉錢
-  const spendingNeedByAccount = ({ fixedAccountId, livingAccountId, fixedDueRemainingCents, livingBudgetCents, livingSpentCents, livingCashAccountId, livingCashBalanceCents }) => {
+  // fixedNeedByAccount（固定支出依各自的扣款帳戶，含預存與緩衝，見 fixedReserve）優先；舊呼叫仍可只給單一帳戶與本期未扣金額
+  const spendingNeedByAccount = ({ fixedAccountId, livingAccountId, fixedDueRemainingCents, fixedNeedByAccount, livingBudgetCents, livingSpentCents, livingCashAccountId, livingCashBalanceCents }) => {
     const need = {};
     const add = (id, cents) => { if (id) need[id] = (need[id] || 0) + Math.max(0, Math.round(cents || 0)); };
-    add(fixedAccountId, fixedDueRemainingCents);
+    if (fixedNeedByAccount) Object.entries(fixedNeedByAccount).forEach(([id, cents]) => add(id, cents));
+    else add(fixedAccountId, fixedDueRemainingCents);
     const living = Math.max(0, Math.round((livingBudgetCents || 0) - (livingSpentCents || 0)));
     const fromCash = livingCashAccountId && livingCashAccountId !== livingAccountId ? Math.min(living, Math.max(0, Math.round(livingCashBalanceCents || 0))) : 0;
     if (fromCash) add(livingCashAccountId, fromCash);
     add(livingAccountId, living - fromCash);
     return need;
+  };
+  // 固定支出扣款帳戶的最低餘額（每月預存＋緩衝），各帳戶各自計算，扣款帳戶以固定項目自己的 accountId 為準。
+  //   每個固定支出（金額 P、每 c 個月扣一次）每個發薪週期預存 P÷c，扣款所在週期要整筆 P；
+  //   另外常留 bufferMonths 個月的「每月平均扣款」當緩衝（扣款前後都要在）。
+  //   週期以發薪日切（payday）：發薪日在扣款日之前時，扣款所在週期的收入就付得出，不必上一期先留。
+  // 回傳 { [accountId]: { monthlyCents, bufferCents, flows: [{ item, next }], heldAt(cycleIdx) } }；
+  //   next＝fromYmd 當天或之後的下一次扣款 { date, cents, cycle }；heldAt＝在那個週期結束時應已存好的錢（含緩衝）
+  const cycleIndexOf = (ymd, payday = 1) => (+ymd.slice(0, 4)) * 12 + (+ymd.slice(5, 7)) - 1 - (+ymd.slice(8, 10) < Math.min(payday, new Date(+ymd.slice(0, 4), +ymd.slice(5, 7), 0).getDate()) ? 1 : 0);
+  const fixedReserve = ({ items, fromYmd, payday = 1, bufferMonths = 0 }) => {
+    const expenses = (items || []).filter(i => i.type === 'expense');
+    const until = Money.ymd(new Date(+fromYmd.slice(0, 4), +fromYmd.slice(5, 7) + 12, 28)); // money.js 載入在後，呼叫時才取用
+    const nextByFlow = new Map();
+    for (const ev of Money.flowEvents(expenses, fromYmd, until).sort((a, b) => a.date.localeCompare(b.date))) {
+      if (ev.subsidy || nextByFlow.has(ev.flowId)) continue;
+      nextByFlow.set(ev.flowId, { date: ev.date, cents: ev.cents, cycle: ev.item.housingCalc ? ev.item.housingCalc.cycle : Money.flowPayCycle(ev.item) });
+    }
+    const out = {};
+    for (const item of expenses) {
+      const next = nextByFlow.get(item.id);
+      if (!next || !item.accountId) continue;
+      const a = (out[item.accountId] ||= { monthlyCents: 0, bufferCents: 0, flows: [] });
+      a.flows.push({ item, next });
+      a.monthlyCents += next.cents / next.cycle;
+    }
+    for (const a of Object.values(out)) {
+      a.monthlyCents = Math.ceil(a.monthlyCents / 100) * 100;
+      a.bufferCents = Math.ceil(a.monthlyCents * Math.max(0, Number(bufferMonths) || 0) / 100) * 100;
+      a.heldAt = (cycleIdx) => a.bufferCents + a.flows.reduce((s, { next }) => {
+        const k = cycleIndexOf(next.date, payday) - cycleIdx;
+        return s + (k <= 0 ? next.cents : Math.ceil(next.cents * Math.max(0, next.cycle - k) / next.cycle / 100) * 100);
+      }, 0);
+    }
+    return out;
+  };
+  // 各帳戶扣款日前後的最低餘額（給人看的表）：下次扣款日 D 前一天應有＝D 所在週期要扣的整筆＋其他項目已預存＋緩衝；扣款後應留＝前者扣掉 D 當天扣的
+  const accountFloors = ({ items, todayYmd, payday = 1, bufferMonths = 0 }) => {
+    const reserve = fixedReserve({ items, fromYmd: todayYmd, payday, bufferMonths });
+    return Object.entries(reserve).map(([accountId, a]) => {
+      const nextDate = a.flows.map(f => f.next.date).sort()[0];
+      const beforeCents = a.heldAt(cycleIndexOf(nextDate, payday));
+      const debitCents = a.flows.filter(f => f.next.date === nextDate).reduce((s, f) => s + f.next.cents, 0);
+      return { accountId, nextDate, debitCents, beforeCents, afterCents: beforeCents - debitCents, monthlyCents: a.monthlyCents, bufferCents: a.bufferCents };
+    }).sort((x, y) => x.nextDate.localeCompare(y.nextDate));
   };
   // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
   const purposeLabel = (key) => {
@@ -254,7 +299,8 @@ const Planning = (() => {
     const ymd = Money.ymd; // money.js 載入在後，呼叫時才取用
     const totalDays = Math.round((next - start) / 86400000);
     const elapsedDays = Math.round((t - start) / 86400000) + 1;
-    return { payday: d, start: ymd(start), today: ymd(t), next: ymd(next), totalDays, elapsedDays, daysLeft: totalDays - elapsedDays + 1, ratio: elapsedDays / totalDays };
+    // end＝本期最後一天（下次發薪前一天）
+    return { payday: d, start: ymd(start), today: ymd(t), next: ymd(next), end: ymd(new Date(next.getFullYear(), next.getMonth(), next.getDate() - 1)), totalDays, elapsedDays, daysLeft: totalDays - elapsedDays + 1, ratio: elapsedDays / totalDays };
   };
   // 分配表「狀態」：依本期已過天數與實際帳務（已入帳的帳目、實際餘額）判斷每個用途是否跟上進度，並給下一步建議
   //   fixed：{ dueTotalCents, paidCents, balanceCents, accountName }  本期還沒扣的固定支出要由帳戶餘額撐住
@@ -283,7 +329,8 @@ const Planning = (() => {
       if (remaining <= 0) return out('ok', `本期固定支出 ${fmt(facts.dueTotalCents)} 已全部扣款`);
       const unconfirmed = Math.min(remaining, Math.max(0, facts.unconfirmedCents || 0));
       const confirmNote = unconfirmed > 0 ? [`其中 ${fmt(unconfirmed)} 已過扣款日，扣款後到帳本按「確認入帳」`] : [];
-      const lack = remaining - Math.max(0, facts.balanceCents || 0);
+      // lackCents（各扣款帳戶缺額合計，含預存與緩衝）由呼叫端算好時優先；否則用單一帳戶餘額比本期未扣
+      const lack = facts.lackCents ?? (remaining - Math.max(0, facts.balanceCents || 0));
       if (lack > 0) return out('short', [`扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, `因為本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額不足 ${fmt(lack)}`, ...confirmNote], '餘額不足', `扣款日前轉 ${fmt(lack)} 到${facts.accountName}`, true);
       return out(unconfirmed > 0 ? 'watch' : 'ok', [`本期還要扣 ${fmt(remaining)}，${facts.accountName}餘額足夠`, ...confirmNote], '待確認入帳', `固定支出扣款後到帳本按「確認入帳」（${fmt(unconfirmed)}）`);
     }
@@ -359,6 +406,12 @@ const Planning = (() => {
         remainingCents += r.allocatedCents - moved - proj;
       }
       transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay });
+    }
+    // 只有固定支出從這個帳戶扣、但沒搭配任何分配用途的帳戶：也要補到夠扣（例如學貸從另一個帳戶扣款）
+    for (const [accountId, needCents] of Object.entries(spendingNeed)) {
+      if (byAccount.has(accountId) || !(needCents > 0)) continue;
+      const lack = Math.max(0, needCents - Math.max(0, Math.round(accounts[accountId]?.balanceCents || 0)));
+      if (lack > 0) transfers.push({ accountId, purposes: [purposeLabel('fixed')], plannedCents: 0, remainingCents: lack, spendLackCents: lack, stay: stay.has(accountId) });
     }
     return { transfers, stayCents, rowFacts };
   };
@@ -485,5 +538,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

@@ -28,23 +28,22 @@ const Snapshots = (() => {
     return n;
   };
 
-  // 一段期間內各帳戶依計畫的進出：{ [accountId]: { inCents, fixedOutCents } }
-  const planned = (flows, from, to) => {
+  // 一段期間 (from, to] 內各帳戶依計畫的進出：{ [accountId]: { inCents, fixedOutCents } }
+  // items 必須是 Money.calcRecurringMonthly 算好的固定項目（已排除停用、帶換算後金額）；
+  // 每一筆的日期與金額取自 Money.flowEvents（與帳本預測帳目同一份排程：非月繳只算繳款月、租屋按繳租月、租屋補助入帳）。
+  // money.js 載入在後，呼叫時才取用
+  const planned = (items, from, to) => {
     const out = {};
     const add = (id, key, cents) => {
       if (!id) return;
       out[id] = out[id] || { inCents: 0, fixedOutCents: 0 };
       out[id][key] += cents;
     };
-    for (const f of flows || []) {
-      const n = occurrences(f.dayOfMonth, from, to);
-      if (!n) continue;
-      if (f.type === 'income') add(f.accountId, 'inCents', n * (f.netCents || 0));
-      else if (f.type === 'saving') {
-        if (!f.fromAccountId || f.fromAccountId === f.accountId) continue;
-        add(f.accountId, 'inCents', n * (f.grossCents || 0));
-        add(f.fromAccountId, 'inCents', -n * (f.grossCents || 0));
-      } else if (f.type === 'expense') add(f.accountId, 'fixedOutCents', n * (f.grossCents || 0));
+    const dayAfter = Money.ymd(new Date(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10) + 1));
+    for (const ev of Money.flowEvents(items, dayAfter, to)) {
+      if (ev.type === 'income') add(ev.accountId, 'inCents', ev.cents);
+      else if (ev.type === 'saving') { add(ev.accountId, 'inCents', ev.cents); add(ev.fromAccountId, 'inCents', -ev.cents); }
+      else if (ev.type === 'expense') add(ev.accountId, 'fixedOutCents', ev.cents);
     }
     return out;
   };
@@ -97,5 +96,35 @@ const Snapshots = (() => {
     return errors;
   };
 
-  return { occurrences, planned, periods, validate };
+  // 生活花費推估（每 30 天）：最近幾期合計的（推算用掉−固定支出）÷ 合計天數 × 30，累積到至少 minDays 天才算；
+  // 用合計而不是逐期平均，短期間（隔兩天就核對）不會被放大。null＝資料不夠
+  const livingEstimate = (periodList, { minDays = 14, maxDays = 93 } = {}) => {
+    let days = 0, living = 0, fixed = 0, used = 0;
+    for (const p of periodList || []) {
+      if (days >= maxDays) break;
+      days += p.days; living += p.total.livingCents; fixed += p.total.fixedOutCents; used += 1;
+    }
+    if (days < minDays) return null;
+    return { days, periods: used, livingPer30Cents: Math.round(living * 30 / days), fixedPer30Cents: Math.round(fixed * 30 / days) };
+  };
+  // 總資產曲線：每次核對的帳戶合計（漏填的帳戶沿用上次數字）、與上次相比的變化，以及每 30 天換算的變化與前一期比進步或退步
+  const assetSeries = (snapshots) => {
+    const known = {};
+    let prev = null;
+    return [...(snapshots || [])].sort((a, b) => a.date.localeCompare(b.date)).map((s) => {
+      Object.entries(s.balances || {}).forEach(([id, v]) => { if (Number.isInteger(v)) known[id] = v; });
+      const totalCents = Object.values(known).reduce((x, y) => x + y, 0);
+      const point = { date: s.date, totalCents, changeCents: null, changePer30Cents: null, trend: null };
+      if (prev) {
+        const days = Math.round((dateValue(s.date) - dateValue(prev.date)) / DAY);
+        point.changeCents = totalCents - prev.totalCents;
+        point.changePer30Cents = days > 0 ? Math.round(point.changeCents * 30 / days) : null;
+        if (prev.changePer30Cents !== null && point.changePer30Cents !== null) point.trend = point.changePer30Cents > prev.changePer30Cents ? 'up' : (point.changePer30Cents < prev.changePer30Cents ? 'down' : 'flat');
+      }
+      prev = point;
+      return point;
+    });
+  };
+
+  return { occurrences, planned, periods, validate, livingEstimate, assetSeries };
 })();

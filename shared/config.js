@@ -8,6 +8,7 @@ const PLANNING_RULES = {
   savingsRateBands: { low: 0.10, healthy: 0.20, strong: 0.40 },
   emergencyMonths: { default: 6, min: 3, max: 18 },
   emergencyFillMonths: 12,
+  fixedBufferMonths: { default: 1, min: 0, max: 12 }, // 固定支出扣款帳戶常留幾個月的每月平均扣款當緩衝（使用者可改）
   livingSuggestCycles: 3, // 生活費建議值取最近幾個完整發薪週期的實際花費中位數
   habitCycles: 6, // 存花習慣看最近幾個完整發薪週期
   habitIncrease: { minCents: 50000, ratio: 0.2 }, // 分類比平常多花至少 500 元且多 20% 才提醒，免得小波動一直跳
@@ -30,6 +31,7 @@ const DEFAULT_CONFIG = {
     livingAccountId: 'bank',
     fixedExpenseAccountId: 'bank',
     emergencyAccountId: 'bank',
+    fixedBufferMonths: PLANNING_RULES.fixedBufferMonths.default,
     scenarioSelections: {},
     scenarioAccountMap: {},
     scenarioTargetMonths: {},

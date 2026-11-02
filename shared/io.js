@@ -203,7 +203,9 @@ const IO = (() => {
   });
 
   const exportJson = (dataObject, baseName) => {
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    // 檔名用本機時間（Money.ymd 是全站唯一的日期組法）；不用 UTC，台灣早上 8 點前匯出才不會是前一天
+    const now = new Date();
+    const stamp = `${Money.ymd(now)}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
     const filename = `${baseName}_${stamp}.json`;
     const blob = new Blob([JSON.stringify(dataObject, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -214,9 +216,11 @@ const IO = (() => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    clearDirty();
+    // 匯出不等於保存：不清掉「尚未保存」標記，不然離開前不會補存（2026-11-02 修正）
     return filename;
   };
+  // 完整工作區匯出：與 localStorage／綁定檔案同一個外框（currentEnvelope）
+  const exportWorkspace = () => exportJson(currentEnvelope(), 'finance_tools_workspace');
 
   // 讀取使用者選取的檔案，回傳 Promise<object>；格式錯誤或版本不符會丟出可讀訊息，不覆蓋現有資料
   const importJsonFile = (file, { expectedSchemaVersion } = {}) =>
@@ -248,5 +252,5 @@ const IO = (() => {
       reader.readAsText(file);
     });
 
-  return { markDirty, clearDirty, configurePersistence, loadWorkspace, loadPreviousWorkspace, saveCurrent, requestPersistentStorage, initializeFileBinding, bindWorkspaceFile, unbindWorkspaceFile, saveBoundFile, getBindingInfo, exportJson, importJsonFile };
+  return { markDirty, clearDirty, configurePersistence, loadWorkspace, loadPreviousWorkspace, saveCurrent, requestPersistentStorage, initializeFileBinding, bindWorkspaceFile, unbindWorkspaceFile, saveBoundFile, getBindingInfo, exportJson, exportWorkspace, importJsonFile };
 })();
