@@ -1366,3 +1366,100 @@ test('旅費：舊存檔沒改過的內建項目換成新範例、改過的保�
   assert.equal(api.Validation.validateScenario(kept).valid, true);
   assert.equal(api.Money.calcScenario(kept, api.DEFAULT_CONFIG).total, 6030000);
 });
+
+// ---------- 固定支出排程單一來源、對帳、扣款帳戶最低餘額（2026-11） ----------
+test('排程：flowEvents 非月繳只在繳款月、租屋補助另成一筆，id 與帳本預測帳目相同', () => {
+  const M = api.Money;
+  const items = M.calcRecurringMonthly([
+    { id: 'q', type: 'expense', accountId: 'm', amountCents: 300000, payCycleMonths: 3, payStartMonth: '2026-01', dayOfMonth: 5 },
+    { id: 'off', type: 'expense', accountId: 'm', amountCents: 999900, dayOfMonth: 1, active: false }
+  ]).items;
+  const evs = M.flowEvents(items, '2026-01-01', '2026-04-30');
+  assert.deepEqual([...evs.map(e => [e.id, e.date, e.cents])], [['recurring-q-2026-01', '2026-01-05', 900000], ['recurring-q-2026-04', '2026-04-05', 900000]]);
+});
+
+test('核對：固定支出用算好的固定項目與同一份排程（季繳只算繳款月），app 不可傳原始設定', () => {
+  const items = api.Money.calcRecurringMonthly([{ id: 'q', type: 'expense', accountId: 'm', amountCents: 300000, payCycleMonths: 3, payStartMonth: '2026-01', dayOfMonth: 5 }]).items;
+  const [p] = Snap.periods([{ id: 'a', date: '2026-01-01', balances: { m: 2000000 } }, { id: 'b', date: '2026-03-01', balances: { m: 1000000 } }], items);
+  assert.equal(p.total.fixedOutCents, 900000);
+  assert.equal(p.total.livingCents, 1000000 - 900000);
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(!/Snapshots\.periods\([^)]*config\.recurringCashFlows/.test(src), 'Snapshots.periods 必須收 recurringSummary().items');
+});
+
+test('核對：生活花費推估用合計天數，總資產曲線標出進步／退步', () => {
+  const ps = [{ days: 10, total: { livingCents: 100000, fixedOutCents: 0 } }, { days: 20, total: { livingCents: 500000, fixedOutCents: 50000 } }];
+  assert.equal(Snap.livingEstimate(ps).livingPer30Cents, 600000);
+  assert.equal(Snap.livingEstimate([ps[0]]), null);
+  const s = Snap.assetSeries([
+    { date: '2026-01-01', balances: { a: 100000, b: 0 } },
+    { date: '2026-01-31', balances: { a: 400000 } },
+    { date: '2026-03-02', balances: { a: 500000, b: 0 } }
+  ]);
+  assert.deepEqual([...s.map(x => [x.totalCents, x.changeCents, x.trend])], [[100000, null, null], [400000, 300000, null], [500000, 100000, 'down']]);
+});
+
+test('扣款帳戶最低餘額：年繳每月預存、扣款當期整筆、緩衝 1 個月；只扣款沒搭配用途的帳戶也要補', () => {
+  const P = api.Planning;
+  const items = api.Money.calcRecurringMonthly([
+    { id: 'r', type: 'expense', accountId: 'A', amountCents: 1000000, dayOfMonth: 10 },
+    { id: 'i', type: 'expense', accountId: 'A', amountCents: 100000, payCycleMonths: 12, payStartMonth: '2026-12', dayOfMonth: 15 }
+  ]).items;
+  const [f] = P.accountFloors({ items, todayYmd: '2026-11-02', payday: 5, bufferMonths: 1 });
+  // 緩衝 11,000（每月 10,000＋1,000）＋房租整筆 10,000＋保費已預存 11/12 × 12,000
+  assert.deepEqual([f.nextDate, f.beforeCents, f.afterCents, f.bufferCents], ['2026-11-10', 3200000, 2200000, 1100000]);
+  // 本期（11/5–12/4）結束時：房租在下期扣（0）、保費 12/15 在下期 → 預存 11/12，加緩衝
+  const reserve = P.fixedReserve({ items, fromYmd: '2026-12-05', payday: 5, bufferMonths: 1 });
+  assert.equal(reserve.A.heldAt(P.cycleIndexOf('2026-11-05', 5)), 1100000 + 1100000);
+  const plan = P.transferPlan({ rows: [{ key: 'fixed', label: '固定支出', allocatedCents: 100000, accountId: 'A' }], accounts: { A: { balanceCents: 900000 }, B: { balanceCents: 100000 } }, spendingNeed: { A: 100000, B: 500000 } });
+  assert.equal(plan.transfers.find(t => t.accountId === 'B').remainingCents, 400000);
+});
+
+test('匯出不清除尚未保存標記、檔名用本機時間；只留完整工作區匯出', () => {
+  const io = fs.readFileSync(path.join(root, 'shared/io.js'), 'utf8');
+  const body = io.slice(io.indexOf('const exportJson'), io.indexOf('const importJsonFile'));
+  assert.ok(!body.includes('clearDirty()') && !body.includes('toISOString'));
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.deepEqual([...html.matchAll(/id="export-([a-z]+)"/g)].map(m => m[1]), ['workspace']);
+});
+
+// 2026-11-02 紅隊：手記的固定支出不算生活花費、週期未走完也能推估、及早存、核對自動對帳
+test('紅隊：手記房租配對排除、重複記帳提醒、滾動推估、及早存平均份額、核對對帳差額', () => {
+  const P = api.Planning, M = api.Money;
+  const items = M.calcRecurringMonthly([{ id: 'rent', type: 'expense', label: '房租', amountCents: 1000000, frequency: 'monthly', dayOfMonth: 21, accountId: 'bank', active: true, essential: true }]).items;
+  const e = (id, date, cents, extra = {}) => ({ id, date, type: 'expense', account: 'bank', currency: 'TWD', rateToTWD: 1, amountCents: -cents, status: 'realized', ...extra });
+  const ids = new Set(['bank']);
+  // 手記一筆同金額房租＋兩筆生活花費：房租不算生活花費
+  const entries = [e('food1', '2026-10-02', 30000), e('rentManual', '2026-10-21', 1000000), e('food2', '2026-10-25', 50000)];
+  assert.equal(P.livingSpendCents(entries, ids, '2026-10-01', '2026-11-01', items), 80000);
+  assert.equal(P.livingSpendCents(entries, ids, '2026-10-01', '2026-11-01'), 1080000, '沒給固定項目時維持舊行為');
+  // 排程帳目已確認又手記＝重複
+  const dup = P.fixedEntryMatch({ entries: [...entries, e('recurring-rent-2026-10', '2026-10-21', 1000000, { recurringFlowId: 'rent' })], items, from: '2026-10-01', to: '2026-11-01' });
+  assert.deepEqual([...dup.duplicates.map(d => d.entryId)], ['rentManual']);
+  // 5 號發薪、10/2 才開始記：完整週期沒有，改用 10/2→11/2 共 31 天換算；之前只有收入的週期不算 0
+  const h = P.livingSpendHistory({ entries: [{ ...e('pay', '2026-08-05', 0), type: 'income', amountCents: 100 }, ...entries], accountIds: ids, payday: 5, today: new Date(2026, 10, 2), items });
+  assert.equal(h.medianCents, null);
+  assert.deepEqual([h.rolling.from, h.rolling.days, h.rolling.spentCents, h.rolling.per30Cents], ['2026-10-02', 31, 80000, 77419]);
+  // 及早存：每 3 個月扣 9,000，帳上已有 6,000（已達進度），本期起到扣款所在期共 2 期 → 建議本期存 1,500
+  const q = M.calcRecurringMonthly([{ id: 'ins', type: 'expense', label: '保險', amountCents: 300000, payCycleMonths: 3, payStartMonth: '2026-12', dayOfMonth: 20, accountId: 'bank', active: true }]).items;
+  const r = P.fixedReserve({ items: q, fromYmd: '2026-11-05', payday: 5, bufferMonths: 0 }).bank;
+  const idx = P.cycleIndexOf('2026-11-05', 5);
+  assert.ok(r.heldAt(idx) <= 600000, '上期末已達本期進度');
+  assert.equal(r.earlyAt(idx, 600000), 150000);
+  assert.equal(r.earlyAt(idx, 900000), 0, '已存滿就不建議');
+  // 核對對帳：期間內手記房租與生活花費、排程也有房租 → 房租不重複扣，差額＝0
+  const snaps = [{ id: 'a', date: '2026-10-01', balances: { bank: 5000000 } }, { id: 'b', date: '2026-10-31', balances: { bank: 5000000 - 1000000 - 80000 } }];
+  assert.equal(Snap.periods(snaps, items, entries)[0].total.unrecordedCents, 0);
+  assert.equal(Snap.periods(snaps, items, [entries[1]])[0].total.unrecordedCents, -80000, '沒記到的生活花費顯示為支出少記');
+  assert.equal(Snap.periods(snaps, items)[0].total.unrecordedCents, undefined, '沒給帳目不對帳');
+});
+
+test('綁定檔案：開啟時同步只在本機資料驗證通過時進行，未寫成功不顯示已綁定', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const io = fs.readFileSync(path.join(root, 'shared/io.js'), 'utf8');
+  assert.match(app, /IO\.initializeFileBinding\(\{ sync: restored \}\)/);
+  assert.match(app, /const restored = !!saved && restoreWorkspace\(saved\)/);
+  assert.match(app, /fileStale \? `綁定檔案/);
+  assert.match(io, /if \(boundFileHandle && sync\) await saveBoundFile\(\)/);
+  assert.match(io, /requestPermission: true/);
+});

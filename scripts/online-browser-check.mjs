@@ -344,7 +344,8 @@ try {
       { id: 'job', name: '正職', type: 'income', kind: 'salary', payBasis: 'monthly', amountCents: 6000000, monthlyWorkHours: 160, dayOfMonth: 1, accountId: 'acc-bank', applyInsurance: false, active: true },
       { id: 'rent', name: '房租', type: 'expense', kind: 'fixed_expense', amountCents: 1000000, dayOfMonth: 28, accountId: 'acc-bank', essential: true, active: true }],
     quickPlan: { ...sampleConfig.quickPlan, monthlyOtherExpenseCents: 1500000 },
-    dashboard: { emergencyAccountId: 'acc-save', savingAccountId: 'acc-save', livingAccountId: 'acc-bank', fixedExpenseAccountId: 'acc-bank' } };
+    // fixedBufferMonths: 0 — this probe checks merged transfer lines; the fixed-expense buffer (default 1 month) is covered by unit tests
+    dashboard: { emergencyAccountId: 'acc-save', savingAccountId: 'acc-save', livingAccountId: 'acc-bank', fixedExpenseAccountId: 'acc-bank', fixedBufferMonths: 0 } };
   const spend = (id, ymd, account, yuan) => ({ id, date: ymd, type: 'expense', category: '食', account, currency: 'TWD', rateToTWD: 1, amountCents: -yuan * 100, essential: false, reimbursable: false, status: 'realized', note: '' });
   const spendLedger = { schemaVersion: 1, entries: [
     { id: 'pay0', date: `${ymBack(0)}-01`, type: 'income', category: '薪資', account: 'acc-bank', currency: 'TWD', rateToTWD: 1, amountCents: 6000000, status: 'realized', note: '' },

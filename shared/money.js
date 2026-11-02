@@ -33,6 +33,14 @@ const Money = (() => {
   };
   // 帳目換成台幣；缺匯率等無法換算時回 null，由呼叫端決定略過或當 0
   const entryTWDCents = (e) => { try { return toTWDCents(e.amountCents, e.currency, e.rateToTWD); } catch { return null; } };
+  // 一筆帳目對各帳戶餘額的影響 [[accountId, cents], ...]（帳戶餘額、核對對帳的唯一算法）；
+  // 支出的 amountCents 本身帶負號，轉帳是轉出帳戶減、轉入帳戶加
+  const entryDeltas = (entry) => {
+    const amount = entryTWDCents(entry);
+    if (amount === null || entry.type === 'wishlist') return [];
+    if (entry.type === 'transfer') return [[entry.fromAccount, -Math.abs(amount)], [entry.toAccount, Math.abs(amount)]];
+    return entry.account ? [[entry.account, amount]] : [];
+  };
 
   // 依 key 分組加總（key 可以是分類、帳戶、年月...），加總前一律先換算成台幣，避免混幣別直接相加
   const groupSum = (entries, keyFn, filterFn = () => true) => {
@@ -290,6 +298,37 @@ const Money = (() => {
     if (!s || !m) return 0;
     const diff = ymIndex(+m[1], +m[2]) - ymIndex(+s[1], +s[2]);
     return diff >= 0 && diff % cycle === 0 ? monthlyCents * cycle : 0;
+  };
+  // 固定項目（calcRecurringMonthly 的 items）在某月實際的現金流金額：租屋按繳租月、非月繳按繳款月、其餘每月
+  const flowDueCents = (item, ym) => {
+    if (item.type === 'income') return item.netCents || 0;
+    if (item.type === 'saving') return item.fromAccountId && item.fromAccountId !== item.accountId ? item.grossCents || 0 : 0;
+    if (item.housingCalc) return housingDueInMonth(item.housing, ym).totalCents;
+    return flowPayCycle(item) > 1 ? flowDueInMonth(item, ym) : item.grossCents || 0;
+  };
+  // 固定項目在 [fromYmd, toYmd]（含兩端）內的每一筆現金流，是帳本預測帳目、本期應扣、帳戶核對、帳戶最低餘額的唯一排程來源。
+  // id 與帳本預測帳目相同（recurring-<flowId>-<YYYY-MM>，租屋補助另加 -subsidy）
+  const flowEvents = (items, fromYmd, toYmd) => {
+    const from = parseYmd(fromYmd), to = parseYmd(toYmd);
+    if (!from || !to || fromYmd > toYmd) return [];
+    const events = [];
+    const clampDay = (day) => Math.max(1, Math.trunc(Number(day) || 1));
+    for (let index = ymIndex(from.y, from.m); index <= ymIndex(to.y, to.m); index += 1) {
+      const ymText = dateInMonth(index, 1).slice(0, 7);
+      for (const item of items || []) {
+        const subsidyCents = item.housingCalc ? housingSubsidyInMonth(item.housing, ymText) : 0;
+        if (subsidyCents > 0) {
+          const date = dateInMonth(index, clampDay(item.housing.subsidy.dayOfMonth));
+          if (date >= fromYmd && date <= toYmd) events.push({ id: `recurring-${item.id}-subsidy-${ymText}`, flowId: item.id, item, type: 'income', subsidy: true, accountId: item.accountId, date, ym: ymText, cents: subsidyCents });
+        }
+        const date = dateInMonth(index, clampDay(item.dayOfMonth));
+        if (date < fromYmd || date > toYmd) continue;
+        const cents = flowDueCents(item, ymText);
+        if (!(cents > 0)) continue;
+        events.push({ id: `recurring-${item.id}-${ymText}`, flowId: item.id, item, type: item.type, accountId: item.accountId, fromAccountId: item.fromAccountId, date, ym: ymText, cents });
+      }
+    }
+    return events;
   };
 
   // 一次性情境（買房／買地自建／旅費／喪葬）；horizonMonths＝距目標月份的月數，由呼叫端依首頁目標月份算好
@@ -800,7 +839,7 @@ const Money = (() => {
   };
 
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
+    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
