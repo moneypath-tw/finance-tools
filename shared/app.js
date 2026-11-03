@@ -1092,10 +1092,22 @@ const App = (() => {
     const habitsView = renderHabits(savingsHealth, recurring, spendAccounts);
     const incomeView = renderIncomeTarget(savingsHealth, recurring);
     const sourceName = savingsHealth.facts.mainIncome ? accountName(savingsHealth.facts.mainIncome.accountId) : null;
-    const transferLines = savingsHealth.facts.noData ? [] : progress.transfers.transfers.filter(t => t.remainingCents > 0).map(t => t.stay
-      ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.remainingCents)}：從其他帳戶轉進來`
-      : `${sourceName ? `從${sourceName}` : ''}轉 ${Money.formatTWD(t.remainingCents)} 到${accountName(t.accountId)}（${t.purposes.join('、')}）`);
-    const actions = [...accountWarnings, ...verdict.fixes, ...transferLines, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
+    // 主次分開（Planning.transferPlan 的 mustCents／saveCents）：付款缺額不轉會扣款失敗或沒錢花，先列；儲蓄錢夠再轉。
+    // 轉帳不跟「要做的事」搶前 3 名，全部列在自己的區塊
+    const transfers = savingsHealth.facts.noData ? [] : progress.transfers.transfers;
+    const from = sourceName ? `從${sourceName}` : '';
+    const mustLines = transfers.filter(t => t.mustCents > 0).map(t => t.stay
+      ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.mustCents)}：從其他帳戶轉進來`
+      : `${from}轉 ${Money.formatTWD(t.mustCents)} 到${accountName(t.accountId)}（${t.mustPurposes.join('、')}）`);
+    const saveLines = transfers.filter(t => t.saveCents > 0).map(t => `${from}轉 ${Money.formatTWD(t.saveCents)} 到${accountName(t.accountId)}（${t.savePurposes.join('、')}）`);
+    const transferView = mustLines.length || saveLines.length ? el('div', { class: 'home-transfers' }, [
+      el('h3', { text: '本期轉帳' }),
+      mustLines.length ? el('p', { class: 'home-transfer-head', text: '主：付款用，先轉（不轉會不夠扣款或付生活費）' }) : null,
+      mustLines.length ? el('ol', { class: 'home-actions home-transfer-must' }, mustLines.map(text => el('li', { text }))) : null,
+      saveLines.length ? el('p', { class: 'home-transfer-head', text: `次：儲蓄，付款的錢轉完還有剩再轉${mustLines.length ? '' : '（本期付款的錢已夠）'}；不夠可以延到下次發薪` }) : null,
+      saveLines.length ? el('ol', { class: 'home-actions home-transfer-save' }, saveLines.map(text => el('li', { text }))) : null
+    ]) : null;
+    const actions = [...accountWarnings, ...verdict.fixes, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入
     const standingPlan = [
       ...progress.transfers.transfers.filter(t => !t.stay).map(t => `轉 ${Money.formatTWD(t.plannedCents)} 到${accountName(t.accountId)}（${t.purposes.join('、')}）`),
@@ -1159,7 +1171,8 @@ const App = (() => {
       el('p', { class: 'home-goal', text: `最低生活費每月約 ${Money.formatTWD(minimumLivingCents)}（必要固定支出 ${Money.formatTWD(essentialPartCents)}＋生活花費 ${Money.formatTWD(livingPartCents)}${living.source ? '' : '，尚無實際花費，暫用預算'}）` }),
       living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，固定出入帳的排程帳目已確認，又另外手記了一筆同金額的帳，帳戶餘額會算錯，請到帳本刪掉其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
-      actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : el('p', { class: 'home-ok', text: '目前不用做任何事' }),
+      actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
+      transferView,
       habitsView.node,
       incomeView,
       floorsView,
