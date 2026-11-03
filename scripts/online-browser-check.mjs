@@ -375,11 +375,16 @@ try {
 
   // floating cash flows (2026-11-03): a 30,000 trip on the card inside last cycle is real money but not living spend,
   // so the living suggestion must stay 22,000 (counting it would make the median 50,000)
+  // 0.001 passes "> 0" but rounds to 0 cents: the form must refuse it (the only floating entry saved below is the trip)
+  const tinyStatus = await evaluate(`(() => { document.querySelector('[data-tab=ledger]').click(); const box = document.querySelector('#floating-view');
+    box.querySelector('input[type=number]').value = '0.001'; [...box.querySelectorAll('button')].find(b => b.textContent === '新增浮動收支').click();
+    return box.querySelector('[role=status]')?.textContent || ''; })()`);
   await evaluate(`(() => { document.querySelector('[data-tab=ledger]').click(); const box = document.querySelector('#floating-view'); const [type, nature, acc] = box.querySelectorAll('select'); const set = (x, v) => { x.value = v; x.dispatchEvent(new Event('change', { bubbles: true })); };
     set(type, 'expense'); set(box.querySelector('select[aria-label=性質]'), '旅遊'); set(box.querySelector('select[aria-label=綁定帳戶]'), 'acc-card');
     box.querySelector('input[type=date]').value = '${ymBack(1)}-15'; box.querySelector('input[type=number]').value = '30000'; [...box.querySelectorAll('button')].find(b => b.textContent === '新增浮動收支').click(); return true; })()`);
   await go(`${base}/index.html`);
-  const floating = await evaluate(`(() => { const e = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.find(x => x.floating); return { e: e && [e.type, e.nature, e.account, e.amountCents, e.date].join('|'), view: document.querySelector('#floating-view')?.innerText.includes('支出｜旅遊') }; })()`);
+  const floating = await evaluate(`(() => { const all = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.filter(x => x.floating), e = all[0]; return { n: all.length, e: e && [e.type, e.nature, e.account, e.amountCents, e.date].join('|'), view: document.querySelector('#floating-view')?.innerText.includes('支出｜旅遊') }; })()`);
+  check('floating form refuses an amount that rounds to 0 cents', tinyStatus.includes('大於 0') && floating.n === 1, JSON.stringify({ tinyStatus, n: floating.n }));
   const afterFloat = await spendView();
   check('floating expense saved from its own block, listed by nature, and kept out of living spend', floating.e === `expense|旅遊|acc-card|-3000000|${ymBack(1)}-15` && floating.view && afterFloat.slider === '22000' && !afterFloat.button, JSON.stringify({ ...floating, button: afterFloat.button }));
 

@@ -2065,8 +2065,10 @@ const App = (() => {
     const status = el('p', { class: 'notice', role: 'status' });
     const add = () => {
       const yuan = Number(amountInput.value);
-      if (!Number.isFinite(yuan) || yuan <= 0) { status.textContent = '請輸入大於 0 的金額。'; return; }
+      // 0.001 passes "> 0" but rounds to 0 cents; an unbound entry never reaches balances or reconcile
+      if (!Number.isFinite(yuan) || Money.toCents(yuan) <= 0) { status.textContent = '請輸入大於 0 的金額。'; return; }
       if (!Validation.isValidDate(dateInput.value)) { status.textContent = '請選擇日期。'; return; }
+      if (!accSel.value) { status.textContent = '請先在個人設定新增帳戶，浮動收支要綁定帳戶才算得進餘額與核對。'; return; }
       const type = typeSel.value;
       ledger.entries.push({
         id: createEntryId(), date: dateInput.value, type, floating: true, nature: natureSel.value,

@@ -1519,7 +1519,7 @@ const floatEntry = (id, date, cents, extra = {}) => ({ id, date, type: cents < 0
 test('浮動收支：驗證要求收入或支出、有性質、不能來自固定項目', () => {
   const ok = { entries: [floatEntry('a', '2026-10-05', 400000), floatEntry('b', '2026-10-06', -120000, { nature: '旅遊' })] };
   assert.equal(api.Validation.validateLedger(ok).valid, true);
-  for (const bad of [{ nature: '' }, { type: 'transfer', fromAccount: 'x', toAccount: 'y' }, { recurringFlowId: 'f' }]) {
+  for (const bad of [{ nature: '' }, { type: 'transfer', fromAccount: 'x', toAccount: 'y' }, { recurringFlowId: 'f' }, { account: '' }, { amountCents: 0 }]) {
     const r = api.Validation.validateLedger({ entries: [floatEntry('a', '2026-10-05', 400000, bad)] });
     assert.ok(r.errors.some(e => e.code === 'INVALID_FLOATING'), JSON.stringify(bad));
   }
