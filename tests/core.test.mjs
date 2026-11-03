@@ -1476,3 +1476,39 @@ test('student loan settings: government-paid interest is the first option and a 
   assert.deepEqual(options, ['government', 'student'], 'the confirmed rule is listed first');
   assert.ok(!/多付約 \$\{Money\.formatTWD\(Math\.max\(0/.test(src), 'a missed deadline with no extra interest must not read 多付 NT$0');
 });
+
+test('學貸帳單：依日期推算已繳／剩餘期數與餘額，115/8/1 降息後重算月繳，與 115/11/06 帳單相符', () => {
+  const ref = api.REFERENCE_DATA.twStudentLoan;
+  assert.ok(ref.previousBorrowerAnnualRate > ref.borrowerAnnualRate, '降息前後利率都在 REFERENCE_DATA');
+  // 112上 49,702＋112下 32,202，24 期，114/9/6 第 1 期（使用者提供的臺銀帳單，2026-11-03）
+  const loan = { label: '舊貸', principalCents: 8190400, firstDueDate: '2025-09-06', termMonths: 24, semesters: 2 };
+  const r = api.Money.calcBilledStudentLoan(loan, '2026-11-06');
+  assert.equal(r.schedule[0].paymentCents, 347700, '降息前月繳 3,477');
+  const nov = r.schedule.find(x => x.dueDate === '2026-11-06');
+  assert.equal(nov.term, 15);
+  assert.equal(nov.interestCents, 2200, '11 月帳單利息 22');
+  assert.ok(Math.abs(nov.principalCents - 343500) <= 100, `11 月帳單本金 3,435（容許臺銀進位差 1 元），算出 ${nov.principalCents / 100}`);
+  assert.equal(r.paidTerms, 15);
+  assert.equal(r.remainingTerms, 9);
+  assert.equal(r.lastDueDate, '2027-08-06');
+  assert.equal(r.schedule[23].balanceAfterCents, 0);
+  assert.equal(r.schedule.reduce((s, x) => s + x.principalCents, 0), loan.principalCents);
+  // The day before the due date the term is not yet paid.
+  assert.equal(api.Money.calcBilledStudentLoan(loan, '2026-11-05').paidTerms, 14);
+  assert.equal(api.Money.calcBilledStudentLoan(loan, '2025-09-05').status, 'waiting');
+  assert.equal(api.Money.calcBilledStudentLoan(loan, '2027-08-06').status, 'completed');
+  assert.equal(api.Money.calcBilledStudentLoan({ ...loan, firstDueDate: '' }, '2026-11-06'), null);
+  // Billed semesters (and the leave gaps before the next borrowed one) leave the age-based estimate.
+  const sem = (label) => ({ label, total: 3000000 });
+  const gap = api.Money.leaveGap();
+  const periods = [sem('大一上'), sem('大一下'), gap, gap, sem('大二上'), sem('大二下')];
+  assert.deepEqual(api.Money.unbilledPeriods(periods, [loan]).map(p => p.label), ['大二上', '大二下']);
+  assert.equal(api.Money.unbilledPeriods(periods, []), periods);
+  assert.equal(api.Money.unbilledPeriods(periods, [{ semesters: 9 }]).length, 0);
+  // Import validation accepts the new list and rejects a bad entry.
+  const sc = structuredClone(api.DEFAULT_SCENARIOS.find(s => s.scenarioId === 'student_loan'));
+  sc.repayment.billedLoans = [loan];
+  assert.equal(api.Validation.validateScenario(sc).errors.length, 0);
+  sc.repayment.billedLoans = [{ ...loan, firstDueDate: '2025-13-06', termMonths: 0 }];
+  assert.deepEqual(api.Validation.validateScenario(sc).errors.map(e => e.code).sort().join(), 'INVALID_DATE,INVALID_TERM');
+});

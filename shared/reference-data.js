@@ -40,6 +40,10 @@ const REFERENCE_DATA = {
   },
   twStudentLoan: {
     effectiveFrom: '2026-08-01', borrowerAnnualRate: 0.00775,
+    // Before effectiveFrom the borrower paid this rate; from then the government covers one more point
+    // (行政院「臺灣人口對策新戰略—家庭支持篇」). Bank bills for interest days on or after the change use the new rate.
+    previousBorrowerAnnualRate: 0.01775,
+    rateChangeSource: '臺灣銀行就學貸款通知：115 年 8 月 1 日起政府多負擔 1 個百分點，借款人利率由 1.775% 降為 0.775%（2026-11-03 以帳單核對）',
     standardGraceYears: 2, yearsPerBorrowedSemester: 1,
     extendedTermMultiplier: 1.5, lowIncomeTermMultiplier: 2,
     // 辦法第 11 條：休學後滿 2 年之次日起攤還；繼續在國內就學者得至最後教育階段完成後償還。

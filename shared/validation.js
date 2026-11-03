@@ -139,6 +139,15 @@ const Validation = (() => {
         if (!['estimated', 'manual'].includes(s.repayment.principalMode || 'estimated')) errors.push(error(`${path}.repayment.principalMode`, 'INVALID_MODE', '學貸本金來源不合法'));
         if (s.repayment.principalMode === 'manual' && (!finite(s.repayment.manualPrincipalCents) || s.repayment.manualPrincipalCents < 0)) errors.push(error(`${path}.repayment.manualPrincipalCents`, 'INVALID_MONEY', '銀行未償本金必須為非負金額'));
         if (!finite(s.repayment.reserveMonths) || s.repayment.reserveMonths < 0) errors.push(error(`${path}.repayment.reserveMonths`, 'INVALID_TERM', '預備金月數必須為非負數'));
+        if (s.repayment.billedLoans !== undefined && !Array.isArray(s.repayment.billedLoans)) errors.push(error(`${path}.repayment.billedLoans`, 'INVALID_TYPE', '帳單中的學貸必須為清單'));
+        (Array.isArray(s.repayment.billedLoans) ? s.repayment.billedLoans : []).forEach((l, j) => {
+          const at = `${path}.repayment.billedLoans[${j}]`;
+          if (!l || typeof l !== 'object') { errors.push(error(at, 'INVALID_TYPE', '帳單中的學貸格式不正確')); return; }
+          if (!finite(l.principalCents) || l.principalCents < 0) errors.push(error(`${at}.principalCents`, 'INVALID_MONEY', '帳單學貸本金必須為非負金額'));
+          if (l.firstDueDate && !isValidDate(l.firstDueDate)) errors.push(error(`${at}.firstDueDate`, 'INVALID_DATE', '第 1 期扣款日格式須為 YYYY-MM-DD'));
+          if (!finite(l.termMonths) || l.termMonths < 1) errors.push(error(`${at}.termMonths`, 'INVALID_TERM', '總期數至少 1 期'));
+          if (!finite(l.semesters) || l.semesters < 0) errors.push(error(`${at}.semesters`, 'INVALID_TERM', '涵蓋學期數必須為非負數'));
+        });
       }
     }
     if (s.calcType === 'fire') {

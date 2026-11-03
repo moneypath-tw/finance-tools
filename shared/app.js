@@ -265,6 +265,8 @@ const App = (() => {
 
   const ensureStudentLoanRepayment = (scenario) => {
     scenario.repayment = fillDefaults(scenario.repayment, STUDENT_LOAN_REPAYMENT_DEFAULTS);
+    // The default list is frozen and shared; each save gets its own copy before anything is added.
+    if (!Array.isArray(scenario.repayment.billedLoans) || Object.isFrozen(scenario.repayment.billedLoans)) scenario.repayment.billedLoans = [...(scenario.repayment.billedLoans || [])];
     ensureAccountProfiles(); ensureDashboard();
     if (!config.accountProfiles.some(a => a.id === scenario.repayment.accountId)) scenario.repayment.accountId = config.dashboard.fixedExpenseAccountId || config.accountProfiles[0]?.id || '';
     // Each restored semester now follows a leave gap, so graduation moves half a year later per gap.
@@ -281,9 +283,16 @@ const App = (() => {
     const repayment = ensureStudentLoanRepayment(scenario);
     const result = calcScenario(scenario);
     // Leave settings live on scenario.periods; calcScenario supplies each semester's total.
-    const periods = scenario.periods.map((p, i) => ({ ...p, total: result.periods[i]?.total || 0 }));
-    return Money.calcStudentLoanPlan(periods, repayment, config.personalBaseline.currentAge,
+    const all = scenario.periods.map((p, i) => ({ ...p, total: result.periods[i]?.total || 0 }));
+    const plan = Money.calcStudentLoanPlan(Money.unbilledPeriods(all, repayment.billedLoans), repayment, config.personalBaseline.currentAge,
       repayment.principalMode === 'manual' ? { manualPrincipalCents: repayment.manualPrincipalCents } : {});
+    const today = Money.ymd(new Date());
+    // Index-aligned with repayment.billedLoans; null while a bill's first due date is still blank.
+    const billed = repayment.billedLoans.map(l => Money.calcBilledStudentLoan(l, today));
+    const billedDueCents = billed.reduce((s, b) => s + (b && b.status === 'repaying' && b.next ? b.next.paymentCents : 0), 0);
+    // What leaves the account this month: billed installments plus the estimate once it is in repayment.
+    const dueNowCents = billedDueCents + (plan.status === 'repaying' ? plan.monthlyPaymentCents : 0);
+    return { ...plan, billed, billedDueCents, dueNowCents };
   };
   const syncStudentLoanFixedExpense = () => {
     const scenario = scenarios.find(s => s.scenarioId === 'student_loan');
@@ -296,8 +305,8 @@ const App = (() => {
       config.recurringCashFlows.push(flow);
     }
     if (flow) Object.assign(flow, {
-      amountCents: plan.monthlyPaymentCents, dayOfMonth: Math.min(31, Math.max(1, Math.trunc(repayment.paymentDay || 5))),
-      accountId: repayment.accountId, active: !!repayment.includeAsFixedExpense && plan.status === 'repaying',
+      amountCents: plan.dueNowCents || plan.monthlyPaymentCents, dayOfMonth: Math.min(31, Math.max(1, Math.trunc(repayment.paymentDay || 5))),
+      accountId: repayment.accountId, active: !!repayment.includeAsFixedExpense && plan.dueNowCents > 0,
       systemManaged: 'student_loan', source: 'scenario:student_loan', scheduledStartAge: plan.repaymentStartAge, scheduledEndAge: plan.repaymentEndAge
     });
     return { repayment, plan, flow };
@@ -992,7 +1001,7 @@ const App = (() => {
       { value: `goal:${goal.key}:saved`, label: `目標｜${goal.label}・已存`, amountCents: goal.savedCents, note: accountName(goal.accountId) },
       { value: `goal:${goal.key}:gap`, label: `目標｜${goal.label}・尚缺`, amountCents: goal.gapCents, note: goal.targetMonth }
     ));
-    if (studentLoan) sourceDefinitions.push({ value: 'loan:student:payment', label: '貸款｜學貸月繳', amountCents: studentLoan.monthlyPaymentCents, note: `${studentLoan.repaymentStartAge} 歲起繳` });
+    if (studentLoan) sourceDefinitions.push({ value: 'loan:student:payment', label: '貸款｜學貸月繳', amountCents: studentLoan.dueNowCents || studentLoan.monthlyPaymentCents, note: studentLoan.billedDueCents > 0 ? '依帳單攤還中' : `${studentLoan.repaymentStartAge} 歲起繳` });
     if (mortgage) sourceDefinitions.push(
       { value: 'loan:mortgage:payment', label: '貸款｜房貸目前月繳', amountCents: mortgage.currentPaymentCents, note: `${mortgage.repaymentStartAge} 歲起繳` },
       { value: 'loan:mortgage:normalPayment', label: '貸款｜房貸寬限後月繳', amountCents: mortgage.monthlyPaymentCents, note: '本息平均攤還' }
@@ -1054,7 +1063,7 @@ const App = (() => {
         studentLoanScenario ? el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') }) : null,
         mortgageScenario ? el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') }) : null
       ]) : null,
-      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
+      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), ...studentLoan.billed.filter(b => b && b.status === 'repaying').map(b => el('p', { class: 'notice', text: `${b.label || '帳單中的貸款'}：已繳 ${b.paidTerms}／${b.termMonths} 期・剩 ${b.remainingTerms} 期・待償還 ${Money.formatTWD(b.balanceCents)}・月繳 ${Money.formatTWD(b.next.paymentCents)}` })), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
       showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
@@ -2268,6 +2277,37 @@ const App = (() => {
     ].filter(Boolean));
   };
 
+  // Loans the bank already collects: entered from the bill, followed by date. The summary above covers the rest.
+  const renderBilledStudentLoans = (repayment, plan, refresh) => {
+    const ref = REFERENCE_DATA.twStudentLoan;
+    const dateText = (s) => { const [y, m, d] = s.split('-').map(Number); return `${y - 1911}/${m}/${d}`; };
+    const field = (label, input) => el('label', { class: 'field estimator-field' }, [el('span', { text: label }), input]);
+    const rows = repayment.billedLoans.map((loan, i) => {
+      const b = plan.billed[i];
+      return el('div', { class: 'billed-loan' }, [
+        b ? el('div', { class: 'health-grid student-loan-summary' }, [
+          el('div', { class: 'summary-block' }, [el('h3', { text: b.label || `帳單中的貸款 ${i + 1}` }), el('p', { class: 'mono big', text: `已繳 ${b.paidTerms}／${b.termMonths} 期` }), el('p', { class: 'notice', text: `剩 ${b.remainingTerms} 期・末期 ${dateText(b.lastDueDate)}` })]),
+          el('div', { class: 'summary-block highlight' }, [el('h3', { text: '待償還餘額' }), el('p', { class: 'mono big', text: Money.formatTWD(b.balanceCents) }), el('p', { class: 'notice', text: '依帳單規則推算，可能與臺銀差幾元；以臺銀帳單為準' })]),
+          b.next ? el('div', { class: 'summary-block' }, [el('h3', { text: `下期 ${dateText(b.next.dueDate)}（第 ${b.next.term} 期）` }), el('p', { class: 'mono big', text: Money.formatTWD(b.next.paymentCents) }), el('p', { class: 'notice', text: `本金 ${Money.formatTWD(b.next.principalCents)}＋利息 ${Money.formatTWD(b.next.interestCents)}` })]) : null
+        ]) : null,
+        el('div', { class: 'estimator-field-grid' }, [
+          field('名稱', el('input', { type: 'text', value: loan.label || '', onchange: e => { loan.label = e.target.value.trim(); refresh(); } })),
+          numberField('貸款本金（元）', Money.toYuan(loan.principalCents || 0), v => { loan.principalCents = Money.toCents(Math.max(0, v)); refresh(); }, 'field estimator-field'),
+          field('第 1 期扣款日', el('input', { type: 'date', value: loan.firstDueDate || '', onchange: e => { loan.firstDueDate = e.target.value; refresh(); } })),
+          numberField('總期數（月）', loan.termMonths, v => { loan.termMonths = Math.max(1, Math.trunc(v)); refresh(); }, 'field estimator-field'),
+          numberField('涵蓋前幾個已借學期', loan.semesters, v => { loan.semesters = Math.max(0, Math.trunc(v)); refresh(); }, 'field estimator-field'),
+          el('button', { class: 'btn small', text: '移除這筆', onclick: () => { repayment.billedLoans.splice(i, 1); refresh(); } })
+        ])
+      ]);
+    });
+    return el('details', { class: 'compact-settings billed-student-loans', open: repayment.billedLoans.length ? 'open' : undefined }, [
+      el('summary', { text: repayment.billedLoans.length ? `已在扣款的貸款（依帳單）・${repayment.billedLoans.length} 筆` : '已經開始被扣款？依帳單輸入' }),
+      el('p', { class: 'notice', text: '銀行已在扣款的貸款另列一筆，依帳單日期推算已繳／剩餘期數與餘額；「涵蓋前幾個已借學期」的學期不再列入上方畢業後的估算。' }),
+      ...rows,
+      el('button', { class: 'btn small', text: '新增一筆', onclick: () => { repayment.billedLoans.push({ label: '', principalCents: 0, firstDueDate: '', termMonths: 12, semesters: 1 }); refresh(); } }),
+      el('p', { class: 'notice', text: `利率：${ref.effectiveFrom} 前 ${(ref.previousBorrowerAnnualRate * 100).toFixed(3)}%，之後 ${(ref.borrowerAnnualRate * 100).toFixed(3)}%。${ref.rateChangeSource}。` })
+    ]);
+  };
   const renderStudentLoanRepaymentBlock = (scenario, result) => {
     const repayment = ensureStudentLoanRepayment(scenario);
     const plan = studentLoanPlan(scenario);
@@ -2305,6 +2345,7 @@ const App = (() => {
         el('div', { class: 'summary-block' }, [el('h3', { text: '月繳後固定現金流' }), el('p', { class: `mono big${afterPayment < 0 ? ' neg' : ''}`, text: cashFlowWithoutLoan.incomeCents > 0 ? Money.formatTWD(afterPayment) : '尚無固定收入' }), el('p', { class: 'notice', text: burdenRate === null ? '請先在帳本設定固定收入' : `月繳占固定收入 ${(burdenRate * 100).toFixed(1)}%` })]),
         el('div', { class: 'summary-block' }, [el('h3', { text: '年齡對應狀態' }), el('p', { text: statusText })])
       ]),
+      renderBilledStudentLoans(repayment, plan, refresh),
       plan.leaveSemesters > 0 ? el('div', { class: 'notice student-loan-leave' }, [
         el('p', { text: `休學共 ${plan.leaveSemesters} 學期：預計畢業年齡已自動延後 ${plan.leaveSemesters * REFERENCE_DATA.twStudentLoan.semesterYears} 年。` }),
         ...plan.runs.map(r => {
