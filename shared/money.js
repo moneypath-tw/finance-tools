@@ -707,6 +707,62 @@ const Money = (() => {
     };
   };
 
+  // A loan the bank already collects, followed by date rather than age. Each bill on the due day charges interest
+  // for the days since the previous due day (actual days / 365, split at the rate change), and the fixed
+  // installment is the annuity rounded up to a whole yuan, recomputed over the remaining terms when the rate
+  // changes. Interest and principal are each truncated to whole yuan. Checked against 臺銀 bills (2026-11-03):
+  // 3,477 before the change, 11/06 bill interest 22 exact and principal within 1 元 (the bank's re-amortised
+  // installment is 1 元 higher; its exact method is not published).
+  const calcBilledStudentLoan = (loan, today) => {
+    const ref = REFERENCE_DATA.twStudentLoan;
+    const first = parseYmd(loan.firstDueDate);
+    const terms = Math.max(1, Math.trunc(Number(loan.termMonths) || 1));
+    const principal = Math.max(0, Math.round(Number(loan.principalCents) || 0));
+    if (!first) return null;
+    const cut = parseYmd(ref.effectiveFrom);
+    const rateFrom = (d) => (daysBetween(cut, d) >= 0 ? ref.borrowerAnnualRate : ref.previousBorrowerAnnualRate);
+    const yuanFloor = (c) => Math.floor(c / 100) * 100;
+    const annuity = (bal, rate, n) => Math.ceil(rate === 0 ? bal / n / 100 : bal * (rate / 12) / (1 - Math.pow(1 + rate / 12, -n)) / 100) * 100;
+    const firstIdx = ymIndex(first.y, first.m);
+    const todayD = parseYmd(today);
+    let balance = principal;
+    let installmentRate = null;
+    let installment = 0;
+    const schedule = [];
+    for (let k = 0; k < terms; k += 1) {
+      const from = parseYmd(dateInMonth(firstIdx + k - 1, first.d));
+      const due = parseYmd(dateInMonth(firstIdx + k, first.d));
+      const days = daysBetween(from, due);
+      const newDays = Math.min(days, Math.max(0, daysBetween(cut, due)));
+      const startRate = rateFrom(from);
+      if (startRate !== installmentRate) { installment = annuity(balance, startRate, terms - k); installmentRate = startRate; }
+      const exactInterest = balance * (ref.previousBorrowerAnnualRate * (days - newDays) + ref.borrowerAnnualRate * newDays) / 365;
+      const interestCents = yuanFloor(exactInterest);
+      const principalPart = k === terms - 1 ? balance : Math.min(balance, installment - interestCents);
+      balance -= principalPart;
+      schedule.push({ term: k + 1, dueDate: dateInMonth(firstIdx + k, first.d), interestCents, principalCents: principalPart, paymentCents: interestCents + principalPart, balanceAfterCents: balance });
+    }
+    const paid = todayD ? schedule.filter(r => daysBetween(parseYmd(r.dueDate), todayD) >= 0) : [];
+    const next = schedule[paid.length] || null;
+    return {
+      label: loan.label || '', principalCents: principal, termMonths: terms, schedule,
+      paidTerms: paid.length, remainingTerms: terms - paid.length,
+      balanceCents: paid.length ? paid[paid.length - 1].balanceAfterCents : principal,
+      next, lastDueDate: schedule[terms - 1].dueDate,
+      status: paid.length === 0 ? 'waiting' : (paid.length < terms ? 'repaying' : 'completed')
+    };
+  };
+
+  // Semesters already in a billed loan leave the age-based estimate, together with the leave gaps before the
+  // next borrowed semester (those gaps only governed the billed loan's collection).
+  const unbilledPeriods = (periods, billedLoans) => {
+    const billed = (billedLoans || []).reduce((s, l) => s + Math.max(0, Math.trunc(Number(l.semesters) || 0)), 0);
+    if (billed === 0) return periods;
+    let seen = 0;
+    const start = periods.findIndex(p => !p.isLeaveOfAbsence && (seen += 1) > billed);
+    return start < 0 ? [] : periods.slice(start);
+  };
+
   const calcMortgageRepayment = (principalCents, mortgage, currentAge) => {
     const principal = Math.max(0, Math.round(Number(principalCents) || 0));
     const annualRate = Math.max(0, Number(mortgage.annualRate) || 0);
@@ -841,6 +897,6 @@ const Money = (() => {
 
   return {
     toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
-    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
+    getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, calcBilledStudentLoan, unbilledPeriods, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

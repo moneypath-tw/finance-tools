@@ -97,7 +97,10 @@ const STUDENT_LOAN_REPAYMENT_DEFAULTS = Object.freeze({
   principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
   // interestAfterNotice: after the 異動 (復學 + 展延) in-school interest is paid by the government again, per the user's
   // account of the bank's rules (2026-11-03, no official source attached); mergedTerm: confirmed with the bank (user, 2026-11-02).
-  interestAfterNotice: 'government', mergedTerm: 'deduct_paid'
+  interestAfterNotice: 'government', mergedTerm: 'deduct_paid',
+  // Loans the bank already collects, copied from the bill: { label, principalCents, firstDueDate, termMonths, semesters }.
+  // Their first `semesters` borrowed semesters leave the age-based estimate; Money.calcBilledStudentLoan follows the dates.
+  billedLoans: Object.freeze([])
 });
 const MORTGAGE_DEFAULTS = Object.freeze({
   purchaseAge: 30, annualRate: REFERENCE_DATA.twMortgage.referenceAnnualRate, termYears: REFERENCE_DATA.twMortgage.referenceTermYears, graceYears: 0,
