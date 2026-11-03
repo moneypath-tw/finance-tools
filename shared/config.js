@@ -79,6 +79,14 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_LEDGER = { schemaVersion: 2, entries: [] };
 
+// Floating cash flows (帳目 floating: true): irregular amount/timing, e.g. freelance cases or one-off big spending.
+// They are real money (balances, reconcile) but never part of the monthly plan, and expenses are not living spend.
+// Expense natures list common non-subsistence spending so the user can see where non-essential money went.
+const FLOATING_NATURES = Object.freeze({
+  income: ['接案', '獎金', '二手出售', '退款', '利息股利', '其他'],
+  expense: ['旅遊', '娛樂', '3C 電子', '服飾美妝', '禮金紅包', '醫療', '家具家電', '進修', '其他']
+});
+
 // 首頁分配用途（依分配先後）：新增用途只要加在這裡，「必備分配帳戶」選單、帳戶檢查與修復都會自動帶到
 // field＝dashboard 上存搭配帳戶的欄位；尚未選過時用 fallback 欄位的帳戶，沒有 fallback 就用第一個帳戶
 const ALLOCATION_PURPOSES = [

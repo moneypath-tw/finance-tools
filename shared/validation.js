@@ -47,6 +47,7 @@ const Validation = (() => {
       if (!finite(e.amountCents) || !integer(e.amountCents)) errors.push(error(`${p}.amountCents`, 'INVALID_MONEY', '金額必須是有限整數分'));
       if (!currencies.has(e.currency || 'TWD')) errors.push(error(`${p}.currency`, 'INVALID_CURRENCY', '不支援此幣別'));
       if ((e.currency || 'TWD') !== 'TWD' && (!finite(e.rateToTWD) || e.rateToTWD <= 0)) errors.push(error(`${p}.rateToTWD`, 'INVALID_RATE', '外幣匯率必須大於 0'));
+      if (e.floating && (!['expense', 'income'].includes(e.type) || e.recurringFlowId || typeof e.nature !== 'string' || !e.nature.trim() || !e.account || !e.amountCents)) errors.push(error(p, 'INVALID_FLOATING', '浮動收支必須是收入或支出、不能來自固定項目，且要有性質、綁定帳戶與非 0 金額'));
     });
     // 帳戶核對紀錄（帳戶核對模式，可沒有）；規則只寫在 snapshots.js
     if (typeof Snapshots !== 'undefined') Snapshots.validate(data.snapshots).forEach((msg) => errors.push(error('snapshots', 'INVALID_SNAPSHOT', msg)));

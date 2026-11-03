@@ -68,7 +68,7 @@ const Money = (() => {
     const totals = {};
     for (const e of expenses) {
       const amount = Math.abs(toTWDCents(e.amountCents, e.currency, e.rateToTWD));
-      const key = e.category || '未分類';
+      const key = e.floating ? `浮動｜${e.nature}` : (e.category || '未分類');
       totals[key] = (totals[key] || 0) + amount;
     }
     const totalCents = Object.values(totals).reduce((s, v) => s + v, 0);
