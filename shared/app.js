@@ -2311,7 +2311,7 @@ const App = (() => {
           const missed = plan.missedNotice.find(x => x.startIdx === r.startIdx);
           const from = `${loanAgeText(r.startAge)}起休學${r.military ? '（服義務役）' : ''}`;
           if (r.returnAge === null) return el('p', { text: `${from}、未復學：${loanAgeText(r.deadlineAge)}起開始攤還。` });
-          if (r.inTime) return el('p', { class: 'student-loan-deadline', text: `${from}，${loanAgeText(r.returnAge)}復學：請在 ${loanAgeText(r.deadlineAge)}前帶註冊證明通知承貸銀行。錯過的話，會從那時起每月被扣約 ${Money.formatTWD(missed?.monthlyPaymentCents || 0)}，整筆貸款多付約 ${Money.formatTWD(Math.max(0, missed?.extraCents || 0))}。` });
+          if (r.inTime) return el('p', { class: 'student-loan-deadline', text: `${from}，${loanAgeText(r.returnAge)}復學：請在 ${loanAgeText(r.deadlineAge)}前帶註冊證明通知承貸銀行。錯過的話，會從那時起每月被扣約 ${Money.formatTWD(missed?.monthlyPaymentCents || 0)}${(missed?.extraCents || 0) > 0 ? `，整筆貸款多付約 ${Money.formatTWD(missed.extraCents)}` : '，總額不變但在學期間就要開始繳'}。` });
           return el('p', { text: `${from}，${loanAgeText(r.returnAge)}復學：${r.canNotifyInTime ? '已設定錯過通知期限，' : `休學滿 ${REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears} 年才復學，`}銀行自 ${loanAgeText(r.deadlineAge)}起扣款，到 ${loanAgeText(r.collectUntilAge)}辦妥償還期限異動才停（已計入下方時間表）。` });
         }),
         el('table', { class: 'student-loan-timeline' }, [el('tbody', {}, plan.timeline.filter(t => t.paidCents > 0 || t.kind === 'final').map(t => el('tr', {}, [
@@ -2323,9 +2323,9 @@ const App = (() => {
       ]) : null,
       el('details', { class: 'compact-settings' }, [el('summary', { text: '進階設定：利率、寬限期、扣款帳戶與還款預備金' }), el('div', { class: 'estimator-field-grid' }, [
         numField('畢業後寬限年數', repayment.graceYears, v => { repayment.graceYears = Math.max(0, v); refresh(); }),
-        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學辦異動後到畢業前的利息（辦法未明文，請向承貸銀行確認）' }), el('select', { onchange: e => { repayment.interestAfterNotice = e.target.value; refresh(); } }, [
-          el('option', { value: 'student', text: '自己付（保守）', selected: repayment.interestAfterNotice !== 'government' ? 'selected' : undefined }),
-          el('option', { value: 'government', text: '政府付', selected: repayment.interestAfterNotice === 'government' ? 'selected' : undefined })
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學辦異動後到畢業前的利息（辦妥復學展延後，在學利息恢復由政府負擔；實際以承貸銀行為準）' }), el('select', { onchange: e => { repayment.interestAfterNotice = e.target.value; refresh(); } }, [
+          el('option', { value: 'government', text: '政府付', selected: repayment.interestAfterNotice !== 'student' ? 'selected' : undefined }),
+          el('option', { value: 'student', text: '自己付（供比較）', selected: repayment.interestAfterNotice === 'student' ? 'selected' : undefined })
         ])]),
         el('label', { class: 'field estimator-field' }, [el('span', { text: '合併後攤還年限' }), el('select', { onchange: e => { repayment.mergedTerm = e.target.value; refresh(); } }, [
           el('option', { value: 'deduct_paid', text: '扣掉已被扣款的月數（已向銀行確認）', selected: repayment.mergedTerm !== 'full_term' ? 'selected' : undefined }),

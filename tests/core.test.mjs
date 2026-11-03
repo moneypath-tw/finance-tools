@@ -409,9 +409,9 @@ test('學貸休學時間軸：期限前通知不扣款；錯過期限或休學�
   assert.equal(none.repaymentStartAge, 24);
   assert.equal(none.status, 'waiting');
   // 大一升大二暑假休學兩年再復學續讀大二（畢業 24 歲）：19 歲休學、21 歲復學，休學滿 2 年當天就到期，
-  // 來不及在期限前通知 → 21 歲起被扣 1 個月，辦妥異動後自付利息到畢業後寬限期滿，26 歲合併攤還。
+  // 來不及在期限前通知 → 21 歲起被扣 1 個月，辦妥異動後（選「自己付」比較）自付利息到畢業後寬限期滿，26 歲合併攤還。
   const twoYears = [sem(), sem(), gap(), gap(), gap(), gap(), sem(), sem(), sem(), sem(), sem(), sem()];
-  const plan = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24 }, 25);
+  const plan = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24, interestAfterNotice: 'student' }, 25);
   assert.equal(plan.runs.length, 1);
   assert.deepEqual([plan.runs[0].startAge, plan.runs[0].returnAge, plan.runs[0].deadlineAge, plan.runs[0].canNotifyInTime], [19, 21, 21, false]);
   assert.equal(kinds(plan), 'collecting,interest_only,final');
@@ -424,16 +424,22 @@ test('學貸休學時間軸：期限前通知不扣款；錯過期限或休學�
   const lenient = M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24, interestAfterNotice: 'government', mergedTerm: 'full_term' }, 25);
   assert.equal(kinds(lenient), 'collecting,final');
   assert.equal(lenient.termMonths, 96);
-  assert.ok(lenient.totalRepaymentCents < plan.totalRepaymentCents, 'the conservative default costs more');
+  assert.ok(lenient.totalRepaymentCents < plan.totalRepaymentCents, 'paying interest yourself costs more');
+  // Default (unset and config default): government pays in-school interest after the 異動 (user, 2026-11-03).
+  assert.equal(kinds(M.calcStudentLoanPlan(twoYears, { ...base, graduationAge: 24 }, 25)), 'collecting,final');
+  assert.equal(api.DEFAULT_SCENARIOS.find(s => s.scenarioId === 'student_loan').repayment.interestAfterNotice, 'government');
   // One-semester leave, notified in time: nothing until graduation; the plan prices a missed deadline.
   const short = [sem(), gap(), sem()];
   const onTime = M.calcStudentLoanPlan(short, { ...base, graduationAge: 22 }, 21);
   assert.equal(kinds(onTime), 'final');
   assert.equal(onTime.runs[0].deadlineAge, 23);
   assert.equal(onTime.missedNotice.length, 1);
-  assert.ok(onTime.missedNotice[0].monthlyPaymentCents > 0 && onTime.missedNotice[0].extraCents > 0);
+  assert.ok(onTime.missedNotice[0].monthlyPaymentCents > 0);
+  // Government-paid interest after the 異動: missing the deadline moves payments earlier but adds no interest.
+  assert.ok(onTime.missedNotice[0].extraCents >= 0);
+  assert.ok(M.calcStudentLoanPlan(short, { ...base, graduationAge: 22, interestAfterNotice: 'student' }, 21).missedNotice[0].extraCents > 0);
   // Missed by 3 months: the bank collects 23 → 23.25, then interest only until 24.
-  const late = M.calcStudentLoanPlan([sem(), gap({ bankNotice: 'late', lateNoticeMonths: 3 }), sem()], { ...base, graduationAge: 22 }, 21);
+  const late = M.calcStudentLoanPlan([sem(), gap({ bankNotice: 'late', lateNoticeMonths: 3 }), sem()], { ...base, graduationAge: 22, interestAfterNotice: 'student' }, 21);
   assert.equal(kinds(late), 'collecting,interest_only,final');
   assert.deepEqual([late.timeline[0].fromAge, late.timeline[0].toAge], [23, 23.25]);
   assert.equal(late.missedNotice.length, 0);
@@ -1462,4 +1468,11 @@ test('綁定檔案：開啟時同步只在本機資料驗證通過時進行，�
   assert.match(app, /fileStale \? `綁定檔案/);
   assert.match(io, /if \(boundFileHandle && sync\) await saveBoundFile\(\)/);
   assert.match(io, /requestPermission: true/);
+});
+
+test('student loan settings: government-paid interest is the first option and a zero extra cost is not shown', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const options = [...src.matchAll(/el\('option', \{ value: '(government|student)'/g)].map(m => m[1]);
+  assert.deepEqual(options, ['government', 'student'], 'the confirmed rule is listed first');
+  assert.ok(!/多付約 \$\{Money\.formatTWD\(Math\.max\(0/.test(src), 'a missed deadline with no extra interest must not read 多付 NT$0');
 });

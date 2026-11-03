@@ -95,8 +95,9 @@ const STUDENT_LOAN_REPAYMENT_DEFAULTS = Object.freeze({
   graduationAge: 22, graceYears: REFERENCE_DATA.twStudentLoan.standardGraceYears, annualRate: REFERENCE_DATA.twStudentLoan.borrowerAnnualRate,
   termPlan: 'standard', includeAsFixedExpense: false, paymentDay: 5, accountId: '',
   principalMode: 'estimated', manualPrincipalCents: 0, reserveMonths: 3,
-  // interestAfterNotice: unwritten, costlier reading by default; mergedTerm: deducting collected months is confirmed (user, 2026-11-02).
-  interestAfterNotice: 'student', mergedTerm: 'deduct_paid'
+  // interestAfterNotice: after the 異動 (復學 + 展延) in-school interest is paid by the government again, per the user's
+  // account of the bank's rules (2026-11-03, no official source attached); mergedTerm: confirmed with the bank (user, 2026-11-02).
+  interestAfterNotice: 'government', mergedTerm: 'deduct_paid'
 });
 const MORTGAGE_DEFAULTS = Object.freeze({
   purchaseAge: 30, annualRate: REFERENCE_DATA.twMortgage.referenceAnnualRate, termYears: REFERENCE_DATA.twMortgage.referenceTermYears, graceYears: 0,

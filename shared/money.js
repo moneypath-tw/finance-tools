@@ -618,7 +618,8 @@ const Money = (() => {
   // Month-by-month student loan timeline. Entries are half a year each and the last one ends at graduationAge.
   // Interest before collection starts is paid by the government (第 8 條). Both points below are switchable in
   // repayment (user kept both options, 2026-11-02):
-  //   interestAfterNotice 'student' — unwritten; costlier reading by default: after the 異動 the student pays interest;
+  //   interestAfterNotice 'government' — after the 異動 in-school interest is government-paid again (user, 2026-11-03);
+  //     'student' keeps the costlier reading for comparison;
   //   mergedTerm 'deduct_paid' — confirmed by the user with the bank: the merged term subtracts months collected.
   const calcStudentLoanPlan = (periods, repayment, currentAge, options = {}) => {
     const ref = REFERENCE_DATA.twStudentLoan;
@@ -641,7 +642,7 @@ const Money = (() => {
       .map(r => [Math.round(r.deadlineAge * 12), Math.round(r.collectUntilAge * 12)]);
     const multiplier = repayment.termPlan === 'low_income' ? ref.lowIncomeTermMultiplier : (repayment.termPlan === 'extended' ? ref.extendedTermMultiplier : 1);
     const deductPaid = repayment.mergedTerm !== 'full_term';
-    const studentPaysInterest = repayment.interestAfterNotice !== 'government';
+    const studentPaysInterest = repayment.interestAfterNotice === 'student';
     const termFor = (semesters, paidMonths) => Math.max(1, Math.round(semesters * 12 * multiplier) - (deductPaid ? paidMonths : 0));
     const monthlyRate = Math.max(0, Number(repayment.annualRate) || 0) / 12;
     const disburse = new Map();
