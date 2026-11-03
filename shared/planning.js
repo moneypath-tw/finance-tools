@@ -441,6 +441,8 @@ const Planning = (() => {
   //     儲蓄用途（緊急預備金、儲蓄、成本目標）每期都要存入：分配額－本期已轉入－固定儲蓄預計轉入
   //   同帳戶多用途時，本期轉入的錢依分配順序先算支出用途、剩下的才算存入；本期存入的錢不算可用餘額
   //   accounts[id]＝{ balanceCents, movedInCents（本期已入帳的淨轉入）, projectedInCents（固定儲蓄預測轉入） }
+  //   主次：mustCents＝支出缺額（不轉就不夠付，先做；mustPurposes），saveCents＝儲蓄還沒存的（錢夠再轉；savePurposes）
+  //     mustCents＋saveCents＝remainingCents；同一帳戶可能兩者都有，首頁分開列
   const SPEND_KEYS = ['fixed', 'living'];
   const transferPlan = ({ rows, stayAccountIds = [], accounts = {}, spendingNeed = {} }) => {
     const stay = new Set(stayAccountIds.filter(Boolean));
@@ -461,7 +463,9 @@ const Planning = (() => {
       const spendAlloc = spendRows.reduce((s, r) => s + r.allocatedCents, 0);
       let movedSave = Math.max(0, Math.round(a.movedInCents || 0) - spendAlloc);
       let projected = Math.max(0, Math.round(a.projectedInCents || 0));
-      const spendLackCents = spendRows.length ? Math.max(0, (spendingNeed[accountId] || 0) - Math.max(0, Math.round(a.balanceCents || 0) - movedSave)) : 0;
+      // A savings-only account can still have fixed debits (2026-11-03: an account holding 一般儲蓄 with a near-empty balance before a
+      // debit lost its shortfall because only spend rows were checked)
+      const spendLackCents = spendRows.length || spendingNeed[accountId] > 0 ? Math.max(0, (spendingNeed[accountId] || 0) - Math.max(0, Math.round(a.balanceCents || 0) - movedSave)) : 0;
       let remainingCents = spendLackCents;
       for (const r of isStay ? [] : list.filter(r => !SPEND_KEYS.includes(r.key))) {
         const moved = Math.min(movedSave, r.allocatedCents);
@@ -471,13 +475,16 @@ const Planning = (() => {
         rowFacts[r.key] = { movedInCents: moved, projectedInCents: proj };
         remainingCents += r.allocatedCents - moved - proj;
       }
-      transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay });
+      transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay,
+        mustCents: spendLackCents, mustPurposes: spendRows.length ? spendRows.map(r => r.label) : [purposeLabel('fixed')],
+        saveCents: remainingCents - spendLackCents, savePurposes: isStay ? [] : list.filter(r => !SPEND_KEYS.includes(r.key)).map(r => r.label) });
     }
     // 只有固定支出從這個帳戶扣、但沒搭配任何分配用途的帳戶：也要補到夠扣（例如學貸從另一個帳戶扣款）
     for (const [accountId, needCents] of Object.entries(spendingNeed)) {
       if (byAccount.has(accountId) || !(needCents > 0)) continue;
       const lack = Math.max(0, needCents - Math.max(0, Math.round(accounts[accountId]?.balanceCents || 0)));
-      if (lack > 0) transfers.push({ accountId, purposes: [purposeLabel('fixed')], plannedCents: 0, remainingCents: lack, spendLackCents: lack, stay: stay.has(accountId) });
+      if (lack > 0) transfers.push({ accountId, purposes: [purposeLabel('fixed')], plannedCents: 0, remainingCents: lack, spendLackCents: lack, stay: stay.has(accountId),
+        mustCents: lack, mustPurposes: [purposeLabel('fixed')], saveCents: 0, savePurposes: [] });
     }
     return { transfers, stayCents, rowFacts };
   };

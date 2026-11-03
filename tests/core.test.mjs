@@ -1213,6 +1213,14 @@ test('轉帳指示：依帳戶合併、加總等於已分配收入；同帳戶�
   assert.deepEqual({ ...s2.rowFacts.emergency }, { movedInCents: 300000, projectedInCents: 0 });
   assert.equal(s2.transfers.find(t => t.accountId === 'save').spendLackCents, 0);
   assert.equal(s2.transfers.find(t => t.accountId === 'save').remainingCents, 200000); // 只差一般儲蓄 2,000
+  // 主次：同帳戶的生活費缺額（主，先轉）與儲蓄（次）分開，合計仍是 remainingCents；薪資帳戶只有主
+  const s3 = P.transferPlan({ rows: shared, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 500000 } }, spendingNeed: { save: 1200000 } }).transfers.find(t => t.accountId === 'save');
+  assert.deepEqual([s3.mustCents, [...s3.mustPurposes], s3.saveCents, [...s3.savePurposes]], [700000, ['生活費'], 500000, ['緊急預備金', '一般儲蓄']]);
+  assert.equal(s3.mustCents + s3.saveCents, s3.remainingCents);
+  assert.deepEqual([short.mustCents, short.saveCents], [200000, 0]);
+  // 只放儲蓄的帳戶也有固定扣款：扣款缺額仍是主（先前因為沒有支出列而整筆消失）
+  const s4 = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 6000 } }, spendingNeed: { save: 138000 } }).transfers.find(t => t.accountId === 'save');
+  assert.deepEqual([s4.mustCents, [...s4.mustPurposes], s4.saveCents], [132000, ['固定支出'], 500000]);
 });
 
 test('轉帳指示與分配狀態同一數字：固定支出與生活費同帳戶時，兩列缺額加總＝轉帳指示', () => {
