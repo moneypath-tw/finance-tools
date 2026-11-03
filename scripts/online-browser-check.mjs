@@ -373,6 +373,16 @@ try {
     habitIncome.habit.length === 3 && habitIncome.income.find(r => r[0] === '目前')?.[3] === '375元' && !!recommendedRow && habitIncome.verdict.includes(recommendedRow[1]) && habitIncome.wage, JSON.stringify(habitIncome));
   check('applying the suggestion sets the living budget and survives reload', applied.slider === '22000' && !applied.button, JSON.stringify({ slider: applied.slider, button: applied.button }));
 
+  // floating cash flows (2026-11-03): a 30,000 trip on the card inside last cycle is real money but not living spend,
+  // so the living suggestion must stay 22,000 (counting it would make the median 50,000)
+  await evaluate(`(() => { document.querySelector('[data-tab=ledger]').click(); const box = document.querySelector('#floating-view'); const [type, nature, acc] = box.querySelectorAll('select'); const set = (x, v) => { x.value = v; x.dispatchEvent(new Event('change', { bubbles: true })); };
+    set(type, 'expense'); set(box.querySelector('select[aria-label=性質]'), '旅遊'); set(box.querySelector('select[aria-label=綁定帳戶]'), 'acc-card');
+    box.querySelector('input[type=date]').value = '${ymBack(1)}-15'; box.querySelector('input[type=number]').value = '30000'; [...box.querySelectorAll('button')].find(b => b.textContent === '新增浮動收支').click(); return true; })()`);
+  await go(`${base}/index.html`);
+  const floating = await evaluate(`(() => { const e = JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.find(x => x.floating); return { e: e && [e.type, e.nature, e.account, e.amountCents, e.date].join('|'), view: document.querySelector('#floating-view')?.innerText.includes('支出｜旅遊') }; })()`);
+  const afterFloat = await spendView();
+  check('floating expense saved from its own block, listed by nature, and kept out of living spend', floating.e === `expense|旅遊|acc-card|-3000000|${ymBack(1)}-15` && floating.view && afterFloat.slider === '22000' && !afterFloat.button, JSON.stringify({ ...floating, button: afterFloat.button }));
+
   // trip budget (2026-10-22): days, people and a JPY item × rate drive the total; kept after reload; no stray "null" text
   await go(`${base}/index.html`);
   await evaluate(`document.querySelector('[data-tab=estimator]').click(); document.querySelector('[data-view-mode=detailed]')?.click(); true`);

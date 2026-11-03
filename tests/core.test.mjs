@@ -1512,3 +1512,41 @@ test('學貸帳單：依日期推算已繳／剩餘期數與餘額，115/8/1 降
   sc.repayment.billedLoans = [{ ...loan, firstDueDate: '2025-13-06', termMonths: 0 }];
   assert.deepEqual(api.Validation.validateScenario(sc).errors.map(e => e.code).sort().join(), 'INVALID_DATE,INVALID_TERM');
 });
+
+// ---------- 浮動收支（帳目 floating＋nature） ----------
+const floatEntry = (id, date, cents, extra = {}) => ({ id, date, type: cents < 0 ? 'expense' : 'income', floating: true, nature: '接案', category: null, account: 'main', currency: 'TWD', rateToTWD: 1, amountCents: cents, status: 'realized', ...extra });
+
+test('浮動收支：驗證要求收入或支出、有性質、不能來自固定項目', () => {
+  const ok = { entries: [floatEntry('a', '2026-10-05', 400000), floatEntry('b', '2026-10-06', -120000, { nature: '旅遊' })] };
+  assert.equal(api.Validation.validateLedger(ok).valid, true);
+  for (const bad of [{ nature: '' }, { type: 'transfer', fromAccount: 'x', toAccount: 'y' }, { recurringFlowId: 'f' }]) {
+    const r = api.Validation.validateLedger({ entries: [floatEntry('a', '2026-10-05', 400000, bad)] });
+    assert.ok(r.errors.some(e => e.code === 'INVALID_FLOATING'), JSON.stringify(bad));
+  }
+  const natures = vm.runInContext('FLOATING_NATURES', ctx);
+  assert.ok(natures.income.includes('接案') && natures.expense.includes('旅遊'));
+});
+
+test('浮動收支：不算生活花費、不被固定收支配對，依性質加總', () => {
+  const P = api.Planning;
+  const items = [{ id: 'gig', type: 'income', accountId: 'main', netCents: 400000, dayOfMonth: 21 }];
+  const entries = [floatEntry('in', '2026-10-21', 400000), floatEntry('trip', '2026-10-10', -300000, { nature: '旅遊' }),
+    { id: 'food', date: '2026-10-11', type: 'expense', category: '食', account: 'main', currency: 'TWD', rateToTWD: 1, amountCents: -10000, status: 'realized' }];
+  assert.equal(P.fixedEntryMatch({ entries, items, from: '2026-10-01', to: '2026-11-01' }).matched.size, 0);
+  assert.equal(P.livingSpendCents(entries, new Set(['main']), '2026-10-01', '2026-11-01', items), 10000);
+  const s = P.floatingSummary([...entries, floatEntry('old', '2026-09-30', 100000), floatEntry('proj', '2026-10-25', 50000, { status: 'projected' })], '2026-10-01', '2026-11-01');
+  assert.deepEqual([s.inCents, s.outCents, s.netCents], [400000, 300000, 100000]);
+  assert.deepEqual([...s.rows].map(r => `${r.type}|${r.nature}|${r.cents}|${r.count}`), ['income|接案|400000|1', 'expense|旅遊|300000|1']);
+  assert.equal(api.Money.calcExpenseAverages(entries).rows.find(r => r.label === '浮動｜旅遊').totalCents, 300000);
+});
+
+test('核對：浮動收支計入對帳，生活花費扣掉浮動收支的影響', () => {
+  const snaps = [{ id: 'a', date: '2026-10-01', balances: { main: 1000000 } }, { id: 'b', date: '2026-10-31', balances: { main: 1000000 + 400000 - 300000 - 50000 } }];
+  const entries = [floatEntry('in', '2026-10-21', 400000), floatEntry('trip', '2026-10-10', -300000, { nature: '旅遊' }),
+    { id: 'food', date: '2026-10-11', type: 'expense', category: '食', account: 'main', currency: 'TWD', rateToTWD: 1, amountCents: -50000, status: 'realized' }];
+  const [p] = Snap.periods(snaps, [], entries);
+  assert.equal(p.total.unrecordedCents, 0);
+  assert.deepEqual([p.total.floatingInCents, p.total.floatingOutCents], [400000, 300000]);
+  assert.equal(p.total.livingCents, 50000);          // 只剩真正的生活花費
+  assert.equal(Snap.periods(snaps, [])[0].total.livingCents, -50000); // 不給帳目時維持舊算法
+});

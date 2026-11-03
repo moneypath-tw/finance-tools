@@ -51,6 +51,7 @@ const Snapshots = (() => {
   // 相鄰兩次核對之間的期間，最新的在前。計入兩次都有填餘額的帳戶，以及第一次出現的新帳戶（isNew，期初 0）。
   // 給 entries 時自動對帳：total.unrecordedCents＝餘額變化−排程收支−期間內手記帳目（Money.entryDeltas），
   //   只算兩次都有填的帳戶；手記的固定收支已由 Planning.fixedEntryMatch 配對排除，不重複扣。負數＝有花費沒記到
+  //   另給 total.floatingInCents／floatingOutCents（浮動收支），livingCents 會扣掉浮動收支的影響
   const periods = (snapshots, flows, entries = null) => {
     const sorted = [...(snapshots || [])].sort((a, b) => a.date.localeCompare(b.date));
     const result = [];
@@ -79,11 +80,21 @@ const Snapshots = (() => {
         const { matched } = Planning.fixedEntryMatch({ entries, items: flows, from: nextDay(a.date), to: nextDay(b.date) });
         let net = 0;
         for (const x of accounts) if (!x.isNew) net += x.changeCents - x.inCents + x.fixedOutCents;
+        // Floating cash flows explain part of the balance change: income would hide spending and a one-off
+        // expense would inflate it, so livingCents excludes them (same account set as livingCents)
+        const all = new Set(accounts.map(x => x.id));
+        let floatingInCents = 0, floatingOutCents = 0;
         for (const e of entries) {
           if (e.status === 'projected' || e.recurringFlowId || matched.has(e.id) || !(e.date > a.date && e.date <= b.date)) continue;
-          for (const [id, cents] of Money.entryDeltas(e)) if (old.has(id)) net -= cents;
+          for (const [id, cents] of Money.entryDeltas(e)) {
+            if (old.has(id)) net -= cents;
+            if (e.floating && all.has(id)) { if (cents > 0) floatingInCents += cents; else floatingOutCents -= cents; }
+          }
         }
         total.unrecordedCents = net;
+        total.floatingInCents = floatingInCents;
+        total.floatingOutCents = floatingOutCents;
+        total.livingCents += floatingInCents - floatingOutCents;
       }
       total.outflowPer30Cents = days > 0 ? Math.round(total.outflowCents * 30 / days) : null;
       result.push({ from: a.date, to: b.date, days, note: b.note || '', accounts, total });

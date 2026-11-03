@@ -486,7 +486,8 @@ const App = (() => {
     const roundUp = (cents) => Math.ceil(cents / 10000) * 10000;
     if (history.medianCents > 0) return { source: 'entries', history, monthlyCents: history.medianCents, suggestedCents: history.suggestedCents, text: `近 ${history.cycles.length} 期實際花費中位數 ${Money.formatTWD(history.medianCents)}（已扣掉固定支出）` };
     if (history.rolling?.per30Cents > 0) return { source: 'entries', history, monthlyCents: history.rolling.per30Cents, suggestedCents: roundUp(history.rolling.per30Cents), text: `逐筆帳目 ${history.rolling.from.slice(5).replace('-', '/')} 起 ${history.rolling.days} 天，生活花費每 30 天約 ${Money.formatTWD(history.rolling.per30Cents)}（已扣掉固定支出）` };
-    const snap = Snapshots.livingEstimate(Snapshots.periods(ledger.snapshots, recurring.items));
+    // entries 讓推算的生活花費扣掉浮動收支（接案入帳不會把花費算少、大筆偶發支出不會把花費算多）
+    const snap = Snapshots.livingEstimate(Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries));
     if (snap) {
       const monthlyCents = Math.max(0, snap.livingPer30Cents);
       return { source: 'snapshot', history, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `帳戶核對近 ${snap.days} 天推算，生活花費每 30 天約 ${Money.formatTWD(monthlyCents)}（用掉的錢扣掉固定支出）` };
@@ -1440,7 +1441,7 @@ const App = (() => {
         : el('td', { class: e.amountCents < 0 ? 'neg mono' : 'mono', text: Money.formatMoney(e.amountCents, currency) });
       body.appendChild(el('tr', { 'data-entry-id': e.id }, [
         el('td', {}, [document.createTextNode(e.date), e.status === 'projected' ? el('span', { class: 'badge', text: '預測' }) : null]),
-        el('td', { text: typeLabel + (e.type === 'income' && e.incomeSource ? `（${e.incomeSource}）` : '') }),
+        el('td', { text: e.floating ? `浮動${typeLabel}（${e.nature}）` : typeLabel + (e.type === 'income' && e.incomeSource ? `（${e.incomeSource}）` : '') }),
         el('td', { text: e.type === 'transfer' ? `${accountName(e.fromAccount)} → ${accountName(e.toAccount)}` : ([e.category, e.account ? accountName(e.account) : null].filter(Boolean).join('／') || '—') }),
         amountCell,
         el('td', { text: e.type === 'expense' ? (e.essential ? '必要' : '非必要') : '—' }),
@@ -2000,7 +2001,7 @@ const App = (() => {
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '推算用掉' }), el('p', { class: 'mono big', text: outflowText(t.outflowCents) }),
             el('p', { class: 'notice', text: t.outflowPer30Cents === null ? '' : `換算每 30 天 ${outflowText(t.outflowPer30Cents)}` })]),
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '其中固定支出（計畫）' }), el('p', { class: 'mono big', text: Money.formatTWD(t.fixedOutCents) }),
-            el('p', { class: 'notice', text: `生活花費約 ${outflowText(t.livingCents)}` })]),
+            el('p', { class: 'notice', text: `生活花費約 ${outflowText(t.livingCents)}${t.floatingInCents || t.floatingOutCents ? `（已排除浮動收入${Money.formatTWD(t.floatingInCents)}、浮動支出 ${Money.formatTWD(t.floatingOutCents)}）` : ''}` })]),
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '全部帳戶變動' }), el('p', { class: 'mono big', text: Money.formatTWD(t.changeCents) }),
             el('p', { class: 'notice', text: `計畫存入 ${Money.formatTWD(t.inCents)}` })])
         ]),
@@ -2013,13 +2014,14 @@ const App = (() => {
         ])])]),
         el('h3', { text: '各期比較' }),
         el('div', { class: 'table-scroll' }, [el('table', {}, [
-          el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '生活花費', '每 30 天', '對帳', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
+          el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '浮動收支', '生活花費', '每 30 天', '對帳', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
           el('tbody', {}, periods.map(x => {
             const pt = assets.find(a => a.date === x.to) || {};
             const per30 = (cents) => (x.days > 0 ? Math.round(cents * 30 / x.days) : null);
             return el('tr', {}, [el('td', { text: `${x.from} → ${x.to}` }), el('td', { class: 'mono', text: String(x.days) }),
               el('td', { class: 'mono', text: outflowText(x.total.outflowCents) }),
               el('td', { class: 'mono', text: Money.formatTWD(x.total.fixedOutCents) }),
+              el('td', { class: 'mono', text: x.total.floatingInCents || x.total.floatingOutCents ? `+${Money.formatTWD(x.total.floatingInCents)}／−${Money.formatTWD(x.total.floatingOutCents)}` : '—' }),
               el('td', { class: 'mono', text: outflowText(x.total.livingCents) }),
               el('td', { class: 'mono', text: per30(x.total.livingCents) === null ? '—' : outflowText(per30(x.total.livingCents)) }),
               el('td', { class: `mono${x.total.unrecordedCents ? ' neg' : ''}`, text: !x.total.unrecordedCents ? '對得上' : `${x.total.unrecordedCents < 0 ? '支出' : '收入'}少記 ${Money.formatTWD(Math.abs(x.total.unrecordedCents))}` }),
@@ -2029,7 +2031,7 @@ const App = (() => {
               el('td', { text: x.note })]);
           }))
         ])]),
-        el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）。對帳＝餘額變化與「固定出入帳排程＋這段期間的逐筆帳目」比對；推算用掉已含固定支出，自己手記的同金額固定收支會配對掉，不會重複扣。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
+        el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）＋浮動收入－浮動支出（浮動收支另列，不算生活花費）。對帳＝餘額變化與「固定出入帳排程＋這段期間的逐筆帳目」比對；推算用掉已含固定支出，自己手記的同金額固定收支會配對掉，不會重複扣。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
       );
     }
     if (sorted.length) {
@@ -2045,8 +2047,87 @@ const App = (() => {
     }
   };
 
+  // 浮動收支：金額、時間不固定的收入或支出（接案、偶發大筆消費）。存成帳目（floating＋nature），
+  // 所以帳戶餘額與核對對帳自動計入；規劃與生活花費的排除規則在 Planning.isLivingSpend／fixedEntryMatch
+  const renderFloating = () => {
+    const box = $('#floating-view');
+    if (!box) return;
+    box.innerHTML = '';
+    const typeSel = el('select', { 'aria-label': '浮動收支類型' }, [el('option', { value: 'income', text: '收入' }), el('option', { value: 'expense', text: '支出' })]);
+    const natureSel = el('select', { 'aria-label': '性質' });
+    const fillNatures = () => { natureSel.innerHTML = ''; FLOATING_NATURES[typeSel.value].forEach(n => natureSel.append(el('option', { value: n, text: n }))); };
+    typeSel.addEventListener('change', fillNatures);
+    fillNatures();
+    const dateInput = el('input', { type: 'date', value: localToday(), 'aria-label': '日期' });
+    const amountInput = el('input', { type: 'number', min: '1', step: '1', placeholder: '台幣金額', 'aria-label': '金額（元）' });
+    const accSel = el('select', { 'aria-label': '綁定帳戶' }, config.accountProfiles.map(a => el('option', { value: a.id, text: a.name })));
+    const noteInput = el('input', { type: 'text', placeholder: '備註（例如案名、買了什麼）', 'aria-label': '備註' });
+    const status = el('p', { class: 'notice', role: 'status' });
+    const add = () => {
+      const yuan = Number(amountInput.value);
+      if (!Number.isFinite(yuan) || yuan <= 0) { status.textContent = '請輸入大於 0 的金額。'; return; }
+      if (!Validation.isValidDate(dateInput.value)) { status.textContent = '請選擇日期。'; return; }
+      const type = typeSel.value;
+      ledger.entries.push({
+        id: createEntryId(), date: dateInput.value, type, floating: true, nature: natureSel.value,
+        category: null, account: accSel.value, currency: 'TWD', rateToTWD: 1,
+        amountCents: Money.toCents(type === 'expense' ? -yuan : yuan),
+        incomeSource: null, essential: type === 'expense' ? false : null, reimbursable: type === 'expense' ? false : null,
+        status: 'realized', note: noteInput.value.trim()
+      });
+      IO.markDirty();
+      renderLedger();
+    };
+    const today = localToday(), monthStart = `${today.slice(0, 7)}-01`;
+    const yearAgo = Money.ymd(new Date(+today.slice(0, 4) - 1, +today.slice(5, 7) - 1, +today.slice(8, 10) + 1));
+    const tomorrow = Money.ymd(new Date(+today.slice(0, 4), +today.slice(5, 7) - 1, +today.slice(8, 10) + 1));
+    const month = Planning.floatingSummary(ledger.entries, monthStart, tomorrow);
+    const year = Planning.floatingSummary(ledger.entries, yearAgo, tomorrow);
+    const signed = (type, cents) => `${type === 'income' ? '+' : '−'}${Money.formatTWD(cents)}`;
+    const list = ledger.entries.filter(e => e.floating).sort((a, b) => b.date.localeCompare(a.date));
+    box.append(
+      el('h3', { text: '浮動收支' }),
+      el('p', { class: 'notice', text: '金額或時間不固定的收入與支出（例如接案、旅遊、3C、禮金）記在這裡：會算進帳戶餘額與帳戶核對，但不算進每月計畫收入，支出也不算生活花費。' }),
+      el('div', {}, [
+        el('div', { class: 'field' }, [el('label', { text: '類型' }), typeSel]),
+        el('div', { class: 'field' }, [el('label', { text: '性質' }), natureSel]),
+        el('div', { class: 'field' }, [el('label', { text: '日期' }), dateInput]),
+        el('div', { class: 'field' }, [el('label', { text: '金額' }), amountInput]),
+        el('div', { class: 'field' }, [el('label', { text: '綁定帳戶' }), accSel]),
+        el('div', { class: 'field wide' }, [el('label', { text: '備註' }), noteInput]),
+        el('button', { class: 'btn primary', text: '新增浮動收支', onclick: add })
+      ]),
+      status,
+      el('div', { class: 'health-grid' }, [
+        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '本月浮動收支' }), el('p', { class: `mono big${month.netCents < 0 ? ' neg' : ''}`, text: Money.formatTWD(month.netCents) }),
+          el('p', { class: 'notice', text: `收入 ${Money.formatTWD(month.inCents)}、支出 ${Money.formatTWD(month.outCents)}` })]),
+        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '近 12 個月' }), el('p', { class: `mono big${year.netCents < 0 ? ' neg' : ''}`, text: Money.formatTWD(year.netCents) }),
+          el('p', { class: 'notice', text: `收入 ${Money.formatTWD(year.inCents)}（平均每月 ${Money.formatTWD(Math.round(year.inCents / 12))}）、支出 ${Money.formatTWD(year.outCents)}` })])
+      ]),
+      year.rows.length ? el('div', { class: 'table-scroll' }, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['性質', '本月', '近 12 個月', '筆數'].map(h => el('th', { text: h })))]),
+        el('tbody', {}, year.rows.map(r => {
+          const m = month.rows.find(x => x.type === r.type && x.nature === r.nature);
+          return el('tr', {}, [el('td', { text: `${r.type === 'income' ? '收入' : '支出'}｜${r.nature}` }),
+            el('td', { class: 'mono', text: m ? signed(r.type, m.cents) : '—' }),
+            el('td', { class: `mono${r.type === 'expense' ? ' neg' : ''}`, text: signed(r.type, r.cents) }),
+            el('td', { class: 'mono', text: String(r.count) })]);
+        }))
+      ])]) : null,
+      list.length ? el('details', {}, [el('summary', { text: `浮動收支明細（${list.length} 筆）` }), el('div', { class: 'table-scroll' }, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['日期', '性質', '帳戶', '金額', '備註', ''].map(h => el('th', { text: h })))]),
+        el('tbody', {}, list.map(e => el('tr', { 'data-entry-id': e.id }, [el('td', { text: e.date }),
+          el('td', { text: `${e.type === 'income' ? '收入' : '支出'}｜${e.nature}` }), el('td', { text: accountName(e.account) }),
+          el('td', { class: e.amountCents < 0 ? 'neg mono' : 'mono', text: Money.formatTWD(Money.entryTWDCents(e) ?? 0) }),
+          el('td', { text: e.note || '' }),
+          el('td', {}, [el('button', { class: 'btn small danger', text: '刪除', onclick: () => deleteEntry(e.id) })])])))
+      ])])]) : null
+    );
+  };
+
   const renderLedger = () => {
     renderSnapshots();
+    renderFloating();
     renderLedgerList();
     renderLedgerSummary();
     renderHealth();

@@ -65,7 +65,7 @@ const Planning = (() => {
     if (!items.length) return { matched, duplicates };
     const last = Money.ymd(new Date(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10) - 1));
     const byId = new Map(entries.map(e => [e.id, e]));
-    const manual = entries.filter(e => (e.type === 'expense' || e.type === 'income') && e.status !== 'projected' && !e.recurringFlowId && e.date >= from && e.date < to).sort((a, b) => a.date.localeCompare(b.date));
+    const manual = entries.filter(e => (e.type === 'expense' || e.type === 'income') && e.status !== 'projected' && !e.recurringFlowId && !e.floating && e.date >= from && e.date < to).sort((a, b) => a.date.localeCompare(b.date));
     for (const ev of Money.flowEvents(items, from, last)) {
       if (ev.type !== 'expense' && ev.type !== 'income') continue;
       const hit = manual.find(e => !matched.has(e.id) && e.type === ev.type && (!e.account || e.account === ev.accountId) && Math.abs(Money.entryTWDCents(e) ?? 0) === ev.cents);
@@ -75,7 +75,24 @@ const Planning = (() => {
     }
     return { matched, duplicates };
   };
-  const isLivingSpend = (e, accountIds, fixedIds) => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && !(fixedIds && fixedIds.has(e.id)) && (!e.account || accountIds.has(e.account));
+  // Floating cash flows (entry.floating) in [from, to); omit from/to for all time. Only realized entries count.
+  //   rows: per type+nature, largest first; outCents is a positive magnitude; netCents = in − out
+  const floatingSummary = (entries, from = '', to = '9999-12-31') => {
+    const groups = new Map();
+    let inCents = 0, outCents = 0;
+    for (const e of entries || []) {
+      if (!e.floating || e.status === 'projected' || !(e.date >= from && e.date < to)) continue;
+      const cents = Math.abs(Money.entryTWDCents(e) ?? 0);
+      if (e.type === 'income') inCents += cents; else outCents += cents;
+      const key = `${e.type}|${e.nature}`;
+      const row = groups.get(key) || { type: e.type, nature: e.nature, cents: 0, count: 0 };
+      row.cents += cents; row.count += 1; groups.set(key, row);
+    }
+    const rows = [...groups.values()].sort((a, b) => b.cents - a.cents);
+    return { inCents, outCents, netCents: inCents - outCents, rows };
+  };
+  // Floating expenses are deliberately not living spend (irregular, mostly non-subsistence)
+  const isLivingSpend = (e, accountIds, fixedIds) => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && !e.floating && !(fixedIds && fixedIds.has(e.id)) && (!e.account || accountIds.has(e.account));
   const livingSpendCents = (entries, accountIds, from, to, items = []) => {
     const { matched } = fixedEntryMatch({ entries, items, from, to });
     return entries.filter(e => isLivingSpend(e, accountIds, matched) && e.date >= from && e.date < to)
@@ -115,7 +132,7 @@ const Planning = (() => {
   // rolling：從第一筆手記支出（最多回溯 maxDays 天）到昨天的生活花費換算每 30 天，滿 minDays 天才算；
   //   發薪週期還沒走完（例如 5 號發薪、整個 10 月都記了）時也能推估。null＝天數不夠
   const livingSpendHistory = ({ entries, accountIds, payday, today, items = [], cycles = PLANNING_RULES.livingSuggestCycles, minDays = 14, maxDays = 93 }) => {
-    const recorded = entries.filter(e => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && e.date);
+    const recorded = entries.filter(e => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && !e.floating && e.date);
     const past = pastCycles({ entries: recorded, payday, today, count: cycles }).map(c => ({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next, items) }));
     const medianCents = median(past.map(p => p.spentCents));
     const todayYmd = Money.ymd(today);
@@ -587,5 +604,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();
