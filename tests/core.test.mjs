@@ -1773,3 +1773,27 @@ test('視覺：個人設定折疊仍帶 edit-card（簡易模式隱藏）、計�
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.ok(src.includes("'計入' : '不計入'"), '計入與否要用文字標示，不只靠顏色');
 });
+
+test('固定扣款帳戶：沒有分配用途也算進必要轉入，缺額與「夠」都由 transferPlan 同一份數字檢核', () => {
+  const P = api.Planning;
+  const living = { key: 'living', label: '生活費', allocatedCents: 100000, accountId: 'salary' };
+  // loan 帳戶只有固定扣款（無分配列）：餘額差 2 萬 → 必要轉入 2 萬；rent 帳戶餘額足夠 → 缺額 0 但仍列需留金額
+  const plan = P.transferPlan({ rows: [living], stayAccountIds: ['salary'], accounts: { salary: { balanceCents: 500000 }, loan: { balanceCents: 30000 }, rent: { balanceCents: 900000 } }, spendingNeed: { loan: 50000, rent: 800000 } });
+  const loan = plan.transfers.find(t => t.accountId === 'loan');
+  assert.equal(loan.mustCents, 20000);
+  assert.equal(loan.needCents, 50000);
+  assert.equal(plan.transfers.find(t => t.accountId === 'rent'), undefined, '餘額夠就不產生轉帳');
+  const rentCheck = plan.checks.find(c => c.accountId === 'rent');
+  assert.deepEqual([rentCheck.needCents, rentCheck.lackCents], [800000, 0], '但檢核表仍列出，顯示「夠」');
+  assert.equal(plan.checks.find(c => c.accountId === 'loan').lackCents, 20000);
+});
+
+test('首頁有扣款帳戶檢核表（只提醒不擋），帳戶核對頁有「扣款前一天至少」欄且低於時標紅不擋儲存', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /home-debit-check/);
+  assert.match(src, /`扣款前一天至少 \$\{Money\.formatTWD\(floor\.beforeCents\)\}`/);
+  assert.match(src, /classList\.toggle\('neg'/);
+  // 單一來源：下限只經 fixedFloorsNow 取得，頁面不得各自呼叫 accountFloors
+  assert.equal((src.match(/Planning\.accountFloors\(/g) || []).length, 1);
+  assert.match(src, /progress\.transfers\.checks/);
+});
