@@ -2136,10 +2136,12 @@ const App = (() => {
         ])]);
           return [periodTable(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodTable(g.rows)]))];
         })(),
-        foldNotes('recon-formula-how', '生活花費與對帳怎麼算', [
+        foldNotes('recon-formula-how', '生活花費怎麼算', [
           '生活花費＝推算用掉－固定支出＋浮動收入－浮動支出。',
           '固定支出依排程，非月繳只算繳款月。',
-          '浮動收支另列，不算生活花費。',
+          '浮動收支另列，不算生活花費。'
+        ]),
+        foldNotes('recon-match-how', '對帳怎麼算', [
           '對帳＝餘額變化，比對固定出入帳排程與逐筆帳目。',
           '手記的同金額固定收支會配對掉，不會重複扣。',
           '總資產＝每次核對的帳戶合計，漏填的沿用上次。',
