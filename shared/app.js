@@ -254,7 +254,8 @@ const App = (() => {
     const ref = REFERENCE_DATA.inflation[key];
     if (!ref) return null;
     const rate = Money.inflationRateOf(config, key);
-    return el('p', { class: 'notice' }, [document.createTextNode(`${key} 年通膨率 ${(rate * 100).toFixed(2)}%${rate === ref.annualRate ? `：${ref.label}（${ref.source}，${ref.observedThrough}）` : '（已手動覆寫）'} `), el('a', { href: ref.sourceUrl, target: '_blank', rel: 'noopener', text: '官方來源' })]);
+    const basis = rate === ref.annualRate ? `：${ref.label}（${ref.source}，${ref.observedThrough}）` : '（已手動覆寫）';
+    return el('p', { class: 'notice' }, [document.createTextNode(`${key} 年通膨率 ${(rate * 100).toFixed(2)}%${basis} `), el('a', { href: ref.sourceUrl, target: '_blank', rel: 'noopener', text: '官方來源' })]);
   };
   const scenarioSummary = (scenario) => {
     try {
@@ -669,7 +670,7 @@ const App = (() => {
         amountCents: isIncome ? ev.cents : -ev.cents,
         incomeSource: isIncome ? (recurringKinds[flow.kind] || flow.name || '其他') : null,
         essential: isIncome ? null : flow.essential !== false,
-        note: housingDue ? `${flow.name || '租屋'}（${Number(ev.date.slice(8))} 號繳租）：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
+        note: housingDue ? `${flow.name || '租屋'} ${Number(ev.date.slice(8))} 號：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
       });
     }
     // 只清本月、由固定項目產生、仍是預測的帳目；已入帳的與過去月份一律保留
@@ -863,7 +864,7 @@ const App = (() => {
         el('thead', {}, [el('tr', {}, ['期間', '收入', '支出', '存下', '儲蓄率', '轉進儲蓄', '動用存款', '帳面淨資產'].map(text => el('th', { text })))]),
         el('tbody', {}, reports.map(r => el('tr', {}, [`${r.start.slice(5).replace('-', '/')} 起`, fmt(r.incomeCents), fmt(r.expenseCents), fmt(r.savedCents), pct(r.savingsRate), fmt(r.toSavingsCents), fmt(r.withdrawnCents + r.spentFromSavingsCents), fmt(r.netWorthEndCents)].map(text => el('td', { class: 'mono', text })))))
       ]) : null,
-      ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：照近期實際速度每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，比目標 ${i.targetMonth} 晚` : ''}` })),
+      ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：近期每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，晚於 ${i.targetMonth}` : ''}` })),
       ...noteLines(['存下＝收入－全部支出。', '帳戶間轉帳不算收支。', '從儲蓄帳戶轉回或直接付款，算動用存款。', '帳面淨資產不含投資市價變動。'])
     ]);
     return { node, actions: habits.lines.slice(0, 1) };
@@ -890,7 +891,9 @@ const App = (() => {
     const goalLines = health.goals.filter(g => !g.invalid && g.monthlyRequiredCents > 0).map(g => {
       const extra = req.recommendedCents - Planning.requiredIncome({ spendCents, savingFloorCents: health.savingFloorCents - g.monthlyRequiredCents }).recommendedCents;
       const t = Planning.workTarget({ needNetCents: extra, flow, maxMonthlyHours, minimumHourlyCents });
-      return extra > 0 ? `${g.label}（${g.targetMonth} 前存到）：每月要多 ${fmt(extra)}，約每週多 ${t.hoursAtRate === null ? '—' : weekly(t.hoursAtRate)} 小時，或時薪多 ${t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents)}` : null;
+      const hrs = t.hoursAtRate === null ? '—' : weekly(t.hoursAtRate);
+      const wage = t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents);
+      return extra > 0 ? `${g.label}（${g.targetMonth}前）：每月多 ${fmt(extra)}，週多 ${hrs} 小時或時薪多 ${wage}` : null;
     }).filter(Boolean);
     const gap = req.recommendedCents - health.incomeCents;
     return el('details', { class: 'compact-settings home-income-target', 'data-collapse-id': 'home-income-target' }, [
@@ -934,13 +937,13 @@ const App = (() => {
         // 每個分配用途（含之後新增的）都列出來；已選的成本目標也在這裡，跟「選擇成本目標」存同一個設定
         ...ALLOCATION_PURPOSES.map(p => el('label', {}, [document.createTextNode(`${p.label}　`), accountSelect(config.dashboard[p.field], e => { config.dashboard[p.field] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])),
         // 從生活費帳戶領出來的現金：餘額與生活費帳戶合計，支出算生活花費；分配與轉帳仍只到生活費帳戶
-        el('label', { title: '從生活費帳戶提領的現金：餘額與生活費帳戶合計、支出算生活花費；分配與轉帳仍只到生活費帳戶' }, [document.createTextNode('生活費現金（從生活費帳戶提領）　'),
+        el('label', { title: '從生活費帳戶提領的現金：餘額併入生活費帳戶、支出算生活花費；分配轉帳不含它' }, [document.createTextNode('生活費現金（從生活費帳戶提領）　'),
           el('select', { onchange: e => { config.dashboard.livingCashAccountId = e.target.value; IO.markDirty(); renderAllocationDashboard(); } }, [
             el('option', { value: '', text: '不使用', selected: config.dashboard.livingCashAccountId ? undefined : 'selected' }),
             ...config.accountProfiles.filter(a => a.id !== config.dashboard.livingAccountId).map(a => el('option', { value: a.id, text: a.name, selected: config.dashboard.livingCashAccountId === a.id ? 'selected' : undefined }))
           ])]),
         ...goals.map(g => el('label', {}, [document.createTextNode(`${g.label}（成本目標）　`), accountSelect(g.accountId, e => { config.dashboard.scenarioAccountMap[g.key] = e.target.value; IO.markDirty(); renderAllocationDashboard(); })])),
-        el('label', { title: '扣款帳戶除了下次要扣的錢，再常留幾個月的每月平均扣款，避免金額變動或晚入帳時扣款失敗' }, [document.createTextNode('固定支出扣款帳戶緩衝（月）　'),
+        el('label', { title: '扣款帳戶除下次要扣的錢，再多留幾個月平均扣款，防金額變動或晚入帳扣款失敗' }, [document.createTextNode('固定支出扣款帳戶緩衝（月）　'),
           el('input', { type: 'number', min: String(PLANNING_RULES.fixedBufferMonths.min), max: String(PLANNING_RULES.fixedBufferMonths.max), step: '1', class: 'mono', value: String(config.dashboard.fixedBufferMonths),
             onchange: e => { const v = Number(e.target.value); const fb = PLANNING_RULES.fixedBufferMonths; config.dashboard.fixedBufferMonths = Number.isInteger(v) && v >= fb.min && v <= fb.max ? v : fb.default; IO.markDirty(); renderAllocationDashboard(); } })])
       ]),
@@ -971,7 +974,7 @@ const App = (() => {
       const scenario = scenarios.find(s => s.scenarioId === goal.key);
       const items = scenario?.items || scenario?.itemTemplate || [];
       return el('details', { class: 'compact-settings', 'data-collapse-id': `selected-goal-${goal.key}` }, [
-        el('summary', { class: goal.invalid ? 'neg' : undefined, text: goal.overdue ? `${goal.label}（目標月份 ${goal.targetMonth} 已過，未納入分配；請在編輯模式「選擇成本目標」改月份）` : (goal.invalid ? goal.label + '（試算錯誤，未納入分配）' : goal.label + '清單・尚需 ' + Money.formatTWD(goal.gapCents)) }),
+        el('summary', { class: goal.invalid ? 'neg' : undefined, text: goal.overdue ? `${goal.label}（${goal.targetMonth} 已過，未納入分配；到「選擇成本目標」改月份）` : (goal.invalid ? goal.label + '（試算錯誤，未納入分配）' : goal.label + '清單・尚需 ' + Money.formatTWD(goal.gapCents)) }),
         items.length ? el('table', {}, [el('tbody', {}, items.map(item => el('tr', {}, [el('td', { text: item.label }), el('td', { class: 'mono', text: Money.formatTWD(item.kind === 'discount' ? -item.amountCents : item.amountCents) })])))]) : el('p', { class: 'notice', text: '此試算為固定公式型，詳細參數請至成本試算頁調整。' })
       ]);
     })) : el('div', { class: 'selected-goals' });
@@ -1055,7 +1058,7 @@ const App = (() => {
         ontoggle: e => { summaryCardSettingsOpen = e.currentTarget.open; }
       }, [
         el('summary', { text: `摘要卡設定（顯示 ${summaryCards.length} 張）` }),
-        el('p', { class: 'notice', text: '可搭配本頁全部可計算來源：收支、比率、固定項目、帳戶、分配、目標與貸款；資料變動時卡片會同步更新。' }),
+        el('p', { class: 'notice', text: '可搭配收支、比率、固定項目、帳戶、分配、目標與貸款；資料變動時自動更新。' }),
         ...config.dashboard.summaryCards.map(card => el('div', { class: 'summary-card-setting-row' }, [
           el('label', { class: 'inline-check' }, [el('input', { type: 'checkbox', checked: card.visible ? 'checked' : undefined, onchange: e => { card.visible = e.target.checked; refreshSettings(); } }), document.createTextNode(' 顯示')]),
           el('input', { type: 'text', value: card.label, 'aria-label': '摘要卡名稱', onchange: e => { card.label = e.target.value.trim() || sourceById[card.source]?.label.split('｜').pop() || '摘要'; refreshSettings(); } }),
@@ -1082,12 +1085,12 @@ const App = (() => {
     const showStudentLoan = loanInUse(studentLoanScenario, studentLoanSettings);
     const showMortgage = loanInUse(mortgageScenario, mortgageSettings);
     const loanOverview = el('section', { class: `loan-overview-home${showStudentLoan || showMortgage ? '' : ' editor-only'}` }, [
-      el('div', { class: 'section-heading' }, [el('h3', { text: '貸款規劃' }), el('p', { class: 'notice', text: showStudentLoan || showMortgage ? '集中查看房貸與學貸；詳細參數只在成本試算調整。' : '尚未設定貸款。有房貸或學貸時，到成本試算勾選「自動納入帳本固定支出」，這裡就會顯示月繳與狀態。' })]),
+      el('div', { class: 'section-heading' }, [el('h3', { text: '貸款規劃' }), el('p', { class: 'notice', text: showStudentLoan || showMortgage ? '集中查看房貸與學貸；詳細參數只在成本試算調整。' : '尚未設定貸款。到成本試算勾選「自動納入帳本固定支出」，這裡會顯示月繳與狀態。' })]),
       !showStudentLoan && !showMortgage ? el('div', { class: 'toolbar' }, [
         studentLoanScenario ? el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') }) : null,
         mortgageScenario ? el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') }) : null
       ]) : null,
-      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), ...studentLoan.billed.filter(b => b && b.status === 'repaying').map(b => el('p', { class: 'notice', text: `${b.label || '帳單中的貸款'}：已繳 ${b.paidTerms}／${b.termMonths} 期・剩 ${b.remainingTerms} 期・待償還 ${Money.formatTWD(b.balanceCents)}・月繳 ${Money.formatTWD(b.next.paymentCents)}` })), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
+      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), ...studentLoan.billed.filter(b => b && b.status === 'repaying').map(b => el('p', { class: 'notice', text: `${b.label || '帳單中的貸款'}：已繳 ${b.paidTerms}／${b.termMonths} 期・待償還 ${Money.formatTWD(b.balanceCents)}・月繳 ${Money.formatTWD(b.next.paymentCents)}` })), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
       showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
@@ -1104,7 +1107,7 @@ const App = (() => {
     const emergencyAccount = config.accountProfiles.find(a => a.id === config.dashboard.emergencyAccountId);
     const accountWarnings = [
       ...negativeAccounts.map(a => `${a.name}餘額是 ${Money.formatTWD(accountBalancesNow[a.id])}：可能漏記收入或期初餘額，到「帳戶核對」更新實際餘額`),
-      emergencyAccount && !isLiquidNature(emergencyAccount.nature) ? `緊急預備金放在「${emergencyAccount.name}」（${natureLabels()[emergencyAccount.nature] || emergencyAccount.nature}），不算可動用資金：急用時可能要賣出或等待，建議改搭配活存或儲蓄帳戶` : null
+      emergencyAccount && !isLiquidNature(emergencyAccount.nature) ? `緊急預備金在「${emergencyAccount.name}」（${natureLabels()[emergencyAccount.nature] || emergencyAccount.nature}）：不算可動用資金，急用難變現，建議改放活存` : null
     ].filter(Boolean);
     const accountNotice = accountWarnings.length ? el('div', { class: 'estimate-notice editor-only' }, accountWarnings.map(text => el('p', { text }))) : null;
     // 結論模式只給結論與解方（使用者不在乎過程）：一句結論、分配長條、最多 3 件要做的事；計算過程收進「怎麼算的」
@@ -1239,7 +1242,7 @@ const App = (() => {
         el('progress', { max: String(em.targetMonths), value: String(Math.min(em.months, em.targetMonths)) })
       ]),
       living.hint ? el('p', { class: 'home-goal', text: living.hint }) : null,
-      living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，固定出入帳的排程帳目已確認，又另外手記了一筆同金額的帳，帳戶餘額會算錯，請到帳本刪掉其中一筆。` }) : null,
+      living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，與已確認固定帳同額，餘額會重複計算；請刪其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       habitsView.node,
       incomeView,
@@ -1262,7 +1265,7 @@ const App = (() => {
       el('div', { class: 'dashboard-summary editor-only' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可在摘要卡設定重新勾選。' })]),
       renderSummaryCardSettings(),
       loanOverview,
-      el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${cycleLastDay(progress.cycle.next)}・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天・${progress.payday ? `每月 ${progress.payday.day} 日發薪（${progress.payday.name}）` : '尚未設定固定收入，以每月 1 日起算'}・只計已入帳的帳目` }),
+      el('p', { class: 'notice editor-only allocation-cycle', text: `本期 ${progress.cycle.start.slice(5).replace('-', '/')}～${cycleLastDay(progress.cycle.next)}・第 ${progress.cycle.elapsedDays}／${progress.cycle.totalDays} 天・` + (progress.payday ? `每月 ${progress.payday.day} 日發薪（${progress.payday.name}）` : '尚未設定固定收入，以每月 1 日起算') + '・只計已入帳的帳目' }),
       // 三欄：用途（帳戶小字）／本期分配／狀態；左側色條＝狀態，一眼看出哪列要處理
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'allocation-table' }, [
         el('thead', {}, [el('tr', {}, [el('th', { text: '用途' }), el('th', { text: '本期分配' }), el('th', { text: '狀態' })])]),
@@ -1731,7 +1734,7 @@ const App = (() => {
       const linked = flowLinked(flow);
       return el('details', { class: 'card flow-card', 'data-collapse-id': `flow-${flow.id}` }, [
         el('summary', { class: 'flow-summary' }, [...summaryChildren, linked ? null : el('span', { class: 'flow-tag warn', text: '帳戶未連動・不計入' })]),
-        el('div', { class: 'flow-body' }, [linked ? null : el('p', { class: 'linked-note', text: '指定的帳戶已關閉「連動固定收支」，本項目不計入每月總額與帳本預測；改選其他帳戶或到帳戶管理重新開啟即可。' }), ...body])
+        el('div', { class: 'flow-body' }, [linked ? null : el('p', { class: 'linked-note', text: '指定帳戶已關閉「連動固定收支」，本項目不計入月總額與預測；請改選帳戶或重新開啟。' }), ...body])
       ]);
     };
     const openFlowCard = (id) => { expandedDetailKeys.add(`panel-ledger｜flow-${id}`); };
@@ -1792,7 +1795,7 @@ const App = (() => {
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),
         el('div', { class: 'flow-result' }, [
-          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
+          el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}` + (r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : '') }),
           // 住宅押金上限 2 個月租金（租賃住宅市場發展及管理條例第 7 條）；只提醒不阻擋，營業用租賃不受限
           r.deposit && h.rentCents > 0 && r.deposit.cents > h.rentCents * 2 ? el('div', {}, noteLines(['押金超過 2 個月租金，高於住宅法定上限。', '依租賃住宅市場發展及管理條例第 7 條；營業用不受限。'])) : null,
           r.deposit ? el('div', {}, noteLines([`押金 ${yuan(r.deposit.cents)}：${r.deposit.paidOn ? `${r.deposit.paidOn} ` : ''}入住時另付，${r.deposit.refundOn ? `${r.deposit.refundOn} ` : ''}退租時退回。`, '是暫付款，不算租金也不算支出。', '不進每月平均與每次繳款金額。'])) : null,
@@ -1864,7 +1867,7 @@ const App = (() => {
       const formula = basis === 'hourly'
         ? `時薪 ${yuan(income.hourlyRateCents)} × ${hoursText(income.monthlyWorkHours)} ＝ 本月稅前 ${yuan(income.grossCents)}`
         : basis === 'per_case'
-          ? `每件 ${yuan(income.caseFeeCents)}${flow.caseFeeMode === 'fixed' ? '' : `（${yuan(income.hourlyRateCents)} × ${hoursText(income.hoursPerCase)}）`} × ${Math.round(income.caseCount).toLocaleString()} 件 ＝ 本月稅前 ${yuan(income.grossCents)}`
+          ? `每件 ${yuan(income.caseFeeCents)}` + (flow.caseFeeMode === 'fixed' ? '' : `（${yuan(income.hourlyRateCents)} × ${hoursText(income.hoursPerCase)}）`) + ` × ${Math.round(income.caseCount).toLocaleString()} 件 ＝ 本月稅前 ${yuan(income.grossCents)}`
           : `月薪 ${yuan(income.grossCents)} ÷ ${hoursText(income.monthlyWorkHours)} ＝ 時薪約 ${yuan(income.hourlyRateCents)}`;
       const payroll = summaryItem?.payroll;
       const result = el('div', { class: 'income-result', 'aria-live': 'polite' }, [
@@ -1873,7 +1876,7 @@ const App = (() => {
           document.createTextNode('每月實際入帳約 '),
           el('strong', { class: 'mono', text: yuan(summaryItem.netCents) })
         ]) : el('p', { class: flow.active !== false && basis !== 'monthly' ? 'income-net neg' : 'income-net', text: flow.active !== false && basis !== 'monthly' && !(income.grossCents > 0)
-          ? (basis === 'per_case' ? '這個月接案數或每件報酬是 0，本月收入算 0 元、不計入每月收入；接到案件後記得更新' : '這個月工作時數或時薪是 0，本月收入算 0 元、不計入每月收入；排班後記得更新')
+          ? (basis === 'per_case' ? '這個月接案數或每件報酬是 0，本月收入算 0、不計入每月收入；接案後記得更新' : '這個月工作時數或時薪是 0，本月收入算 0 元、不計入每月收入；排班後記得更新')
           : '目前不計入每月收入' }),
         payroll && payroll.laborFee + payroll.healthFee > 0 ? el('p', { class: 'income-sub', text: `已扣勞保 ${yuan(payroll.laborFee)}、健保 ${yuan(payroll.healthFee)}（依投保薪資 ${yuan(payroll.insuredSalaryCents)}）` }) : null,
         basis !== 'monthly' && income.monthlyWorkHours > 0 ? el('p', { class: 'income-sub', text: `本月共工作 ${hoursText(income.monthlyWorkHours)}，實際時薪 ${yuan(income.hourlyRateCents)}` }) : null
@@ -2586,8 +2589,12 @@ const App = (() => {
           const missed = plan.missedNotice.find(x => x.startIdx === r.startIdx);
           const from = `${loanAgeText(r.startAge)}起休學${r.military ? '（服義務役）' : ''}`;
           if (r.returnAge === null) return el('p', { text: `${from}、未復學：${loanAgeText(r.deadlineAge)}起開始攤還。` });
-          if (r.inTime) return el('p', { class: 'student-loan-deadline', text: `${from}，${loanAgeText(r.returnAge)}復學：請在 ${loanAgeText(r.deadlineAge)}前帶註冊證明通知承貸銀行。錯過的話，會從那時起每月被扣約 ${Money.formatTWD(missed?.monthlyPaymentCents || 0)}${(missed?.extraCents || 0) > 0 ? `，整筆貸款多付約 ${Money.formatTWD(missed.extraCents)}` : '，總額不變但在學期間就要開始繳'}。` });
-          return el('p', { text: `${from}，${loanAgeText(r.returnAge)}復學：${r.canNotifyInTime ? '已設定錯過通知期限，' : `休學滿 ${REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears} 年才復學，`}銀行自 ${loanAgeText(r.deadlineAge)}起扣款，到 ${loanAgeText(r.collectUntilAge)}辦妥償還期限異動才停（已計入下方時間表）。` });
+          if (r.inTime) {
+            const extraText = (missed?.extraCents || 0) > 0 ? `，整筆多付約 ${Money.formatTWD(missed.extraCents)}` : '，總額不變但在學期間就要開始繳';
+            return el('p', { class: 'student-loan-deadline' }, [el('strong', { text: `${from}，${loanAgeText(r.returnAge)}復學` }), document.createTextNode(`：${loanAgeText(r.deadlineAge)}前帶註冊證明通知銀行；錯過會每月被扣約 ${Money.formatTWD(missed?.monthlyPaymentCents || 0)}${extraText}。`)]);
+          }
+          const why = r.canNotifyInTime ? '已設定錯過通知期限，' : `休學滿 ${REFERENCE_DATA.twStudentLoan.leaveRepaymentDelayYears} 年才復學，`;
+          return el('p', {}, [el('strong', { text: `${from}，${loanAgeText(r.returnAge)}復學` }), document.createTextNode(`：${why}銀行自 ${loanAgeText(r.deadlineAge)}起扣款，到 ${loanAgeText(r.collectUntilAge)}辦妥異動才停（已計入下方時間表）。`)]);
         }),
         el('table', { class: 'student-loan-timeline' }, [el('tbody', {}, plan.timeline.filter(t => t.paidCents > 0 || t.kind === 'final').map(t => el('tr', {}, [
           el('td', { text: `${loanAgeText(t.fromAge)}～${loanAgeText(t.toAge)}` }),
@@ -3082,9 +3089,10 @@ const App = (() => {
     const restored = !!saved && restoreWorkspace(saved);
     if (saved && !restored) {
       // 不能靜默改用預設值：下一次自動保存就會覆寫使用者原本的資料
-      try { localStorage.setItem('finance-tools.workspace.rejected', JSON.stringify(saved)); } catch {}
+      const rejectedKey = 'finance-tools.workspace.rejected';
+      try { localStorage.setItem(rejectedKey, JSON.stringify(saved)); } catch {}
       const detail = lastRestoreErrors.slice(0, 5).map(e => `${e.path} ${e.message}`).join('\n');
-      if (confirm(`本機工作區資料驗證失敗，暫以預設值開啟：\n${detail}\n\n原始資料已另存於瀏覽器（finance-tools.workspace.rejected）。是否立即下載原始資料備份？`)) IO.exportJson(saved, 'finance_tools_workspace_rejected');
+      if (confirm(`驗證失敗，暫用預設值：\n${detail}\n\n原始資料已另存（${rejectedKey}）。下載備份？`)) IO.exportJson(saved, 'finance_tools_workspace_rejected');
     }
     syncCurrentAgeFromBirthYear();
     IO.initializeFileBinding({ sync: restored }).then(() => renderPersonalSettings());

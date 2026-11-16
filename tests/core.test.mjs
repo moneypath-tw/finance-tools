@@ -1644,7 +1644,7 @@ test('繳租日要出現在各租屋區塊：卡片欄位、扣款日同步、�
   assert.match(src, /繳租日（每月幾號/); // 租屋卡片欄位
   assert.match(src, /Money\.calcHousing\(flow\.housing\)\.payDay/); // 扣款日同步不再只看起租日
   assert.match(src, /facts\.rentDue\.filter|savingsHealth\.facts\.rentDue/); // 首頁本期轉帳
-  assert.match(src, /號繳租）/); // 帳本預測備註
+  assert.match(src, / 號：\$\{housingDue/); // 帳本預測備註
   assert.match(src, /f\.rents\.map/); // 最低餘額表
 });
 
