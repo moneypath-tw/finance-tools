@@ -218,17 +218,23 @@ const Money = (() => {
     const start = parseYmd(h.contractStart);
     // 繳租日：繳租月從簽約起租月起每 cycle 個月一次，日期用 payDay（每月幾號繳；沒填沿用起租日的號數，舊存檔結果不變）；
     // 小月夾到月底，到期日當天起不再繳
+    // 有填「上次實際繳租日」就以它為錨：它那天就是一次繳款（房租預繳一個週期＋結清電費），之後每 cycle 個月一次；
+    // 沒填才從起租日排起（舊存檔結果不變）
+    const anchor = parseYmd(h.lastPaidDate) ? parseYmd(h.lastPaidDate) : null;
+    const base = anchor || start;
+    const baseIndex = base ? ymIndex(base.y, base.m) : null;
     const customDay = Number(h.payDay);
-    const payDay = Number.isInteger(customDay) && customDay >= 1 && customDay <= 31 ? customDay : (start ? start.d : null);
+    const payDay = Number.isInteger(customDay) && customDay >= 1 && customDay <= 31 ? customDay : (base ? base.d : null);
     // 房租是預繳：第一次在入住（起租日）當天繳，涵蓋第一個週期；繳租日若比起租日早，第一次也不會早於入住日
     const paymentDateAt = (k) => {
-      const date = dateInMonth(ymIndex(start.y, start.m) + k * cycle, payDay);
-      return k === 0 && date < h.contractStart ? h.contractStart : date;
+      if (anchor && k === 0) return h.lastPaidDate;
+      const date = dateInMonth(baseIndex + k * cycle, payDay);
+      return !anchor && k === 0 && date < h.contractStart ? h.contractStart : date;
     };
     const nextPaymentOnOrAfter = (ymd, strict = false) => {
-      if (!start || !parseYmd(ymd)) return null;
+      if (!base || !parseYmd(ymd)) return null;
       const from = parseYmd(ymd);
-      let k = Math.max(0, Math.floor((ymIndex(from.y, from.m) - ymIndex(start.y, start.m)) / cycle) - 1);
+      let k = Math.max(0, Math.floor((ymIndex(from.y, from.m) - baseIndex) / cycle) - 1);
       for (let guard = 0; guard < 1200; guard += 1, k += 1) {
         const date = paymentDateAt(k);
         if (h.contractEnd && date >= h.contractEnd) return null;
@@ -255,14 +261,16 @@ const Money = (() => {
     // 電費跟房租同一天繳：每個繳租日結清上次抄表到該日的用電
     const e = h.electricity || {};
     const rate = Math.max(0, Number(e.rateCentsPerKwh) || 0);
-    const last = parseYmd(e.lastReadingDate), cur = parseYmd(e.currentReadingDate);
+    // 有繳租日錨點、但沒填上次結清日：電費從起租日算起（第一次結清）
+    const last = parseYmd(e.lastReadingDate) || (anchor ? start : null), cur = parseYmd(e.currentReadingDate);
+    const lastText = e.lastReadingDate || (anchor && start ? h.contractStart : '');
     const usedKwh = Number(e.currentReading) - Number(e.lastReading);
     const days = last && cur ? daysBetween(last, cur) : 0;
     const measured = days > 0 && usedKwh >= 0 && Number.isFinite(usedKwh);
     const dailyKwh = measured ? usedKwh / days : (Math.max(0, Number(e.fallbackMonthlyKwh) || 0) * 12) / 365;
     const monthlyKwh = dailyKwh * 365 / 12;
     // 上次抄表日當天若剛好是繳租日，那天已結清，下一次結算是之後的繳租日
-    const nextSettleDate = last ? nextPaymentOnOrAfter(e.lastReadingDate, true) : null;
+    const nextSettleDate = last ? nextPaymentOnOrAfter(lastText, true) : null;
     const projectedKwh = last && nextSettleDate ? dailyKwh * daysBetween(last, parseYmd(nextSettleDate)) : monthlyKwh * cycle;
     const electricity = {
       enabled: !!e.enabled, measured, usedKwh: measured ? usedKwh : 0, days, dailyKwh, monthlyKwh,
@@ -296,16 +304,15 @@ const Money = (() => {
     };
     // 押金是退租會退回的暫付款，不是租金也不是支出：另列一項，絕不併入 paymentOn／monthlyCents／perPaymentCents／固定項目與帳本預測，
     // 否則會把可退回的錢當成花掉的租金，墊高每期應付與每月負擔
-    const deposit = depositCents > 0 ? { cents: depositCents, paidOn: start ? paymentDateAt(0) : null, refundOn: h.contractEnd || null } : null;
-    return { cycle, payDay, lastPaid, deposit, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    const deposit = depositCents > 0 ? { cents: depositCents, paidOn: start ? h.contractStart : null, refundOn: h.contractEnd || null } : null;
+    return { cycle, payDay, lastPaid, deposit, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: base ? paymentDateAt : null, baseIndex, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {
-    const start = parseYmd(housing?.contractStart);
     const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
-    if (!start || !m) return { totalCents: 0, parts: [] };
     const r = calcHousing(housing);
-    const diff = ymIndex(+m[1], +m[2]) - ymIndex(start.y, start.m);
+    if (!r.paymentDateAt || !m) return { totalCents: 0, parts: [] };
+    const diff = ymIndex(+m[1], +m[2]) - r.baseIndex;
     if (diff < 0 || diff % r.cycle !== 0) return { totalCents: 0, parts: [] };
     const date = r.paymentDateAt(diff / r.cycle);
     if (housing.contractEnd && date >= housing.contractEnd) return { totalCents: 0, parts: [] };
