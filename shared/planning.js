@@ -104,9 +104,18 @@ const Planning = (() => {
   //   accounts：[{ id, nature, liquid }]
   const livingSpendAccounts = ({ accounts, chosenIds = [], spendIds = [], savingIds = [] }) => {
     const chosen = chosenIds.filter(id => accounts.some(a => a.id === id));
-    if (chosen.length) return { ids: new Set(chosen), auto: false };
+    if (chosen.length) return { ids: new Set(chosen), auto: false, reasons: Object.fromEntries(accounts.map(a => [a.id, chosen.includes(a.id) ? '你勾選計入' : '你沒勾選']))};
     const spend = new Set(spendIds), saving = new Set(savingIds);
-    return { ids: new Set(accounts.filter(a => spend.has(a.id) || a.nature === 'credit' || (a.liquid && !saving.has(a.id))).map(a => a.id)), auto: true };
+    // 每個帳戶的判斷原因一起回傳，畫面逐列顯示「計入／不計入＋一句原因」，不讓使用者猜
+    const why = (a) => {
+      if (spend.has(a.id)) return [true, '生活費、固定支出或薪資入帳帳戶'];
+      if (a.nature === 'credit') return [true, '信用卡，刷卡就是花費'];
+      if (a.liquid && !saving.has(a.id)) return [true, '可動用帳戶'];
+      if (saving.has(a.id)) return [false, '專用於儲蓄用途，在這裡付款多半是動用存款'];
+      return [false, '不是可動用的帳戶（例如投資）'];
+    };
+    const verdicts = accounts.map(a => [a.id, why(a)]);
+    return { ids: new Set(verdicts.filter(([, v]) => v[0]).map(([id]) => id)), auto: true, reasons: Object.fromEntries(verdicts.map(([id, v]) => [id, v[1]])) };
   };
   const median = (list) => {
     if (!list.length) return null;
@@ -126,23 +135,6 @@ const Planning = (() => {
       past.push(c);
     }
     return past;
-  };
-  // 近幾個完整發薪週期的生活花費與建議預算：中位數（不被單次大額拉高），無條件進位到百元
-  // 週期從第一筆手記支出開始算（只有收入或排程帳目的週期不算，不然會被當成「沒花錢」把中位數拉成 0）。
-  // rolling：從第一筆手記支出（最多回溯 maxDays 天）到昨天的生活花費換算每 30 天，滿 minDays 天才算；
-  //   發薪週期還沒走完（例如 5 號發薪、整個 10 月都記了）時也能推估。null＝天數不夠
-  const livingSpendHistory = ({ entries, accountIds, payday, today, items = [], cycles = PLANNING_RULES.livingSuggestCycles, minDays = 14, maxDays = 93 }) => {
-    const recorded = entries.filter(e => e.type === 'expense' && e.status !== 'projected' && !e.recurringFlowId && !e.floating && e.date);
-    const past = pastCycles({ entries: recorded, payday, today, count: cycles }).map(c => ({ start: c.start, next: c.next, spentCents: livingSpendCents(entries, accountIds, c.start, c.next, items) }));
-    const medianCents = median(past.map(p => p.spentCents));
-    const todayYmd = Money.ymd(today);
-    const earliest = Money.ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate() - maxDays));
-    const first = recorded.map(e => e.date).filter(d => d < todayYmd).sort()[0];
-    const from = first && first > earliest ? first : earliest;
-    const days = first ? Math.round((new Date(`${todayYmd}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000) : 0;
-    const spent = days >= minDays ? livingSpendCents(entries, accountIds, from, todayYmd, items) : 0;
-    const rolling = days >= minDays ? { from, days, spentCents: spent, per30Cents: Math.round(spent * 30 / days) } : null;
-    return { cycles: past, medianCents, suggestedCents: medianCents === null ? null : Math.ceil(medianCents / 10000) * 10000, rolling };
   };
   // 每期收支報告（存花習慣的唯一資料來源）。互轉不是收入也不是支出，但要看錢有沒有真的放進儲蓄：
   //   savedCents＝收入－全部支出（＝帳面淨資產增加；帳戶間轉帳互相抵銷）
@@ -631,5 +623,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

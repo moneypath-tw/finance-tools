@@ -121,18 +121,7 @@ const Snapshots = (() => {
     return errors;
   };
 
-  // 生活花費推估（每 30 天）：最近幾期合計的（推算用掉−固定支出）÷ 合計天數 × 30，累積到至少 minDays 天才算；
-  // 用合計而不是逐期平均，短期間（隔兩天就核對）不會被放大。null＝資料不夠
-  const livingEstimate = (periodList, { minDays = 14, maxDays = 93 } = {}) => {
-    let days = 0, living = 0, fixed = 0, used = 0;
-    for (const p of periodList || []) {
-      if (days >= maxDays) break;
-      days += p.days; living += p.total.livingCents; fixed += p.total.fixedOutCents; used += 1;
-    }
-    if (days < minDays) return null;
-    return { days, periods: used, livingPer30Cents: Math.round(living * 30 / days), fixedPer30Cents: Math.round(fixed * 30 / days) };
-  };
-  // 發薪週期對齊的「實際生活費」（docs/生活費整併規劃.md 第四節）：兩次核對之間的殘差 livingCents 按天數線性分攤，
+  // 發薪週期對齊的「實際生活費」（docs/設計架構與計算邏輯.md 生活花費推估列）：兩次核對之間的殘差 livingCents 按天數線性分攤，
   // 完整被核對涵蓋的週期標 measured，其餘沿用最近速率標 estimated。periodList 為 periods() 的輸出（新到舊）。
   // 殘差為負（錢變多，多半漏記收入）的期間不納入，列在 negatives 讓畫面提示
   const livingActual = (periodList, { payday, today, minDays = 14, maxDays = 93 } = {}) => {
@@ -190,5 +179,5 @@ const Snapshots = (() => {
     });
   };
 
-  return { occurrences, planned, periods, validate, livingEstimate, livingActual, assetSeries };
+  return { occurrences, planned, periods, validate, livingActual, assetSeries };
 })();
