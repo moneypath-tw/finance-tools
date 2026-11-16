@@ -933,7 +933,7 @@ const App = (() => {
         document.createTextNode(`生活花費計入帳戶（${spendAccounts.auto ? '自動判斷' : '自選'}）　`),
         ...config.accountProfiles.map(a => el('label', {}, [
           el('input', { type: 'checkbox', value: a.id, checked: spendAccounts.ids.has(a.id) ? 'checked' : undefined, disabled: a.id === config.dashboard.livingCashAccountId ? 'disabled' : undefined, title: a.id === config.dashboard.livingCashAccountId ? '生活費現金一定計入' : undefined, onchange: e => { const ids = new Set(spendAccounts.ids); if (e.target.checked) ids.add(a.id); else ids.delete(a.id); config.dashboard.livingSpendAccountIds = [...ids]; IO.markDirty(); renderAllocationDashboard(); } }),
-          document.createTextNode(` ${a.name}（${spendAccounts.ids.has(a.id) ? "計入" : "不計入"}：${a.id === config.dashboard.livingCashAccountId ? "生活費現金一定計入" : (spendAccounts.reasons?.[a.id] || "")}）`)
+          el('span', {}, [document.createTextNode(` ${a.name}　${spendAccounts.ids.has(a.id) ? '計入' : '不計入'}`), el('small', { class: 'spend-reason', text: a.id === config.dashboard.livingCashAccountId ? '生活費現金一定計入' : (spendAccounts.reasons?.[a.id] || '') })])
         ])),
         spendAccounts.auto ? null : el('button', { type: 'button', class: 'btn small', text: '改回自動', onclick: () => { config.dashboard.livingSpendAccountIds = []; IO.markDirty(); renderAllocationDashboard(); } })
       ])
