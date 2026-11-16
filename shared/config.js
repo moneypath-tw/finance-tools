@@ -315,7 +315,7 @@ const SCENARIO_FIRE = {
   retireAgeSolveMode: 'given_age',
   // 你自己設定的「明年薪資成長假設」，用來反推「明年應有月薪目標」；
   // 旁邊會同時顯示「理論上需要的年成長率」供對照，兩者不一致很正常，代表現實與理想的落差
-  assumedSalaryGrowthRate: 0.2,
+  assumedSalaryGrowthRate: 0.03, // 約等於近年經常性薪資年增（主計總處 2026 上半年 2.88%）
   // 退休前累積資產所用的名目年報酬假設；反推退休年齡會按月複利並納入生活費與全部目標。
   preRetirementAnnualReturnRate: 0.05
 };

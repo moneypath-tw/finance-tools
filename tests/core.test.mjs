@@ -1717,3 +1717,9 @@ test('首頁本期轉帳用「轉出帳戶→轉入帳戶」視覺列，標出�
   assert.doesNotMatch(src, /flow-detail'[^)]*open/);
   assert.match(css, /\.flow-arrow::after/);
 });
+
+test('FIRE 薪資成長預設貼近現實，押金超過 2 個月租金有提醒', () => {
+  assert.ok(api.SCENARIO_FIRE.assumedSalaryGrowthRate <= 0.05);
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /r\.deposit\.cents > h\.rentCents \* 2/);
+});
