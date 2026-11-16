@@ -474,6 +474,11 @@ const App = (() => {
     const rentDue = dueEvents.filter(ev => ev.item.housingCalc && entryById.get(ev.id)?.status !== 'realized').map(ev => ({ accountId: ev.accountId, name: ev.item.name || '租屋', date: ev.date, cents: ev.cents }));
     return { mainIncome, cycle, balances, rentDue, dueTotalCents, paidCents, unconfirmedCents, dueRemainingCents: Math.max(0, dueTotalCents - paidCents), fixedNeedByAccount, fixedStartLackByAccount, fixedEarlyByAccount, spendAccounts, livingSpentCents, transferFacts, incomeAccountIds, noData };
   };
+  // 各扣款帳戶「扣款前一天至少」的唯一入口（首頁最低餘額表、帳戶核對頁欄位都讀這裡）：日期與發薪日取當下，不寫死
+  const fixedFloorsNow = (recurring = recurringSummary()) => {
+    const { cycle } = currentPayCycle(new Date(), recurring);
+    return Planning.accountFloors({ items: recurring.items, todayYmd: cycle.today, payday: cycle.payday, bufferMonths: config.dashboard.fixedBufferMonths });
+  };
   // 實際生活費的唯一來源（首頁、預算頁都讀這裡）：帳戶核對之間的殘差按天數分攤（Snapshots.livingActual），
   // 不用逐筆明細加總（只記特別花費的人，明細加總不是生活費）。核對不足時 source 為 null，不建議預算
   const livingEstimate = (recurring, spendIds, payday) => {
@@ -1130,6 +1135,17 @@ const App = (() => {
       saveLines.length ? el('p', { class: 'home-transfer-head', text: mustLines.length ? '再轉・儲蓄（可延到下次發薪）' : '儲蓄（可延到下次發薪）' }) : null,
       saveLines.length ? el('ul', { class: 'flow-list' }, saveLines.map(flowRow)) : null
     ]) : null;
+    // 固定扣款帳戶檢核（只提醒、不擋）：每個有本期扣款的帳戶一列；需要的錢與缺額取自 transferPlan，不另算
+    const debitChecks = savingsHealth.facts.noData ? [] : progress.transfers.checks;
+    const debitCheckView = debitChecks.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-debit-check', open: debitChecks.some(t => t.lackCents > 0) ? 'open' : undefined }, [
+      el('summary', { text: debitChecks.some(t => t.lackCents > 0) ? '有帳戶錢不夠扣款' : '扣款帳戶的錢都夠' }),
+      el('div', { class: 'table-scroll' }, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['帳戶', '本期需留', '目前餘額', '檢核'].map(h => el('th', { text: h })))]),
+        el('tbody', {}, debitChecks.map(t => el('tr', {}, [el('td', { text: accountName(t.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(t.needCents) }),
+          el('td', { class: 'mono', text: Money.formatTWD(t.balanceCents) }),
+          el('td', { class: `mono${t.lackCents > 0 ? ' neg' : ''}`, text: t.lackCents > 0 ? `差 ${Money.formatTWD(t.lackCents)}` : '夠' })])))
+      ])])
+    ]) : null;
     const actions = [...accountWarnings, ...verdict.fixes, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入
     const standingPlan = [
@@ -1139,7 +1155,7 @@ const App = (() => {
     // 生活費建議值（livingEstimate：核對推算優先，否則逐筆帳目中位數），按下才寫入預算
     const living = livingEstimate(recurring, spendAccounts.ids, savingsHealth.facts.cycle.payday);
     // 各固定支出扣款帳戶的最低餘額（每月預存＋緩衝），與轉帳指示、分配表同一份 Planning.fixedReserve
-    const floors = Planning.accountFloors({ items: recurring.items, todayYmd: savingsHealth.facts.cycle.today, payday: savingsHealth.facts.cycle.payday, bufferMonths: config.dashboard.fixedBufferMonths });
+    const floors = fixedFloorsNow(recurring);
     const floorsView = floors.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-floors' }, [
       el('summary', { text: `扣款帳戶最低餘額（緩衝 ${config.dashboard.fixedBufferMonths} 個月）` }),
       el('div', { class: 'table-scroll' }, [el('table', {}, [
@@ -1171,6 +1187,7 @@ const App = (() => {
       // 結論 → 要做的事 → 本期轉帳 → 分配細節（長條、滑桿、進度）：使用者先看到該動手的，再看背景數字
       actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
       transferView,
+      debitCheckView,
       bar,
       el('ul', { class: 'home-legend' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}`, text: `${s.label} ${Money.formatTWD(s.cents)}` }))),
       el('label', { class: 'home-slider' }, [
@@ -1989,6 +2006,7 @@ const App = (() => {
     const last = sorted[sorted.length - 1];
     const nameOf = (id) => accounts.find(a => a.id === id)?.name || id;
     const inputs = {};
+    const floorById = Object.fromEntries(fixedFloorsNow().map(f => [f.accountId, f]));
     const dateInput = el('input', { type: 'date', value: localToday() });
     const noteInput = el('input', { type: 'text', placeholder: '想到再寫，例如：繳了年度保險' });
     const status = el('p', { class: 'notice', text: snapshotMessage });
@@ -2002,7 +2020,14 @@ const App = (() => {
         el('tbody', {}, accounts.map(a => {
           const prev = last?.balances?.[a.id];
           inputs[a.id] = el('input', { type: 'number', step: '1', class: 'mono', value: prev !== undefined ? Money.toYuan(prev) : '' });
-          return el('tr', {}, [el('td', { text: a.name }), el('td', { class: 'mono', text: prev !== undefined ? Money.formatTWD(prev) : '—' }), el('td', {}, [inputs[a.id]])]);
+          // 有固定扣款的帳戶才有下限（Planning.accountFloors）；填的餘額低於下限只標紅提醒，不擋儲存
+          const floor = floorById[a.id];
+          const hint = el('small', { class: 'mono', text: floor ? `扣款前一天至少 ${Money.formatTWD(floor.beforeCents)}` : '' });
+          if (floor) {
+            const mark = () => hint.classList.toggle('neg', inputs[a.id].value !== '' && Money.toCents(Number(inputs[a.id].value)) < floor.beforeCents);
+            inputs[a.id].addEventListener('input', mark); mark();
+          }
+          return el('tr', {}, [el('td', {}, [document.createTextNode(a.name), ...(floor ? [document.createElement('br'), hint] : [])]), el('td', { class: 'mono', text: prev !== undefined ? Money.formatTWD(prev) : '—' }), el('td', {}, [inputs[a.id]])]);
         }))
       ])]),
       el('div', { class: 'field' }, [el('label', { text: '備註（可空白）' }), noteInput]),

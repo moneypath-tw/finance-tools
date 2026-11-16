@@ -484,7 +484,12 @@ const Planning = (() => {
       if (lack > 0) transfers.push({ accountId, purposes: [purposeLabel('fixed')], plannedCents: 0, remainingCents: lack, spendLackCents: lack, stay: stay.has(accountId),
         mustCents: lack, mustPurposes: [purposeLabel('fixed')], saveCents: 0, savePurposes: [], saveRows: [], needCents });
     }
-    return { transfers, stayCents, rowFacts };
+    // 檢核表：每個本期有扣款需求的帳戶一列（不論夠不夠），缺額與上面轉帳指示同一份；首頁只提醒、不擋
+    const checks = Object.entries(spendingNeed).filter(([, need]) => need > 0).map(([accountId, needCents]) => {
+      const t = transfers.find(x => x.accountId === accountId);
+      return { accountId, needCents, balanceCents: Math.round(accounts[accountId]?.balanceCents || 0), lackCents: t ? t.spendLackCents : 0 };
+    });
+    return { transfers, stayCents, rowFacts, checks };
   };
   // 轉入後的展望（首頁「本期轉帳」與分配表狀態共用，同一句話）：這次轉入（含預計入帳）後離目標還差多少、照每月分配額再幾個月達成
   //   gapCents＝目前離目標還差（沒有目標金額的一般儲蓄傳 null）；monthlyCents＝每月分配額；deadlineMonths＝目標期限剩幾個月（可省略）
