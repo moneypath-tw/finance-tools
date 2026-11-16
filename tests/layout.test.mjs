@@ -10,3 +10,12 @@ test('首頁版面是 minmax(0, 1fr) 單欄：寬表格不會把整欄撐出畫�
   const rule = css.match(/^\.home-overview \{[^}]*\}/m)?.[0] || '';
   assert.match(rule, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 });
+
+test('style.css 的字級全部落在字級階梯（12/14/16/18/20/24/30/36/48…px）', () => {
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  const sizes = [...css.matchAll(/font-size:\s*([0-9.]+)(rem|em|px)/g)];
+  assert.ok(sizes.length > 30, '找不到字級宣告，正規式失效');
+  const scale = [12, 14, 16, 18, 20, 24, 30, 36, 48, 60, 72];
+  const off = sizes.filter((m) => !scale.includes(Math.round(Number(m[1]) * (m[2] === 'px' ? 1 : 16) * 1000) / 1000)).map((m) => m[0]);
+  assert.deepEqual(off, []);
+});
