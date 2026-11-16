@@ -1735,16 +1735,14 @@ test('上次實際繳租日是繳款錨點：那天一次繳「起租至該日�
   assert.equal(M.calcHousing({ ...h, lastPaidDate: '' }).paymentDateAt(0), '2026-05-20');
 });
 
-test('首頁本期轉帳用「轉出帳戶→轉入帳戶」視覺列，標出繳租日、說明預設收合', () => {
+test('首頁本期轉帳依來源帳戶分組，一列一個目的地，標出繳租日、不再逐筆說明', () => {
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
-  assert.match(src, /class: 'flow-row'/);
-  assert.match(src, /class: 'flow-acct', text: line\.from/);
-  assert.match(src, /class: 'flow-acct', text: line\.to/);
+  assert.match(src, /class: 'xfer-group'/);
+  assert.match(src, /class: 'xfer-to', text: r\.to/);
   assert.match(src, /繳租`/);
-  assert.match(src, /el\('details', \{ class: 'flow-detail' \}/);
-  assert.doesNotMatch(src, /flow-detail'[^)]*open/);
-  assert.match(css, /\.flow-arrow::after/);
+  assert.doesNotMatch(src, /flow-row|flow-detail/);
+  assert.match(css, /\.xfer-group/);
 });
 
 test('FIRE 薪資成長預設貼近現實，押金超過 2 個月租金有提醒', () => {

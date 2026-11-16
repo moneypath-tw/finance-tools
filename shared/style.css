@@ -542,16 +542,19 @@ tbody tr:last-child td { border-bottom: 0; }
 #ledger-table-body .confirm-amount { width: 7em; margin-right: 4px; }
 #ledger-table-body td .badge { margin-left: 4px; }
 
-/* 首頁本期轉帳：轉出帳戶 ──金額──▶ 轉入帳戶；單色、靜態，對比用文字色與框線 */
-.flow-list { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 10px; }
-.flow-row { display: grid; grid-template-columns: minmax(0, auto) minmax(64px, 1fr) minmax(0, auto); align-items: center; gap: 8px; }
-.flow-acct { border: 1px solid currentColor; border-radius: 6px; padding: 4px 10px; font-weight: 600; overflow-wrap: anywhere; }
-.flow-link { display: grid; justify-items: center; gap: 2px; min-width: 0; }
-.flow-amt { font-weight: 700; white-space: nowrap; }
-.flow-arrow { position: relative; display: block; width: 100%; height: 0; border-top: 2px solid currentColor; }
-.flow-arrow::after { content: ''; position: absolute; right: 0; top: -6px; width: 8px; height: 8px; border-top: 2px solid currentColor; border-right: 2px solid currentColor; transform: rotate(45deg); }
-.flow-chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
-.flow-chip { border: 1px solid var(--muted, currentColor); border-radius: 999px; padding: 0 8px; font-size: 0.85em; }
+/* 首頁本期轉帳：一張卡一個來源帳戶，一列一個目的地（用途・金額）；單色、靜態 */
+.xfer-group { border: 1px solid var(--rule); border-radius: var(--radius-sm); padding: 10px 12px; margin: 8px 0; }
+.xfer-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+.xfer-rows { list-style: none; margin: 0; padding: 0; }
+.xfer-rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 6px 0; border-bottom: 1px solid var(--rule); }
+.xfer-rows li:last-child { border-bottom: 0; }
+.xfer-to { font-weight: 600; overflow-wrap: anywhere; }
+.xfer-amt { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-weight: 700; white-space: nowrap; }
+.xfer-chips { color: var(--ink-soft); font-size: 0.85rem; }
+/* 各期比較：一期一列細線（沿用分配圖的 alloc-track／alloc-fill） */
+.period-lines { display: grid; gap: 10px; margin: 8px 0; padding: 0; list-style: none; font-size: 0.9rem; }
+.period-lines li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.period-flag { grid-column: 1 / -1; }
 .flow-detail { grid-column: 1 / -1; font-size: 0.9em; }
 .flow-detail summary { cursor: pointer; color: var(--muted, inherit); }
 
@@ -559,3 +562,4 @@ tbody tr:last-child td { border-bottom: 0; }
 .living-spend-accounts { flex-direction: column; align-items: flex-start; gap: 8px; }
 .living-spend-accounts label { display: flex; align-items: flex-start; gap: 6px; }
 .living-spend-accounts .spend-reason { display: block; color: var(--ink-soft); font-size: 0.85rem; }
+.period-lines .alloc-amt { min-width: 6.5em; }
