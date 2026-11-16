@@ -489,11 +489,11 @@ const App = (() => {
     const actual = Snapshots.livingActual(Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries), { payday, today: now });
     const roundUp = (cents) => Math.ceil(cents / 10000) * 10000;
     const md = (ymd) => ymd.slice(5).replace('-', '/');
-    const negText = actual.negatives.length ? `；${actual.negatives.map(n => `${md(n.from)}～${md(n.to)} 餘額多出 ${Money.formatTWD(n.extraCents)}，可能有未記的收入，未納入`).join('、')}` : '';
+    // 提示文字不顯示資料品質細節（近幾天、未納入、疑似未記收入）：存花習慣即時更新就好（使用者 2026-11-17）
     // 核對不足＝不能建議把預算改成 0
-    if (!actual.ready) return { source: null, actual, monthlyCents: null, suggestedCents: null, text: null, hint: `還不能估實際生活費，再核對一次更準${negText}`, duplicates };
+    if (!actual.ready) return { source: null, actual, monthlyCents: null, suggestedCents: null, text: null, hint: `還不能估實際生活費，再核對一次更準`, duplicates };
     const monthlyCents = actual.per30Cents;
-    return { source: 'snapshot', actual, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `實際生活費（帳戶核對近 ${actual.basis.days} 天推算，已扣掉固定支出與浮動收支）每 30 天約 ${Money.formatTWD(monthlyCents)}${negText}`, hint: null, duplicates };
+    return { source: 'snapshot', actual, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `實際生活費每 30 天約 ${Money.formatTWD(monthlyCents)}`, hint: null, duplicates };
   };
   // 本期還要付的支出依帳戶（Planning.spendingNeedByAccount）；livingBudgetCents 沒給時用生活費預算
   const spendNeedNow = (plan, facts, livingBudgetCents = plan.expenses.livingCents) => Planning.spendingNeedByAccount({
@@ -1179,10 +1179,12 @@ const App = (() => {
       ]),
       savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
     ]) : null;
-    const bar = el('div', { class: 'home-bar', role: 'img', 'aria-label': verdict.segments.map(s => `${s.label} ${Money.formatTWD(s.cents)}`).join('、') }, verdict.segments.map(s => {
-      const seg = el('span', { class: `seg-${s.key}` });
-      seg.style.flexGrow = String(s.cents); // CSP style-src 'self' blocks style attributes, not CSSOM
-      return seg;
+    // 分配圖：一個用途一列（名稱、細線、金額），收入＝100%；不用圖例，數字直接標在列上
+    const allocTotal = Math.max(1, verdict.segments.reduce((sum, s) => sum + s.cents, 0));
+    const bar = el('ul', { class: 'home-alloc' }, verdict.segments.filter(s => s.cents > 0).map(s => {
+      const fill = el('span', { class: 'alloc-fill' });
+      fill.style.width = `${Math.max(1, Math.round(s.cents / allocTotal * 100))}%`; // CSP style-src 'self' blocks style attributes, not CSSOM
+      return el('li', { class: `seg-${s.key}` }, [el('span', { class: 'alloc-label', text: s.label }), el('span', { class: 'alloc-track', 'aria-hidden': 'true' }, [fill]), el('span', { class: 'alloc-amt mono', text: Money.formatTWD(s.cents) })]);
     }));
     // 生活費是唯一能直接調的大項；放開滑桿才重算，拖動時只更新數字
     const livingFloor = expenses.derived ? 0 : q.monthlyEssentialExpenseCents;
@@ -1197,10 +1199,10 @@ const App = (() => {
       el('p', { class: 'home-daily', text: `每天可花 ${Money.formatTWD(savingsHealth.dailyLivingCents)}` }),
       // 結論 → 要做的事 → 本期轉帳 → 分配細節（長條、滑桿、進度）：使用者先看到該動手的，再看背景數字
       actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
+      statusRows.some(s => s.status.tag === '待確認入帳') ? el('p', {}, [el('button', { type: 'button', class: 'btn small', text: '到帳本確認入帳', onclick: () => $('.tab-btn[data-tab="ledger"]')?.click() })]) : null,
       transferView,
       debitCheckView,
       bar,
-      el('ul', { class: 'home-legend' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}`, text: `${s.label} ${Money.formatTWD(s.cents)}` }))),
       el('label', { class: 'home-slider' }, [
         el('span', {}, [document.createTextNode(`${allocation.rows.find(r => r.key === 'living').label}預算 `), livingValue]),
         el('input', {
@@ -1231,9 +1233,6 @@ const App = (() => {
           `建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。`,
           '每天可花＝生活費＋未分配的錢 ÷ 本月天數。'
         ]),
-        standingPlan.length ? el('p', { class: 'notice', text: `每期發薪後${sourceName ? `從${sourceName}` : ''}：${standingPlan.join('；')}，合計 ${Money.formatTWD(allocation.totalAllocatedCents)}。` }) : null,
-        el('p', { class: 'notice', text: `生活花費計入${spendAccounts.auto ? '（自動判斷）' : ''}：${config.accountProfiles.filter(a => spendAccounts.ids.has(a.id)).map(a => a.name).join('、') || '無'}；不含固定支出與帳戶間轉帳。${living.actual.ready ? `各發薪週期實際：${living.actual.perCycle.slice(-4).map(c => `${c.start.slice(5).replace('-', '/')} 起 ${Money.formatTWD(c.cents)}（${c.kind === 'measured' ? '實測' : '推估'}）`).join('、')}。` : '核對不足，暫不給實際生活費。'}` }),
-        ...statusRows.filter(s => s.status.level !== 'ok').map(({ row, status }) => el('p', { class: 'notice', text: `${row.label}：${status.text}` }))
       ])
     ]);
     root.innerHTML = '';
@@ -1252,7 +1251,7 @@ const App = (() => {
           el('td', {}, [el('div', { class: 'allocation-label', text: r.label }), el('div', { class: 'allocation-account', text: accountName(r.accountId) }),
             !r.required ? el('div', { class: 'allocation-account', text: `目標 ${Money.formatTWD(r.targetCents)}・已有 ${Money.formatTWD(r.savedCents)}・${r.targetMonth} 前` }) : null]),
           el('td', { class: 'mono allocation-amount', text: Money.formatTWD(r.allocatedCents) }),
-          el('td', { class: `allocation-status status-${st.level}` }, (st.lines || [st.text]).map((line, i) => el('div', { class: i ? 'status-detail' : 'status-headline' }, [i || !st.tag ? null : el('span', { class: `status-tag tag-${st.level}`, text: st.tag }), document.createTextNode(line)])))
+          el('td', { class: `allocation-status status-${st.level}` }, (st.lines || [st.text]).slice(0, 1).map((line, i) => el('div', { class: i ? 'status-detail' : 'status-headline' }, [i || !st.tag ? null : el('span', { class: `status-tag tag-${st.level}`, text: st.tag }), document.createTextNode(line)])))
         ]); }))
       ])]),
       selectedGoalLists,

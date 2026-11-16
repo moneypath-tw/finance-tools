@@ -272,17 +272,15 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .home-overview.level-short .home-headline { color: var(--negative); }
 .home-overview.level-watch .home-headline { color: var(--over-limit); }
 .home-daily { color: var(--ink-soft); }
-.home-bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: var(--rule); }
-.home-bar span { min-width: 3px; }
-.seg-fixed { --seg: #8A9A92; }
-.seg-living { --seg: #4F9A7A; }
-.seg-saving { --seg: var(--accent-strong); }
-.seg-spare { --seg: #C9DDD2; }
-.seg-short { --seg: var(--negative); }
-.home-bar span { background: var(--seg); }
-.home-bar .seg-short { background: repeating-linear-gradient(45deg, var(--negative) 0 4px, #E9C3C9 4px 8px); }
-.home-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; font-size: 0.85rem; }
-.home-legend li::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 5px; border-radius: 2px; background: var(--seg); }
+/* 分配圖：一個用途一列，細線長度＝占收入比例；只有生活費用強調色，不足用斜線，沒有圖例 */
+.home-alloc { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; font-size: 0.9rem; }
+.home-alloc li { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.alloc-track { display: block; height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; }
+.alloc-fill { display: block; height: 100%; min-width: 3px; background: var(--ink-soft); }
+.home-alloc .seg-living .alloc-fill { background: var(--accent); }
+.home-alloc .seg-short .alloc-fill { background: repeating-linear-gradient(45deg, var(--negative) 0 4px, var(--rule) 4px 8px); }
+.home-alloc .seg-short .alloc-amt { color: var(--negative); }
+.alloc-amt { text-align: right; font-variant-numeric: tabular-nums; }
 .home-slider, .home-progress { display: grid; gap: 4px; font-size: 0.9rem; }
 .home-slider input, .home-progress progress { width: 100%; accent-color: var(--accent); }
 .home-actions { margin: 0; padding-left: 1.3em; }
