@@ -470,7 +470,9 @@ const App = (() => {
     }
     const incomeAccountIds = [...new Set([mainIncome?.accountId, ...recurring.items.filter(f => f.type === 'income').map(f => f.accountId)].filter(Boolean))];
     const noData = !ledger.entries.some(e => e.status !== 'projected' && e.type !== 'wishlist') && !Object.values(balances).some(Boolean);
-    return { mainIncome, cycle, balances, dueTotalCents, paidCents, unconfirmedCents, dueRemainingCents: Math.max(0, dueTotalCents - paidCents), fixedNeedByAccount, fixedStartLackByAccount, fixedEarlyByAccount, spendAccounts, livingSpentCents, transferFacts, incomeAccountIds, noData };
+    // 本期還沒扣的租屋繳款（含繳租日），首頁轉帳說明用
+    const rentDue = dueEvents.filter(ev => ev.item.housingCalc && entryById.get(ev.id)?.status !== 'realized').map(ev => ({ accountId: ev.accountId, name: ev.item.name || '租屋', date: ev.date, cents: ev.cents }));
+    return { mainIncome, cycle, balances, rentDue, dueTotalCents, paidCents, unconfirmedCents, dueRemainingCents: Math.max(0, dueTotalCents - paidCents), fixedNeedByAccount, fixedStartLackByAccount, fixedEarlyByAccount, spendAccounts, livingSpentCents, transferFacts, incomeAccountIds, noData };
   };
   // 生活花費推估的唯一來源（首頁建議值、最低生活費、帳本都讀這裡），本機歷史紀錄優先：
   //   1. 逐筆帳目近幾個完整發薪週期的中位數；2. 逐筆帳目從第一筆到昨天換算每 30 天（週期還沒走完時）；
@@ -513,6 +515,18 @@ const App = (() => {
     d.setDate(d.getDate() - 1);
     return Money.ymd(d).slice(5).replace('-', '/');
   };
+  // 轉入後展望一行（首頁「本期轉帳」與分配表狀態共用 Planning.transferOutlook）：目標缺口、目標金額、期限依用途取自同一份分配結果
+  //   緊急預備金＝health.emergency；成本目標＝分配列自帶（gapCents／targetCents／months）；一般儲蓄沒有目標金額
+  const transferOutlookText = (health, row, inflowCents) => {
+    const isEmergency = row.key === 'emergency';
+    const hasTarget = isEmergency || Number.isFinite(row.gapCents);
+    return Planning.transferOutlook({
+      label: row.label, inflowCents, monthlyCents: row.allocatedCents,
+      gapCents: !hasTarget ? null : (isEmergency ? health.emergencyGapCents : row.gapCents),
+      targetCents: isEmergency ? health.emergency.targetCents : row.targetCents,
+      deadlineMonths: isEmergency ? 0 : row.months
+    });
+  };
   const allocationStatuses = (health) => {
     const f = health.facts;
     const d = config.dashboard;
@@ -537,7 +551,7 @@ const App = (() => {
           balanceCents: base.balanceCents - (f.fixedNeedByAccount[row.accountId] || 0) + (cashId ? f.balances[cashId] || 0 : 0),
           spentCents: f.livingSpentCents, spareCents: health.allocation.unallocatedCents };
       }
-      else facts = { ...base, ...(transfers.rowFacts[row.key] || {}), sharedWithIncome: incomeAccounts.has(row.accountId) };
+      else facts = { ...base, ...(transfers.rowFacts[row.key] || {}), sharedWithIncome: incomeAccounts.has(row.accountId), outlookOf: (inflowCents) => transferOutlookText(health, row, inflowCents) };
       statuses[row.key] = Planning.allocationStatus(row, f.cycle, facts);
     }
     const mainIncome = f.mainIncome;
@@ -650,7 +664,7 @@ const App = (() => {
         amountCents: isIncome ? ev.cents : -ev.cents,
         incomeSource: isIncome ? (recurringKinds[flow.kind] || flow.name || '其他') : null,
         essential: isIncome ? null : flow.essential !== false,
-        note: housingDue ? `${flow.name || '租屋'}：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
+        note: housingDue ? `${flow.name || '租屋'}（${Number(ev.date.slice(8))} 號繳租）：${housingDue.parts.map(p => `${p.label} ${Money.formatTWD(p.cents)}`).join('、')}（預測）` : (cycle > 1 ? `${flow.name || '固定支出'}：每月 ${Money.formatTWD(flow.grossCents)} × ${cycle} 個月（預測）` : `${flow.name || recurringKinds[flow.kind] || '固定項目'}（每月預測入帳）`)
       });
     }
     // 只清本月、由固定項目產生、仍是預測的帳目；已入帳的與過去月份一律保留
@@ -1096,16 +1110,26 @@ const App = (() => {
     // 轉帳不跟「要做的事」搶前 3 名，全部列在自己的區塊
     const transfers = savingsHealth.facts.noData ? [] : progress.transfers.transfers;
     const from = sourceName ? `從${sourceName}` : '';
-    const mustLines = transfers.filter(t => t.mustCents > 0).map(t => t.stay
-      ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.mustCents)}：從其他帳戶轉進來`
-      : `${from}轉 ${Money.formatTWD(t.mustCents)} 到${accountName(t.accountId)}（${t.mustPurposes.join('、')}）`);
-    const saveLines = transfers.filter(t => t.saveCents > 0).map(t => `${from}轉 ${Money.formatTWD(t.saveCents)} 到${accountName(t.accountId)}（${t.savePurposes.join('、')}）`);
+    // 每筆轉帳＝一句主指示＋每個用途一行說明（付款用：轉入後夠付多少；儲蓄：轉入後離目標還差多少、再幾個月達成）
+    const mustLines = transfers.filter(t => t.mustCents > 0).map(t => ({
+      text: t.stay
+        ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.mustCents)}：從其他帳戶轉進來`
+        : `${from}轉 ${Money.formatTWD(t.mustCents)} 到${accountName(t.accountId)}（${t.mustPurposes.join('、')}）`,
+      notes: [`${t.mustPurposes.join('、')}：${accountName(t.accountId)}本期還要付 ${Money.formatTWD(t.needCents)}，轉入後夠付，不會扣款失敗`,
+        // 租屋要寫明繳租日：錢要在這天前到位
+        ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${r.name}：${r.date.slice(5).replace('-', '/')} 繳租 ${Money.formatTWD(r.cents)}，要在這天前轉入`)]
+    }));
+    const saveLines = transfers.filter(t => t.saveCents > 0).map(t => ({
+      text: `${from}轉 ${Money.formatTWD(t.saveCents)} 到${accountName(t.accountId)}（${t.savePurposes.join('、')}）`,
+      notes: t.saveRows.filter(r => r.transferCents > 0).map(r => transferOutlookText(savingsHealth, savingsHealth.allocation.rows.find(x => x.key === r.key) || r, r.transferCents + r.projectedCents))
+    }));
+    const transferItem = ({ text, notes }) => el('li', {}, [el('span', { text }), ...notes.map(note => el('small', { class: 'home-transfer-note', text: note }))]);
     const transferView = mustLines.length || saveLines.length ? el('div', { class: 'home-transfers' }, [
       el('h3', { text: '本期轉帳' }),
       mustLines.length ? el('p', { class: 'home-transfer-head', text: '主：付款用，先轉（不轉會不夠扣款或付生活費）' }) : null,
-      mustLines.length ? el('ol', { class: 'home-actions home-transfer-must' }, mustLines.map(text => el('li', { text }))) : null,
+      mustLines.length ? el('ol', { class: 'home-actions home-transfer-must' }, mustLines.map(transferItem)) : null,
       saveLines.length ? el('p', { class: 'home-transfer-head', text: `次：儲蓄，付款的錢轉完還有剩再轉${mustLines.length ? '' : '（本期付款的錢已夠）'}；不夠可以延到下次發薪` }) : null,
-      saveLines.length ? el('ol', { class: 'home-actions home-transfer-save' }, saveLines.map(text => el('li', { text }))) : null
+      saveLines.length ? el('ol', { class: 'home-actions home-transfer-save' }, saveLines.map(transferItem)) : null
     ]) : null;
     const actions = [...accountWarnings, ...verdict.fixes, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入
@@ -1126,7 +1150,7 @@ const App = (() => {
       el('summary', { text: `扣款帳戶最低餘額（緩衝 ${config.dashboard.fixedBufferMonths} 個月）` }),
       el('div', { class: 'table-scroll' }, [el('table', {}, [
         el('thead', {}, [el('tr', {}, ['帳戶', '下次扣款', '扣款前一天至少', '扣款後至少留', '目前餘額', '本期建議多存'].map(h => el('th', { text: h })))]),
-        el('tbody', {}, floors.map(f => el('tr', {}, [el('td', { text: accountName(f.accountId) }), el('td', { class: 'mono', text: `${f.nextDate.slice(5).replace('-', '/')}　扣 ${Money.formatTWD(f.debitCents)}` }),
+        el('tbody', {}, floors.map(f => el('tr', {}, [el('td', { text: accountName(f.accountId) }), el('td', { class: 'mono', text: `${f.nextDate.slice(5).replace('-', '/')}　扣 ${Money.formatTWD(f.debitCents)}${f.rents.map(r => `；${r.name} ${r.date.slice(5).replace('-', '/')}（每月 ${r.payDay} 號）繳 ${Money.formatTWD(r.cents)}`).join('')}` }),
           el('td', { class: 'mono', text: Money.formatTWD(f.beforeCents) }), el('td', { class: 'mono', text: Money.formatTWD(f.afterCents) }),
           el('td', { class: `mono${(balances[f.accountId] || 0) < f.beforeCents ? ' neg' : ''}`, text: Money.formatTWD(balances[f.accountId] || 0) }),
           el('td', { class: 'mono', text: savingsHealth.facts.fixedEarlyByAccount[f.accountId] ? Money.formatTWD(savingsHealth.facts.fixedEarlyByAccount[f.accountId]) : '—' })])))
@@ -1150,6 +1174,9 @@ const App = (() => {
       hasRecurringIncome ? null : el('p', { class: 'home-sample' }, [document.createTextNode('目前是範例數字 '), el('button', { type: 'button', class: 'btn small', text: '設定我的收支', onclick: openIncomeSettings })]),
       el('p', { class: 'home-headline', text: verdict.headline }),
       el('p', { class: 'home-daily', text: `每天可花 ${Money.formatTWD(savingsHealth.dailyLivingCents)}` }),
+      // 結論 → 要做的事 → 本期轉帳 → 分配細節（長條、滑桿、進度）：使用者先看到該動手的，再看背景數字
+      actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
+      transferView,
       bar,
       el('ul', { class: 'home-legend' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}`, text: `${s.label} ${Money.formatTWD(s.cents)}` }))),
       el('label', { class: 'home-slider' }, [
@@ -1171,8 +1198,6 @@ const App = (() => {
       el('p', { class: 'home-goal', text: `最低生活費每月約 ${Money.formatTWD(minimumLivingCents)}（必要固定支出 ${Money.formatTWD(essentialPartCents)}＋生活花費 ${Money.formatTWD(livingPartCents)}${living.source ? '' : '，尚無實際花費，暫用預算'}）` }),
       living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，固定出入帳的排程帳目已確認，又另外手記了一筆同金額的帳，帳戶餘額會算錯，請到帳本刪掉其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
-      actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
-      transferView,
       habitsView.node,
       incomeView,
       floorsView,
@@ -1596,8 +1621,8 @@ const App = (() => {
     const syncIncomeFlow = (flow) => {
       if (flow.type === 'expense' && flow.housing) {
         flow.amountCents = Money.calcHousing(flow.housing).monthlyCents;
-        const startDay = Number(/^\d{4}-\d{2}-(\d{2})$/.exec(flow.housing.contractStart || '')?.[1]);
-        if (startDay) flow.dayOfMonth = startDay;
+        const payDay = Money.calcHousing(flow.housing).payDay; // 繳租日：自訂的號數，沒填沿用起租日
+        if (payDay) flow.dayOfMonth = payDay;
         return;
       }
       if (flow.type !== 'income') return;
@@ -1690,7 +1715,7 @@ const App = (() => {
       ]));
       return flowCard(flow, [
         el('span', { class: 'flow-name', text: flow.name || '租屋' }),
-        el('span', { class: 'flow-tag', text: `${rentCycleNames[r.cycle]}繳` }),
+        el('span', { class: 'flow-tag', text: `${rentCycleNames[r.cycle]}繳・${r.payDay ? `${r.payDay} 號` : '未填繳租日'}` }),
         el('span', { class: 'flow-amount negative mono', text: flow.active === false ? '未啟用' : `－${yuan(r.monthlyCents)}／月` }),
         next ? el('span', { class: 'flow-next', text: `下次 ${next.date} 繳 ${yuan(next.cents)}` }) : null
       ], [
@@ -1699,7 +1724,8 @@ const App = (() => {
           el('div', { class: 'field' }, [el('label', { text: '名稱' }), el('input', { value: flow.name || '', onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
           numField('月租（元）', Money.toYuan(h.rentCents || 0), (v) => { h.rentCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
           el('div', { class: 'field' }, [el('label', { text: '繳租方式' }), el('select', { onchange: (ev) => { h.payCycleMonths = Number(ev.target.value); saveFlow(); } }, Money.RENT_CYCLES.map(n => el('option', { value: n, text: `${rentCycleNames[n]}繳`, selected: r.cycle === n ? 'selected' : undefined })))]),
-          dateField('簽約起租日', h.contractStart, (v) => { h.contractStart = v; saveFlow(); }),
+          dateField('簽約起租日（第一個繳租月）', h.contractStart, (v) => { h.contractStart = v; saveFlow(); }),
+          numField('繳租日（每月幾號，空白＝同起租日）', h.payDay || '', (v) => { h.payDay = v >= 1 && v <= 31 ? Math.trunc(v) : undefined; saveFlow(); }),
           dateField('租約到期日（可空）', h.contractEnd, (v) => { h.contractEnd = v; saveFlow(); }),
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),

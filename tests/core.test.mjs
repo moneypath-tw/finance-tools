@@ -1558,3 +1558,63 @@ test('核對：浮動收支計入對帳，生活花費扣掉浮動收支的影�
   assert.equal(p.total.livingCents, 50000);          // 只剩真正的生活花費
   assert.equal(Snap.periods(snaps, [])[0].total.livingCents, -50000); // 不給帳目時維持舊算法
 });
+
+test('轉入後展望：說明用途、離目標還差多少、再幾個月達成；轉帳指示與分配狀態同一句', () => {
+  const P = api.Planning;
+  const o = (extra) => P.transferOutlook({ label: '緊急預備金', targetCents: 6000000, monthlyCents: 500000, ...extra });
+  // 缺口 30,000，轉入 5,000：還差 25,000，每月 5,000 再 5 個月
+  assert.equal(o({ gapCents: 3000000, inflowCents: 500000 }), '緊急預備金（目標 60,000元）：轉入後離目標還差 25,000元，照每月 5,000元 再 5 個月達成');
+  // 轉入後補滿缺口＝達成
+  assert.match(o({ gapCents: 500000, inflowCents: 500000 }), /轉入後達成目標/);
+  // 目標期限：含本期共 6 期、期限 12 個月內趕得上；期限 4 個月來不及
+  assert.match(o({ gapCents: 3000000, inflowCents: 500000, deadlineMonths: 12 }), /趕得上期限/);
+  assert.match(o({ gapCents: 3000000, inflowCents: 500000, deadlineMonths: 4 }), /比期限（4 個月內）晚/);
+  // 沒分配額不能除以 0；一般儲蓄沒有目標金額
+  assert.match(o({ gapCents: 3000000, inflowCents: 0, monthlyCents: 0 }), /無法估算/);
+  assert.match(P.transferOutlook({ label: '一般儲蓄', gapCents: null, inflowCents: 100 }), /沒有目標金額/);
+  // transferPlan 帶出每個儲蓄用途的轉入額，狀態列用同一份數字（待轉入時附展望一行）
+  const rows = [{ key: 'emergency', label: '緊急預備金', allocatedCents: 500000, requestedCents: 500000, shortfallCents: 0, accountId: 'save' }];
+  const t = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 0 } }, spendingNeed: { save: 100000 } }).transfers[0];
+  assert.deepEqual([t.saveRows[0].transferCents, t.needCents], [500000, 100000]);
+  const cycle = P.payCycle(new Date(2026, 9, 6), 5);
+  const status = P.allocationStatus(rows[0], cycle, { accountName: '儲蓄', movedInCents: 0, projectedInCents: 0, outlookOf: (inflow) => o({ gapCents: 3000000, inflowCents: inflow }) });
+  assert.match(status.text, /轉入後離目標還差 25,000元/);
+});
+
+test('繳租日：可獨立於起租日設定，沒填沿用起租日；排程與固定項目扣款日都用同一個號數', () => {
+  const M = api.Money;
+  const base = { rentCents: 1000000, payCycleMonths: 3, contractStart: '2026-01-15', contractEnd: '', occupants: 1, fees: [] };
+  const dates = (h) => [...M.housingPaymentSchedule(h, '2026-01-01', 3).map(p => p.date)]; // 載入的模組在別的 realm，轉成本地陣列才能 deepEqual
+  assert.deepEqual(dates(base), ['2026-01-15', '2026-04-15', '2026-07-15']); // 舊存檔不變
+  assert.deepEqual(dates({ ...base, payDay: 5 }), ['2026-01-05', '2026-04-05', '2026-07-05']);
+  assert.deepEqual(dates({ ...base, payDay: 31 }), ['2026-01-31', '2026-04-30', '2026-07-31']); // 小月夾到月底
+  assert.equal(M.housingDueInMonth({ ...base, payDay: 5 }, '2026-04').date, '2026-04-05');
+  assert.equal(M.calcHousing({ ...base, payDay: 5 }).payDay, 5);
+  assert.equal(M.calcHousing(base).payDay, 15);
+  // 固定項目的扣款日以繳租日為準，即使存檔裡的 dayOfMonth 是舊的
+  const summary = M.calcRecurringMonthly([{ id: 'r', name: '租屋', type: 'expense', kind: 'rent', dayOfMonth: 15, active: true, accountId: 'a', housing: { ...base, payDay: 5 } }]);
+  assert.equal(M.flowEvents(summary.items, '2026-04-01', '2026-04-30')[0].date, '2026-04-05');
+});
+
+test('繳租日超出 1–31 會被驗證擋下，空白或合法號數通過', () => {
+  const V = api.Validation;
+  const flow = (payDay) => ({ id: 'r', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: api.DEFAULT_CONFIG.accountProfiles[0].id, active: true, housing: { rentCents: 1000000, payCycleMonths: 1, contractStart: '2026-01-15', contractEnd: '', occupants: 1, fees: [], ...(payDay === undefined ? {} : { payDay }) } });
+  const codes = (payDay) => {
+    const config = structuredClone(api.DEFAULT_CONFIG);
+    config.recurringCashFlows = [flow(payDay)];
+    return [...V.validateWorkspace({ config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) }).errors.map(e => e.code)];
+  };
+  assert.ok(codes(32).includes('INVALID_PAY_DAY'));
+  assert.ok(codes(0).includes('INVALID_PAY_DAY'));
+  assert.ok(!codes(5).includes('INVALID_PAY_DAY'));
+  assert.ok(!codes(undefined).includes('INVALID_PAY_DAY'));
+});
+
+test('繳租日要出現在各租屋區塊：卡片欄位、扣款日同步、首頁本期轉帳、帳本預測備註、最低餘額表都讀同一個 payDay', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /繳租日（每月幾號/); // 租屋卡片欄位
+  assert.match(src, /Money\.calcHousing\(flow\.housing\)\.payDay/); // 扣款日同步不再只看起租日
+  assert.match(src, /facts\.rentDue\.filter|savingsHealth\.facts\.rentDue/); // 首頁本期轉帳
+  assert.match(src, /號繳租）/); // 帳本預測備註
+  assert.match(src, /f\.rents\.map/); // 最低餘額表
+});
