@@ -325,7 +325,9 @@ const Planning = (() => {
       const nextDate = a.flows.map(f => f.next.date).sort()[0];
       const beforeCents = a.heldAt(cycleIndexOf(nextDate, payday));
       const debitCents = a.flows.filter(f => f.next.date === nextDate).reduce((s, f) => s + f.next.cents, 0);
-      return { accountId, nextDate, debitCents, beforeCents, afterCents: beforeCents - debitCents, monthlyCents: a.monthlyCents, bufferCents: a.bufferCents };
+      // 租屋項目的下次繳租日（不一定是這個帳戶最近一次扣款），表上要寫明
+      const rents = a.flows.filter(f => f.item.housingCalc).map(f => ({ name: f.item.name || '租屋', date: f.next.date, cents: f.next.cents, payDay: f.item.housingCalc.payDay }));
+      return { accountId, nextDate, debitCents, rents, beforeCents, afterCents: beforeCents - debitCents, monthlyCents: a.monthlyCents, bufferCents: a.bufferCents };
     }).sort((x, y) => x.nextDate.localeCompare(y.nextDate));
   };
   // 名稱取自 ALLOCATION_PURPOSES；用途沒登記在那裡就直接報錯，免得新用途少了搭配帳戶選單
@@ -372,7 +374,7 @@ const Planning = (() => {
   //   fixed：{ dueTotalCents, paidCents, balanceCents, accountName }  本期還沒扣的固定支出要由帳戶餘額撐住
   //   living：{ spentCents, spareCents, balanceCents, accountName } 已花 vs 依天數比例的進度，剩餘每日可花
   //           spareCents＝分配完沒有用途的錢；每日可花跟摘要卡「每日生活費」一樣算進來，花超預算但沒超過它只算留意
-  //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, projectedInCents, sharedWithIncome, accountName }  發薪後應先轉入
+  //   其他（緊急預備金、儲蓄、成本目標）：{ movedInCents, projectedInCents, sharedWithIncome, accountName, outlookOf(inflowCents) }  發薪後應先轉入；outlookOf 回傳轉入後的展望一行（Planning.transferOutlook）
   //           projectedInCents＝本期固定儲蓄的預測轉帳（帳本還沒確認入帳）；夠的話只提醒確認，不判不足
   //   facts.noData：沒有任何已入帳帳目、帳戶餘額也都是 0 → 還沒開始記帳，不判斷進度（不然新使用者一打開就全紅）
   // tag＝整體狀態卡列出的簡短原因：「不足」可能是收入結構不夠，也可能只是本期還沒轉帳，兩者要分開講
@@ -426,11 +428,13 @@ const Planning = (() => {
     if (facts.sharedWithIncome) return out('watch', [`建議改搭配薪資以外的帳戶`, `因為${facts.accountName}也是薪資入帳帳戶，分不出這期轉入多少`], '無法追蹤', `${row.label}改搭配薪資以外的帳戶`);
     const moved = Math.max(0, facts.movedInCents || 0);
     if (moved >= target) return out('ok', `本期已轉入 ${fmt(moved)}，達建議 ${fmt(target)}`);
+    // 轉入後展望（facts.outlookOf 由呼叫端依目標缺口建好）：這次補上的金額含預計入帳，沒有目標資料時不顯示
+    const outlook = facts.outlookOf ? [facts.outlookOf(target - moved)] : [];
     const projected = Math.max(0, facts.projectedInCents || 0);
-    if (moved + projected >= target) return out('watch', [`轉帳後到帳本按「確認入帳」`, `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}，帳本還沒確認`], '待確認入帳', `固定儲蓄轉帳後到帳本按「確認入帳」（${fmt(projected)}）`);
-    if (cycle.elapsedDays <= 3) return out('watch', `發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, '待轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
+    if (moved + projected >= target) return out('watch', [`轉帳後到帳本按「確認入帳」`, `固定儲蓄預計轉入 ${fmt(projected)} 到${facts.accountName}，帳本還沒確認`, ...outlook], '待確認入帳', `固定儲蓄轉帳後到帳本按「確認入帳」（${fmt(projected)}）`);
+    if (cycle.elapsedDays <= 3) return out('watch', [`發薪後先轉入 ${fmt(target - moved)} 到${facts.accountName}`, ...outlook], '待轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
     const pendingNote = projected > 0 ? [`其中固定儲蓄預計轉入 ${fmt(projected)}，帳本尚未確認`] : [];
-    return out('short', [`先轉 ${fmt(target - moved)} 到${facts.accountName}`, `因為第 ${cycle.elapsedDays} 天了，本期還差 ${fmt(target - moved)} 沒轉入`, ...pendingNote], '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
+    return out('short', [`先轉 ${fmt(target - moved)} 到${facts.accountName}`, `因為第 ${cycle.elapsedDays} 天了，本期還差 ${fmt(target - moved)} 沒轉入`, ...pendingNote, ...outlook], '尚未轉入', `轉 ${fmt(target - moved)} 到${facts.accountName}（${row.label}）`, true);
   };
   // 每期轉帳指示的唯一算法，依目的帳戶合併（首頁「要做的事」與分配狀態的已轉入金額都讀這裡）：
   //   plannedCents＝每期要轉進該帳戶的分配額；薪資入帳帳戶的用途不用轉（stay，金額計入 stayCents）
@@ -467,6 +471,7 @@ const Planning = (() => {
       // debit lost its shortfall because only spend rows were checked)
       const spendLackCents = spendRows.length || spendingNeed[accountId] > 0 ? Math.max(0, (spendingNeed[accountId] || 0) - Math.max(0, Math.round(a.balanceCents || 0) - movedSave)) : 0;
       let remainingCents = spendLackCents;
+      const saveRows = [];
       for (const r of isStay ? [] : list.filter(r => !SPEND_KEYS.includes(r.key))) {
         const moved = Math.min(movedSave, r.allocatedCents);
         movedSave -= moved;
@@ -474,8 +479,9 @@ const Planning = (() => {
         projected -= proj;
         rowFacts[r.key] = { movedInCents: moved, projectedInCents: proj };
         remainingCents += r.allocatedCents - moved - proj;
+        saveRows.push({ key: r.key, label: r.label, transferCents: r.allocatedCents - moved - proj, projectedCents: proj, monthlyCents: r.allocatedCents });
       }
-      transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay,
+      transfers.push({ accountId, purposes: list.map(r => r.label), plannedCents, remainingCents, spendLackCents, stay: isStay, saveRows, needCents: Math.max(0, spendingNeed[accountId] || 0),
         mustCents: spendLackCents, mustPurposes: spendRows.length ? spendRows.map(r => r.label) : [purposeLabel('fixed')],
         saveCents: remainingCents - spendLackCents, savePurposes: isStay ? [] : list.filter(r => !SPEND_KEYS.includes(r.key)).map(r => r.label) });
     }
@@ -484,9 +490,23 @@ const Planning = (() => {
       if (byAccount.has(accountId) || !(needCents > 0)) continue;
       const lack = Math.max(0, needCents - Math.max(0, Math.round(accounts[accountId]?.balanceCents || 0)));
       if (lack > 0) transfers.push({ accountId, purposes: [purposeLabel('fixed')], plannedCents: 0, remainingCents: lack, spendLackCents: lack, stay: stay.has(accountId),
-        mustCents: lack, mustPurposes: [purposeLabel('fixed')], saveCents: 0, savePurposes: [] });
+        mustCents: lack, mustPurposes: [purposeLabel('fixed')], saveCents: 0, savePurposes: [], saveRows: [], needCents });
     }
     return { transfers, stayCents, rowFacts };
+  };
+  // 轉入後的展望（首頁「本期轉帳」與分配表狀態共用，同一句話）：這次轉入（含預計入帳）後離目標還差多少、照每月分配額再幾個月達成
+  //   gapCents＝目前離目標還差（沒有目標金額的一般儲蓄傳 null）；monthlyCents＝每月分配額；deadlineMonths＝目標期限剩幾個月（可省略）
+  const transferOutlook = ({ label, inflowCents, gapCents, monthlyCents, targetCents, deadlineMonths }) => {
+    if (gapCents === null || gapCents === undefined || !Number.isFinite(gapCents)) return `${label}：沒有目標金額，每期固定存入`;
+    const head = targetCents > 0 ? `${label}（目標 ${fmt(targetCents)}）` : label;
+    if (gapCents <= 0) return `${head}：已達目標，這筆是維持水位`;
+    const after = gapCents - Math.max(0, Math.round(inflowCents || 0));
+    if (after <= 0) return `${head}：轉入後達成目標`;
+    const monthly = Math.max(0, Math.round(monthlyCents || 0));
+    if (!(monthly > 0)) return `${head}：轉入後離目標還差 ${fmt(after)}，每月沒有分配額，無法估算何時達成`;
+    const months = Math.ceil(after / monthly);
+    const deadline = deadlineMonths > 0 ? (months + 1 > deadlineMonths ? `，比期限（${deadlineMonths} 個月內）晚` : `，趕得上期限（${deadlineMonths} 個月內）`) : '';
+    return `${head}：轉入後離目標還差 ${fmt(after)}，照每月 ${fmt(monthly)} 再 ${months} 個月達成${deadline}`;
   };
   // 首頁結論：只回答「這個月夠不夠、能存多少、差多少怎麼補」，數字全取自同一份分配結果（allocateMonthly）
   const homeVerdict = ({ allocation, emergency }) => {
@@ -611,5 +631,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, livingSpendHistory, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

@@ -154,7 +154,8 @@ const Money = (() => {
       const housingCalc = f.type === 'expense' && f.housing ? calcHousing(f.housing) : null;
       const amount = housingCalc ? housingCalc.monthlyCents : Math.abs(Number(f.amountCents) || 0);
       if (f.type === 'saving') return { ...f, grossCents: amount, netCents: 0, payroll: null };
-      return { ...f, grossCents: amount, netCents: -amount, payroll: null, housingCalc };
+      // 租屋的扣款日以繳租日為準（flowEvents 讀 dayOfMonth），不靠 App 同步寫回，舊資料的 dayOfMonth 過期也不會錯
+      return { ...f, ...(housingCalc?.payDay ? { dayOfMonth: housingCalc.payDay } : {}), grossCents: amount, netCents: -amount, payroll: null, housingCalc };
     });
     const incomeCents = items.filter(f => f.type === 'income').reduce((s, f) => s + f.netCents, 0);
     const essentialExpenseCents = items.filter(f => f.type === 'expense' && f.essential !== false).reduce((s, f) => s + f.grossCents, 0);
@@ -214,8 +215,11 @@ const Money = (() => {
     });
     const feesCents = fees.reduce((s, f) => s + f.monthlyCents, 0);
     const start = parseYmd(h.contractStart);
-    // 繳租日：從簽約日每 cycle 個月一次（小月夾到月底），到期日當天起不再繳
-    const paymentDateAt = (k) => dateInMonth(ymIndex(start.y, start.m) + k * cycle, start.d);
+    // 繳租日：繳租月從簽約起租月起每 cycle 個月一次，日期用 payDay（每月幾號繳；沒填沿用起租日的號數，舊存檔結果不變）；
+    // 小月夾到月底，到期日當天起不再繳
+    const customDay = Number(h.payDay);
+    const payDay = Number.isInteger(customDay) && customDay >= 1 && customDay <= 31 ? customDay : (start ? start.d : null);
+    const paymentDateAt = (k) => dateInMonth(ymIndex(start.y, start.m) + k * cycle, payDay);
     const nextPaymentOnOrAfter = (ymd, strict = false) => {
       if (!start || !parseYmd(ymd)) return null;
       const from = parseYmd(ymd);
@@ -261,7 +265,7 @@ const Money = (() => {
       }
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
     };
-    return { cycle, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    return { cycle, payDay, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {

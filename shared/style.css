@@ -288,6 +288,7 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .home-actions { margin: 0; padding-left: 1.3em; }
 .home-actions li { margin: 4px 0; }
 .home-transfer-head { margin: 8px 0 2px; font-weight: 600; }
+.home-transfer-note { display: block; font-size: 0.9em; color: var(--muted, inherit); font-weight: 400; }
 .home-ok { color: var(--accent); }
 body[data-view-mode="detailed"] .simple-only { display: none !important; }
 .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
