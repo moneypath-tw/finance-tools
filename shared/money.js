@@ -219,7 +219,11 @@ const Money = (() => {
     // 小月夾到月底，到期日當天起不再繳
     const customDay = Number(h.payDay);
     const payDay = Number.isInteger(customDay) && customDay >= 1 && customDay <= 31 ? customDay : (start ? start.d : null);
-    const paymentDateAt = (k) => dateInMonth(ymIndex(start.y, start.m) + k * cycle, payDay);
+    // 房租是預繳：第一次在入住（起租日）當天繳，涵蓋第一個週期；繳租日若比起租日早，第一次也不會早於入住日
+    const paymentDateAt = (k) => {
+      const date = dateInMonth(ymIndex(start.y, start.m) + k * cycle, payDay);
+      return k === 0 && date < h.contractStart ? h.contractStart : date;
+    };
     const nextPaymentOnOrAfter = (ymd, strict = false) => {
       if (!start || !parseYmd(ymd)) return null;
       const from = parseYmd(ymd);

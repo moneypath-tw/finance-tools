@@ -1586,7 +1586,7 @@ test('繳租日：可獨立於起租日設定，沒填沿用起租日；排程�
   const base = { rentCents: 1000000, payCycleMonths: 3, contractStart: '2026-01-15', contractEnd: '', occupants: 1, fees: [] };
   const dates = (h) => [...M.housingPaymentSchedule(h, '2026-01-01', 3).map(p => p.date)]; // 載入的模組在別的 realm，轉成本地陣列才能 deepEqual
   assert.deepEqual(dates(base), ['2026-01-15', '2026-04-15', '2026-07-15']); // 舊存檔不變
-  assert.deepEqual(dates({ ...base, payDay: 5 }), ['2026-01-05', '2026-04-05', '2026-07-05']);
+  assert.deepEqual(dates({ ...base, payDay: 5 }), ['2026-01-15', '2026-04-05', '2026-07-05']); // 預繳：第一次在入住日繳，不早於入住
   assert.deepEqual(dates({ ...base, payDay: 31 }), ['2026-01-31', '2026-04-30', '2026-07-31']); // 小月夾到月底
   assert.equal(M.housingDueInMonth({ ...base, payDay: 5 }, '2026-04').date, '2026-04-05');
   assert.equal(M.calcHousing({ ...base, payDay: 5 }).payDay, 5);
