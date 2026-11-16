@@ -1125,10 +1125,20 @@ test('單一權威來源：外部制度數字只寫在 reference-data.js，預�
   const distinctive = leaves.filter(([, v]) => (!Number.isInteger(v) && String(v).split('.')[1].length >= 3) || Math.abs(v) >= 1000);
   assert.ok(distinctive.length >= 5, 'the check still covers the rates');
   const files = ['index.html', ...fs.readdirSync(path.join(root, 'shared')).filter(f => f.endsWith('.js') && f !== 'reference-data.js').map(f => `shared/${f}`)];
-  for (const rel of files) {
+  // 說明文件同樣不得抄數字（會跟 reference-data.js 脫節）；掃描清單取目錄實際內容，新增文件自動納入。
+  // progress/ 是帶日期的歷史紀錄，不在範圍內。
+  const docs = ['README.md', 'SECURITY.md', ...['docs', 'scripts'].flatMap(d => fs.readdirSync(path.join(root, d)).filter(f => f.endsWith('.md')).map(f => `${d}/${f}`))];
+  assert.ok(docs.length >= 4, 'doc scan still finds the docs');
+  for (const rel of [...files, ...docs]) {
+    const isDoc = rel.endsWith('.md');
     src(rel).split('\n').forEach((line, i) => {
       if (/^\s*\/\//.test(line)) return;
       for (const [key, v] of distinctive) {
+        // 文件常寫成 28,590 或 11.5%：多比對千分位與百分比寫法（程式碼不會這樣寫，不套用）
+        if (isDoc) {
+          const forms = [v.toLocaleString('en-US'), Number.isInteger(v) ? null : `${Number((v * 100).toFixed(3))}%`].filter(Boolean);
+          if (forms.some(f => line.includes(f))) assert.fail(`${rel}:${i + 1} 文件抄了 ${key}=${v}，改寫「見 reference-data.js」或刪掉數字`);
+        }
         const lit = new RegExp(`(?<![\\w.])${String(v).replace('.', '\\.')}(?![\\w.])`);
         // `=== value` recognises an old save's stored default (a legacy migration), not a second source.
         if (lit.test(line) && !new RegExp(`=== ${String(v).replace('.', '\\.')}\\b`).test(line)) assert.fail(`${rel}:${i + 1} 寫死 ${key}=${v}，改讀 REFERENCE_DATA`);
