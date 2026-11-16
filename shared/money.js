@@ -42,6 +42,23 @@ const Money = (() => {
     return entry.account ? [[entry.account, amount]] : [];
   };
 
+  // 長期資料量：只讓「近 N 個月」（含本月與未來）直接顯示，更舊的依年月分組收起來，頁面不隨年數變長。
+  // 回傳 { recent: rows（原順序）, older: [{ ym, rows }]（新到舊）}；dateOf(row) 要回傳 YYYY-MM-DD。
+  const splitRecentMonths = (rows, dateOf, todayISO, months = 3) => {
+    const [y, m] = todayISO.split('-').map(Number);
+    const first = new Date(Date.UTC(y, m - months, 1)).toISOString().slice(0, 7);
+    const recent = [];
+    const groups = new Map();
+    for (const row of rows) {
+      const key = String(dateOf(row) || '').slice(0, 7);
+      if (!key || key >= first) { recent.push(row); continue; }
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+    const older = [...groups].sort(([a], [b]) => (a < b ? 1 : -1)).map(([ym, list]) => ({ ym, rows: list }));
+    return { recent, older };
+  };
+
   // 依 key 分組加總（key 可以是分類、帳戶、年月...），加總前一律先換算成台幣，避免混幣別直接相加
   const groupSum = (entries, keyFn, filterFn = () => true) => {
     const out = {};
@@ -939,7 +956,7 @@ const Money = (() => {
   };
 
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
+    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, splitRecentMonths, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
     getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, calcBilledStudentLoan, unbilledPeriods, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();
