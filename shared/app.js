@@ -1109,27 +1109,33 @@ const App = (() => {
     // 主次分開（Planning.transferPlan 的 mustCents／saveCents）：付款缺額不轉會扣款失敗或沒錢花，先列；儲蓄錢夠再轉。
     // 轉帳不跟「要做的事」搶前 3 名，全部列在自己的區塊
     const transfers = savingsHealth.facts.noData ? [] : progress.transfers.transfers;
-    const from = sourceName ? `從${sourceName}` : '';
-    // 每筆轉帳＝一句主指示＋每個用途一行說明（付款用：轉入後夠付多少；儲蓄：轉入後離目標還差多少、再幾個月達成）
+    // 視覺化：每筆轉帳＝「轉出帳戶 ──金額──▶ 轉入帳戶」一列，用途與繳租日用小標籤，離目標的說明收進「說明」；文字越少越好
+    const fromName = sourceName || '其他帳戶';
+    const shortDate = (date) => date.slice(5).replace('-', '/');
     const mustLines = transfers.filter(t => t.mustCents > 0).map(t => ({
-      text: t.stay
-        ? `${accountName(t.accountId)}餘額不夠付本期剩下的支出，差 ${Money.formatTWD(t.mustCents)}：從其他帳戶轉進來`
-        : `${from}轉 ${Money.formatTWD(t.mustCents)} 到${accountName(t.accountId)}（${t.mustPurposes.join('、')}）`,
-      notes: [`${t.mustPurposes.join('、')}：${accountName(t.accountId)}本期還要付 ${Money.formatTWD(t.needCents)}，轉入後夠付，不會扣款失敗`,
-        // 租屋要寫明繳租日：錢要在這天前到位
-        ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${r.name}：${r.date.slice(5).replace('-', '/')} 繳租 ${Money.formatTWD(r.cents)}，要在這天前轉入`)]
+      from: t.stay ? '其他帳戶' : fromName, to: accountName(t.accountId), cents: t.mustCents,
+      // 租屋要寫明繳租日：錢要在這天前到位
+      chips: [...t.mustPurposes, ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${shortDate(r.date)} 繳租`)],
+      notes: [`${accountName(t.accountId)}本期還要付 ${Money.formatTWD(t.needCents)}，轉入後夠付，不會扣款失敗`,
+        ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${r.name}：${shortDate(r.date)} 繳租 ${Money.formatTWD(r.cents)}，要在這天前轉入`)]
     }));
     const saveLines = transfers.filter(t => t.saveCents > 0).map(t => ({
-      text: `${from}轉 ${Money.formatTWD(t.saveCents)} 到${accountName(t.accountId)}（${t.savePurposes.join('、')}）`,
+      from: fromName, to: accountName(t.accountId), cents: t.saveCents, chips: t.savePurposes,
       notes: t.saveRows.filter(r => r.transferCents > 0).map(r => transferOutlookText(savingsHealth, savingsHealth.allocation.rows.find(x => x.key === r.key) || r, r.transferCents + r.projectedCents))
     }));
-    const transferItem = ({ text, notes }) => el('li', {}, [el('span', { text }), ...notes.map(note => el('small', { class: 'home-transfer-note', text: note }))]);
+    const flowRow = (line) => el('li', { class: 'flow-row' }, [
+      el('span', { class: 'flow-acct', text: line.from }),
+      el('span', { class: 'flow-link' }, [el('span', { class: 'flow-amt mono', text: Money.formatTWD(line.cents) }), el('span', { class: 'flow-arrow', 'aria-hidden': 'true' })]),
+      el('span', { class: 'flow-acct', text: line.to }),
+      el('span', { class: 'flow-chips' }, line.chips.map(c => el('span', { class: 'flow-chip', text: c }))),
+      line.notes.length ? el('details', { class: 'flow-detail' }, [el('summary', { text: '說明' }), ...line.notes.map(note => el('small', { class: 'home-transfer-note', text: note }))]) : null
+    ]);
     const transferView = mustLines.length || saveLines.length ? el('div', { class: 'home-transfers' }, [
       el('h3', { text: '本期轉帳' }),
-      mustLines.length ? el('p', { class: 'home-transfer-head', text: '主：付款用，先轉（不轉會不夠扣款或付生活費）' }) : null,
-      mustLines.length ? el('ol', { class: 'home-actions home-transfer-must' }, mustLines.map(transferItem)) : null,
-      saveLines.length ? el('p', { class: 'home-transfer-head', text: `次：儲蓄，付款的錢轉完還有剩再轉${mustLines.length ? '' : '（本期付款的錢已夠）'}；不夠可以延到下次發薪` }) : null,
-      saveLines.length ? el('ol', { class: 'home-actions home-transfer-save' }, saveLines.map(transferItem)) : null
+      mustLines.length ? el('p', { class: 'home-transfer-head', text: '先轉・付款用' }) : null,
+      mustLines.length ? el('ul', { class: 'flow-list' }, mustLines.map(flowRow)) : null,
+      saveLines.length ? el('p', { class: 'home-transfer-head', text: mustLines.length ? '再轉・儲蓄（可延到下次發薪）' : '儲蓄（可延到下次發薪）' }) : null,
+      saveLines.length ? el('ul', { class: 'flow-list' }, saveLines.map(flowRow)) : null
     ]) : null;
     const actions = [...accountWarnings, ...verdict.fixes, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入

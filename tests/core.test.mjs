@@ -1685,3 +1685,35 @@ test('租屋卡片有押金欄位並說明是暫付款', () => {
   assert.match(src, /押金（元，退租時退回，不算支出）/);
   assert.match(src, /是暫付款，不算租金也不算支出/);
 });
+
+test('上次實際繳租日是繳款錨點：那天一次繳「起租至該日的電費＋之後一個週期的房租」，之後每個週期一次', () => {
+  const M = api.Money;
+  const h = { rentCents: 1000000, payCycleMonths: 6, contractStart: '2026-05-20', contractEnd: '2027-11-20', occupants: 1, fees: [], lastPaidDate: '2026-11-16',
+    electricity: { enabled: true, rateCentsPerKwh: 500, fallbackMonthlyKwh: 100 } };
+  const r = M.calcHousing(h);
+  const days = Math.round((Date.UTC(2026, 10, 16) - Date.UTC(2026, 4, 20)) / 86400000); // 起租到繳租日
+  const bill = Math.round(((100 * 12 / 365) * days * 500) / 100) * 100;
+  const first = r.paymentOn('2026-11-16');
+  assert.equal(first.parts.find(p => p.label === '房租 6 個月').cents, 6000000);
+  assert.equal(first.parts.find(p => /電費/.test(p.label)).cents, bill);
+  // 排程：錨點當天就是第一筆，之後每 6 個月
+  assert.deepEqual([...M.housingPaymentSchedule(h, '2026-11-16', 3).map(p => p.date)], ['2026-11-16', '2027-05-16', '2027-11-16']); // 最後一次離到期只剩 4 天，只收 1 個月
+  assert.equal(M.housingDueInMonth(h, '2026-11').date, '2026-11-16');
+  assert.equal(M.housingDueInMonth(h, '2026-11').totalCents, first.cents);
+  assert.equal(M.housingDueInMonth(h, '2026-12').totalCents, 0);
+  assert.equal(M.housingDueInMonth(h, '2027-05').date, '2027-05-16');
+  // 沒填錨點：仍從起租日排起，舊結果不變
+  assert.equal(M.calcHousing({ ...h, lastPaidDate: '' }).paymentDateAt(0), '2026-05-20');
+});
+
+test('首頁本期轉帳用「轉出帳戶→轉入帳戶」視覺列，標出繳租日、說明預設收合', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.match(src, /class: 'flow-row'/);
+  assert.match(src, /class: 'flow-acct', text: line\.from/);
+  assert.match(src, /class: 'flow-acct', text: line\.to/);
+  assert.match(src, /繳租`/);
+  assert.match(src, /el\('details', \{ class: 'flow-detail' \}/);
+  assert.doesNotMatch(src, /flow-detail'[^)]*open/);
+  assert.match(css, /\.flow-arrow::after/);
+});
