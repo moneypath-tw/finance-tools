@@ -83,8 +83,8 @@ const DEFAULT_LEDGER = { schemaVersion: 2, entries: [] };
 // They are real money (balances, reconcile) but never part of the monthly plan, and expenses are not living spend.
 // Expense natures list common non-subsistence spending so the user can see where non-essential money went.
 const FLOATING_NATURES = Object.freeze({
-  income: ['接案', '獎金', '二手出售', '退款', '利息股利', '其他'],
-  expense: ['旅遊', '娛樂', '3C 電子', '服飾美妝', '禮金紅包', '醫療', '家具家電', '進修', '其他']
+  income: ['接案', '兼職零工', '獎金', '二手出售', '退款', '利息股利', '租金收入', '補助津貼', '紅包禮金', '其他'],
+  expense: ['旅遊', '娛樂', '3C 電子', '服飾美妝', '禮金紅包', '醫療', '家具家電', '進修', '聚餐外食', '交通修車', '保險稅款', '運動健身', '寵物', '捐款', '其他']
 });
 
 // 首頁分配用途（依分配先後）：新增用途只要加在這裡，「必備分配帳戶」選單、帳戶檢查與修復都會自動帶到
