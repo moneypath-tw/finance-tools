@@ -8,6 +8,13 @@ import { root, scanLongSentences, MAX_SENTENCE_LEN } from './text-scan.mjs';
 
 const baseline = JSON.parse(fs.readFileSync(path.join(root, 'tests/long-text-baseline.json'), 'utf8'));
 
+test('長說明只用 noteLines／foldNotes 一個建構處（可重複使用的編排）', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.equal(src.match(/const noteLines = /g)?.length, 1);
+  assert.equal(src.match(/const foldNotes = /g)?.length, 1);
+  for (const id of ['home-floors-how', 'recon-used-how', 'recon-formula-how']) assert.ok(src.includes(`foldNotes('${id}'`), `${id} 要走 foldNotes`);
+});
+
 test(`說明句長度：超過 ${MAX_SENTENCE_LEN} 字的句子只准減不准增`, () => {
   const found = new Map();
   for (const f of scanLongSentences()) found.set(f.key, Math.max(found.get(f.key) ?? 0, f.len));

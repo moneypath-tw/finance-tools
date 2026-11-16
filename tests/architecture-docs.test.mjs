@@ -59,7 +59,7 @@ test('文字與視覺規範：寫的字數上限等於程式常數', () => {
 
 test('決定紀錄：每個段落標題都有「（使用者 YYYY-MM-DD…）」', () => {
   const log = read('docs/決定紀錄.md');
-  const headings = log.split('\n').filter((l) => l.startsWith('## '));
+  const headings = log.split(/\r?\n/).filter((l) => l.startsWith('## '));
   assert.ok(headings.length >= 5, '決定紀錄仍有內容');
   for (const h of headings) assert.match(h, /（使用者 \d{4}-\d{2}-\d{2}[^）]*）$/, `標題格式不符：${h}`);
 });

@@ -265,7 +265,7 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .estimate-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #EADFC8; border-radius: 10px; background: #FCF9F2; font-size: 0.88rem; }
 .estimate-notice p { margin: 0; flex: 1 1 280px; }
 /* 首頁結論（結論模式）：一句結論、分配長條、生活費滑桿、緊急預備金進度、要做的事 */
-.home-overview { display: grid; gap: 10px; }
+.home-overview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; } /* minmax(0,…)：寬表格不能把整欄撐出畫面 */
 .home-overview p { margin: 0; }
 .home-sample { font-size: 0.85rem; color: var(--over-limit); display: flex; align-items: center; gap: 8px; }
 .home-headline { font-size: 1.35rem; font-weight: 700; }
