@@ -231,6 +231,22 @@ const Money = (() => {
       }
       return null;
     };
+    // 上次繳租日：有記錄用記錄，沒記錄就依排程推估（今天或之前最近的一個繳租日，租約開始前為 null）
+    const previousPaymentOnOrBefore = (ymd) => {
+      const to = parseYmd(ymd);
+      if (!start || !to) return null;
+      let k = Math.floor((ymIndex(to.y, to.m) - ymIndex(start.y, start.m)) / cycle) + 1;
+      for (; k >= 0; k -= 1) {
+        const date = paymentDateAt(k);
+        if (date <= ymd) return h.contractEnd && date >= h.contractEnd ? null : date;
+      }
+      return null;
+    };
+    const lastPaidRecorded = parseYmd(h.lastPaidDate) ? h.lastPaidDate : null;
+    const lastPaid = lastPaidRecorded ? { date: lastPaidRecorded, estimated: false } : (() => {
+      const date = previousPaymentOnOrBefore(ymd(new Date()));
+      return date ? { date, estimated: true } : null;
+    })();
     // 電費跟房租同一天繳：每個繳租日結清上次抄表到該日的用電
     const e = h.electricity || {};
     const rate = Math.max(0, Number(e.rateCentsPerKwh) || 0);
@@ -265,7 +281,7 @@ const Money = (() => {
       }
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
     };
-    return { cycle, payDay, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    return { cycle, payDay, lastPaid, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {

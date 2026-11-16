@@ -238,7 +238,7 @@ const Validation = (() => {
           if (!integer(h.rentCents) || h.rentCents < 0) errors.push(error(`${hp}.rentCents`, 'INVALID_MONEY', '月租必須是非負整數分'));
           if (h.payDay !== undefined && h.payDay !== '' && (!integer(h.payDay) || h.payDay < 1 || h.payDay > 31)) errors.push(error(`${hp}.payDay`, 'INVALID_PAY_DAY', '繳租日須為 1–31 的整數（每月幾號）'));
           if (!integer(h.occupants) || h.occupants < 1) errors.push(error(`${hp}.occupants`, 'INVALID_OCCUPANTS', '同住人數至少 1 人'));
-          if (!optDate(h.contractStart) || !optDate(h.contractEnd)) errors.push(error(hp, 'INVALID_DATE', '租約日期格式不正確'));
+          if (!optDate(h.contractStart) || !optDate(h.contractEnd) || !optDate(h.lastPaidDate)) errors.push(error(hp, 'INVALID_DATE', '租約日期格式不正確'));
           if (!Array.isArray(h.fees) || h.fees.some(x => !x || !integer(x.amountCents) || x.amountCents < 0)) errors.push(error(`${hp}.fees`, 'INVALID_MONEY', '租屋費用金額必須是非負整數分'));
           const e = h.electricity || {};
           if (![e.rateCentsPerKwh, e.lastReading, e.currentReading, e.fallbackMonthlyKwh].every(nonNeg) || !optDate(e.lastReadingDate) || !optDate(e.currentReadingDate)) errors.push(error(`${hp}.electricity`, 'INVALID_ELECTRICITY', '電費設定的度數、單價或日期不正確'));
