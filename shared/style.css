@@ -556,3 +556,8 @@ tbody tr:last-child td { border-bottom: 0; }
 .flow-chip { border: 1px solid var(--muted, currentColor); border-radius: 999px; padding: 0 8px; font-size: 0.85em; }
 .flow-detail { grid-column: 1 / -1; font-size: 0.9em; }
 .flow-detail summary { cursor: pointer; color: var(--muted, inherit); }
+
+/* 生活花費計入帳戶：一列一個帳戶，原因換行用次要色（--ink-soft 對白底 4.97、對 --paper 4.57，皆 ≥4.5） */
+.living-spend-accounts { flex-direction: column; align-items: flex-start; gap: 8px; }
+.living-spend-accounts label { display: flex; align-items: flex-start; gap: 6px; }
+.living-spend-accounts .spend-reason { display: block; color: var(--ink-soft); font-size: 0.85rem; }

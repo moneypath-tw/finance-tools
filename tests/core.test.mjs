@@ -1764,3 +1764,12 @@ test('帳本頁順序：核對→新增→明細→摘要，浮動收支與個�
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.ok(/personal\?\.closest\('details'\)/.test(src), '設定我的收支要先展開折疊');
 });
+
+test('視覺：個人設定折疊仍帶 edit-card（簡易模式隱藏）、計入帳戶原因用次要色且不靠顏色傳達', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(html, /<details class="[^"]*edit-card[^"]*"[^>]*data-collapse-id="ledger-personal"/);
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.match(css, /\.living-spend-accounts \.spend-reason \{[^}]*var\(--ink-soft\)/);
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(src.includes("'計入' : '不計入'"), '計入與否要用文字標示，不只靠顏色');
+});
