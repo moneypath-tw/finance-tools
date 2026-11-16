@@ -111,8 +111,15 @@ const App = (() => {
       el('small', { class: 'notice', text: `系統推算目前約 ${age} 歲；因未輸入生日，可能相差 1 歲。` })
     ]);
   };
-  const accountNatures = { checking: '活存／收支', savings: '儲蓄', cash: '現金', investment: '投資', credit: '信用／負債', earmarked: '專款' };
-  const BUILTIN_LIQUID_NATURES = ['cash', 'checking', 'savings', 'earmarked'];
+  // 內建帳戶性質＝一張表（代號、名稱、算不算可動用資金）；新增市面常見類型只改這裡，選單與可動用判斷自動帶到
+  const BUILTIN_NATURES = [
+    ['checking', '活存／收支', true], ['savings', '儲蓄', true], ['cash', '現金', true],
+    ['foreign', '外幣帳戶', true], ['ewallet', '電子支付／儲值卡', true], ['earmarked', '專款', true],
+    ['timeDeposit', '定存', false], ['investment', '投資（證券／基金）', false], ['insurance', '保險／儲蓄險', false],
+    ['retirement', '退休金', false], ['property', '不動產', false], ['credit', '信用卡／貸款（負債）', false]
+  ];
+  const accountNatures = Object.fromEntries(BUILTIN_NATURES.map(([id, label]) => [id, label]));
+  const BUILTIN_LIQUID_NATURES = BUILTIN_NATURES.filter(([, , liquid]) => liquid).map(([id]) => id);
   // 使用者自訂的帳戶性質（config.customAccountNatures），可設定是否算可動用資金
   const natureLabels = () => ({ ...accountNatures, ...Object.fromEntries((config.customAccountNatures || []).map(n => [n.id, n.label || '未命名性質'])) });
   const isLiquidNature = (nature) => BUILTIN_LIQUID_NATURES.includes(nature) || (config.customAccountNatures || []).some(n => n.id === nature && n.liquid !== false);

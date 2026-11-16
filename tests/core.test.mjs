@@ -1817,3 +1817,16 @@ test('首頁分配圖是依比例分段的單一長條，每段標占比與金�
   const planning = fs.readFileSync(path.join(root, 'shared/planning.js'), 'utf8');
   assert.match(planning, /\{ key: 'fixed', label: fixed\.label, cents: fixed\.allocatedCents \}/);
 });
+
+test('帳戶性質與浮動收支性質含市面常見項目，且流動／非流動分類固定', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  for (const id of ['foreign', 'ewallet', 'timeDeposit', 'insurance', 'retirement', 'property']) assert.ok(src.includes(`['${id}',`), id);
+  assert.match(src, /\['timeDeposit', '定存', false\]/);
+  assert.match(src, /\['ewallet', '電子支付／儲值卡', true\]/);
+  assert.match(src, /BUILTIN_LIQUID_NATURES = BUILTIN_NATURES\.filter/);
+  const natures = vm.runInContext('FLOATING_NATURES', ctx);
+  for (const n of ['租金收入', '兼職零工']) assert.ok(natures.income.includes(n), n);
+  for (const n of ['聚餐外食', '交通修車', '保險稅款']) assert.ok(natures.expense.includes(n), n);
+  assert.equal(natures.income.at(-1), '其他');
+  assert.equal(natures.expense.at(-1), '其他');
+});
