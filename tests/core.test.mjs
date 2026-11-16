@@ -1424,6 +1424,13 @@ test('核對：實際生活費——天數不足或只有一次核對不估，�
   assert.equal(r.per30Cents, 3000000);
 });
 
+test('實際生活費只有一個來源：app 讀 Snapshots.livingActual，不再用逐筆明細或「最低生活費」', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(/Snapshots\.livingActual\(/.test(src));
+  assert.ok(!/Planning\.livingSpendHistory/.test(src), '生活費不可再讀逐筆明細加總');
+  assert.ok(!src.includes('最低生活費'), '「最低生活費」已刪，只留預算→實際→每日可花');
+});
+
 test('核對：生活花費推估用合計天數，總資產曲線標出進步／退步', () => {
   const ps = [{ days: 10, total: { livingCents: 100000, fixedOutCents: 0 } }, { days: 20, total: { livingCents: 500000, fixedOutCents: 50000 } }];
   assert.equal(Snap.livingEstimate(ps).livingPer30Cents, 600000);
