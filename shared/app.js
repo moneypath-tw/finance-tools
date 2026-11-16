@@ -1112,33 +1112,36 @@ const App = (() => {
     // 主次分開（Planning.transferPlan 的 mustCents／saveCents）：付款缺額不轉會扣款失敗或沒錢花，先列；儲蓄錢夠再轉。
     // 轉帳不跟「要做的事」搶前 3 名，全部列在自己的區塊
     const transfers = savingsHealth.facts.noData ? [] : progress.transfers.transfers;
-    // 視覺化：每筆轉帳＝「轉出帳戶 ──金額──▶ 轉入帳戶」一列，用途與繳租日用小標籤，離目標的說明收進「說明」；文字越少越好
+    // 轉帳資料：來源／目的／金額／用途標籤；租屋繳租日放進標籤，逐筆說明不顯示（結論＋數字就夠）
     const fromName = sourceName || '其他帳戶';
     const shortDate = (date) => date.slice(5).replace('-', '/');
     const mustLines = transfers.filter(t => t.mustCents > 0).map(t => ({
       from: t.stay ? '其他帳戶' : fromName, to: accountName(t.accountId), cents: t.mustCents,
       // 租屋要寫明繳租日：錢要在這天前到位
-      chips: [...t.mustPurposes, ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${shortDate(r.date)} 繳租`)],
-      notes: [`${accountName(t.accountId)}本期還要付 ${Money.formatTWD(t.needCents)}，轉入後夠付，不會扣款失敗`,
-        ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${r.name}：${shortDate(r.date)} 繳租 ${Money.formatTWD(r.cents)}，要在這天前轉入`)]
+      chips: [...t.mustPurposes, ...savingsHealth.facts.rentDue.filter(r => r.accountId === t.accountId).map(r => `${shortDate(r.date)} 繳租`)]
     }));
     const saveLines = transfers.filter(t => t.saveCents > 0).map(t => ({
-      from: fromName, to: accountName(t.accountId), cents: t.saveCents, chips: t.savePurposes,
-      notes: t.saveRows.filter(r => r.transferCents > 0).map(r => transferOutlookText(savingsHealth, savingsHealth.allocation.rows.find(x => x.key === r.key) || r, r.transferCents + r.projectedCents))
+      from: fromName, to: accountName(t.accountId), cents: t.saveCents, chips: t.savePurposes
     }));
-    const flowRow = (line) => el('li', { class: 'flow-row' }, [
-      el('span', { class: 'flow-acct', text: line.from }),
-      el('span', { class: 'flow-link' }, [el('span', { class: 'flow-amt mono', text: Money.formatTWD(line.cents) }), el('span', { class: 'flow-arrow', 'aria-hidden': 'true' })]),
-      el('span', { class: 'flow-acct', text: line.to }),
-      el('span', { class: 'flow-chips' }, line.chips.map(c => el('span', { class: 'flow-chip', text: c }))),
-      line.notes.length ? el('details', { class: 'flow-detail' }, [el('summary', { text: '說明' }), ...line.notes.map(note => el('small', { class: 'home-transfer-note', text: note }))]) : null
-    ]);
-    const transferView = mustLines.length || saveLines.length ? el('div', { class: 'home-transfers' }, [
+    // 依來源帳戶分組：一張卡一個來源、一列一個目的地（用途・金額）；付款用排在儲蓄前，儲蓄標明可延後
+    const transferGroups = (() => {
+      const groups = new Map();
+      [...mustLines.map(l => ({ ...l, kind: '付款用' })), ...saveLines.map(l => ({ ...l, kind: '儲蓄・可延到下次發薪' }))].forEach(l => {
+        if (!groups.has(l.from)) groups.set(l.from, []);
+        groups.get(l.from).push(l);
+      });
+      return [...groups].map(([from, rows]) => ({ from, rows, totalCents: rows.reduce((sum, r) => sum + r.cents, 0) }));
+    })();
+    const transferView = transferGroups.length ? el('div', { class: 'home-transfers' }, [
       el('h3', { text: '本期轉帳' }),
-      mustLines.length ? el('p', { class: 'home-transfer-head', text: '先轉・付款用' }) : null,
-      mustLines.length ? el('ul', { class: 'flow-list' }, mustLines.map(flowRow)) : null,
-      saveLines.length ? el('p', { class: 'home-transfer-head', text: mustLines.length ? '再轉・儲蓄（可延到下次發薪）' : '儲蓄（可延到下次發薪）' }) : null,
-      saveLines.length ? el('ul', { class: 'flow-list' }, saveLines.map(flowRow)) : null
+      ...transferGroups.map(g => el('section', { class: 'xfer-group' }, [
+        el('header', { class: 'xfer-head' }, [el('span', { text: `從${g.from}轉出` }), el('span', { class: 'mono', text: Money.formatTWD(g.totalCents) })]),
+        el('ul', { class: 'xfer-rows' }, g.rows.map(r => el('li', {}, [
+          el('span', { class: 'xfer-to', text: r.to }),
+          el('span', { class: 'xfer-chips', text: [r.kind, ...r.chips].join('・') }),
+          el('span', { class: 'xfer-amt mono', text: Money.formatTWD(r.cents) })
+        ])))
+      ]))
     ]) : null;
     // 固定扣款帳戶檢核（只提醒、不擋）：每個有本期扣款的帳戶一列；需要的錢與缺額取自 transferPlan，不另算
     const debitChecks = savingsHealth.facts.noData ? [] : progress.transfers.checks;
@@ -2115,6 +2118,20 @@ const App = (() => {
         el('h3', { text: '各期比較' }),
         ...(() => {
           const periodSplit = Money.splitRecentMonths(periods, x => x.to, localToday(), 3);
+          // 每期一列：期間、細線（長度＝該期推算用掉，相對本頁最大一期）、總資產變化；有少記才多一行提醒
+          const maxOutflow = Math.max(1, ...periods.map(x => Math.abs(x.total.outflowCents || 0)));
+          const periodLines = (list) => el('ul', { class: 'period-lines' }, list.map(x => {
+            const pt = assets.find(a => a.date === x.to) || {};
+            const fill = el('span', { class: 'alloc-fill' });
+            fill.style.width = `${Math.max(1, Math.round(Math.abs(x.total.outflowCents || 0) / maxOutflow * 100))}%`; // CSSOM, not a style attribute (CSP)
+            const change = pt.changeCents === null || pt.changeCents === undefined ? '—' : Money.formatTWD(pt.changeCents);
+            return el('li', {}, [
+              el('span', { class: 'period-label', text: `${x.from.slice(5)}→${x.to.slice(5)}` }),
+              el('span', { class: 'alloc-track', 'aria-hidden': 'true' }, [fill]),
+              el('span', { class: `alloc-amt mono${pt.changeCents < 0 ? ' neg' : ''}`, text: change }),
+              x.total.unrecordedCents ? el('small', { class: 'period-flag neg', text: `${x.total.unrecordedCents < 0 ? '支出' : '收入'}少記 ${Money.formatTWD(Math.abs(x.total.unrecordedCents))}` }) : null
+            ]);
+          }));
           const periodTable = (list) => el('div', { class: 'table-scroll' }, [el('table', {}, [
           el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '浮動收支', '生活花費', '每 30 天', '對帳', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
           el('tbody', {}, list.map(x => {
@@ -2133,7 +2150,7 @@ const App = (() => {
               el('td', { text: x.note })]);
           }))
         ])]);
-          return [periodTable(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodTable(g.rows)]))];
+          return [periodLines(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodLines(g.rows)])), el('details', { class: 'compact-settings', 'data-collapse-id': 'periods-full-table' }, [el('summary', { text: '完整欄位表' }), periodTable(periods)])];
         })(),
         foldNotes('recon-formula-how', '生活花費怎麼算', [
           '生活花費＝推算用掉－固定支出＋浮動收入－浮動支出。',
