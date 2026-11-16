@@ -132,6 +132,45 @@ const Snapshots = (() => {
     if (days < minDays) return null;
     return { days, periods: used, livingPer30Cents: Math.round(living * 30 / days), fixedPer30Cents: Math.round(fixed * 30 / days) };
   };
+  // 發薪週期對齊的「實際生活費」（docs/生活費整併規劃.md 第四節）：兩次核對之間的殘差 livingCents 按天數線性分攤，
+  // 完整被核對涵蓋的週期標 measured，其餘沿用最近速率標 estimated。periodList 為 periods() 的輸出（新到舊）。
+  // 殘差為負（錢變多，多半漏記收入）的期間不納入，列在 negatives 讓畫面提示
+  const livingActual = (periodList, { payday, today, minDays = 14, maxDays = 93 } = {}) => {
+    const empty = { ready: false, perCycle: [], per30Cents: null, basis: null, negatives: [] };
+    const negatives = (periodList || []).filter(p => p.days > 0 && p.total.livingCents < 0)
+      .map(p => ({ from: p.from, to: p.to, extraCents: -p.total.livingCents }));
+    const usable = (periodList || []).filter(p => p.days > 0 && p.total.livingCents >= 0);
+    let days = 0, cents = 0, used = [];
+    for (const p of usable) {
+      if (days >= maxDays) break;
+      days += p.days; cents += p.total.livingCents; used.push(p);
+    }
+    if (days < minDays) return { ...empty, negatives };
+    const pooled = cents / days;
+    // 太短的區段（隔兩天就核對）速率太抖，用合併速率；夠長才用自己的
+    const rateOf = (p) => (p.days >= minDays ? p.total.livingCents / p.days : pooled);
+    const latest = used[0];
+    const latestRate = rateOf(latest);
+    const dayStr = (d) => Money.ymd(d);
+    const addDays = (ymd, n) => new Date(+ymd.slice(0, 4), +ymd.slice(5, 7) - 1, +ymd.slice(8, 10) + n);
+    const earliest = used[used.length - 1].from;
+    const perCycle = [];
+    let cur = Planning.payCycle(addDays(earliest, 1), payday);
+    const last = Planning.payCycle(today, payday);
+    for (let guard = 0; guard < 40; guard++) {
+      let total = 0, measured = true;
+      for (let i = 0; i < cur.totalDays; i++) {
+        const day = dayStr(addDays(cur.start, i));
+        const seg = used.find(p => day > p.from && day <= p.to);
+        if (seg) total += rateOf(seg);
+        else { total += latestRate; measured = false; }
+      }
+      perCycle.push({ start: cur.start, next: cur.next, cents: Math.round(total), kind: measured ? 'measured' : 'estimated' });
+      if (cur.start === last.start) break;
+      cur = Planning.payCycle(addDays(cur.next, 0), payday);
+    }
+    return { ready: true, perCycle, per30Cents: Math.round(pooled * 30), basis: { from: earliest, to: latest.to, days }, negatives };
+  };
   // 總資產曲線：每次核對的帳戶合計（漏填的帳戶沿用上次數字）、與上次相比的變化，以及每 30 天換算的變化與前一期比進步或退步
   const assetSeries = (snapshots) => {
     const known = {};
@@ -151,5 +190,5 @@ const Snapshots = (() => {
     });
   };
 
-  return { occurrences, planned, periods, validate, livingEstimate, assetSeries };
+  return { occurrences, planned, periods, validate, livingEstimate, livingActual, assetSeries };
 })();

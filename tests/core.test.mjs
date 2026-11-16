@@ -1401,6 +1401,29 @@ test('核對：固定支出用算好的固定項目與同一份排程（季繳�
   assert.ok(!/Snapshots\.periods\([^)]*config\.recurringCashFlows/.test(src), 'Snapshots.periods 必須收 recurringSummary().items');
 });
 
+test('核對：實際生活費按天數分攤到發薪週期，完整涵蓋＝實測、其餘＝推估', () => {
+  const p = (from, to, days, living) => ({ from, to, days, total: { livingCents: living, fixedOutCents: 0 } });
+  const r = Snap.livingActual([p('2026-01-01', '2026-03-01', 59, 5900000)], { payday: 1, today: new Date(2026, 2, 10) });
+  assert.equal(r.ready, true);
+  assert.equal(r.per30Cents, 3000000);
+  const feb = r.perCycle.find(c => c.start === '2026-02-01');
+  assert.deepEqual([feb.cents, feb.kind], [2800000, 'measured']);
+  const mar = r.perCycle.find(c => c.start === '2026-03-01');
+  assert.deepEqual([mar.cents, mar.kind], [3100000, 'estimated']);
+  assert.equal(r.perCycle[0].kind, 'estimated'); // 1/1 是核對當天，不在涵蓋範圍內
+});
+
+test('核對：實際生活費——天數不足或只有一次核對不估，餘額變多的期間排除並列出', () => {
+  const p = (from, to, days, living) => ({ from, to, days, total: { livingCents: living, fixedOutCents: 0 } });
+  const opt = { payday: 1, today: new Date(2026, 2, 10) };
+  assert.equal(Snap.livingActual([], opt).ready, false);
+  assert.equal(Snap.livingActual([p('2026-03-01', '2026-03-08', 7, 700000)], opt).ready, false);
+  const r = Snap.livingActual([p('2026-02-01', '2026-03-01', 28, 2800000), p('2026-01-01', '2026-02-01', 31, -500000)], opt);
+  assert.equal(r.ready, true);
+  assert.equal(JSON.stringify(r.negatives), JSON.stringify([{ from: '2026-01-01', to: '2026-02-01', extraCents: 500000 }]));
+  assert.equal(r.per30Cents, 3000000);
+});
+
 test('核對：生活花費推估用合計天數，總資產曲線標出進步／退步', () => {
   const ps = [{ days: 10, total: { livingCents: 100000, fixedOutCents: 0 } }, { days: 20, total: { livingCents: 500000, fixedOutCents: 50000 } }];
   assert.equal(Snap.livingEstimate(ps).livingPer30Cents, 600000);
