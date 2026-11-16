@@ -209,6 +209,7 @@ const Money = (() => {
     const cycle = RENT_CYCLES.includes(Number(h.payCycleMonths)) ? Number(h.payCycleMonths) : 1;
     const occupants = Number(h.occupants) >= 1 ? Math.trunc(Number(h.occupants)) : 1;
     const rentCents = Math.max(0, Math.round(Number(h.rentCents) || 0));
+    const depositCents = Math.max(0, Math.round(Number(h.depositCents) || 0));
     const fees = (Array.isArray(h.fees) ? h.fees : []).map((f) => {
       const monthlyCents = Math.max(0, Math.round(Number(f.amountCents) || 0)) * (f.perPerson ? occupants : 1);
       return { ...f, monthlyCents };
@@ -291,9 +292,11 @@ const Money = (() => {
         const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * months;
         if (cents > 0) parts.push({ label: '電費（預估）', cents });
       }
+      // 押金：入住（第一次繳租）時一次付，不是每月成本，不進每月平均
+      if (start && depositCents > 0 && date === paymentDateAt(0)) parts.push({ label: '押金（入住時一次付）', cents: depositCents });
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
     };
-    return { cycle, payDay, lastPaid, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    return { cycle, payDay, lastPaid, depositCents, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {

@@ -235,6 +235,7 @@ const Validation = (() => {
         if (!h || typeof h !== 'object') errors.push(error(hp, 'INVALID_HOUSING', '租屋設定必須是物件'));
         else {
           if (![1, 2, 3, 6, 12].includes(h.payCycleMonths)) errors.push(error(`${hp}.payCycleMonths`, 'INVALID_CYCLE', '繳租週期只能是 1、2、3、6、12 個月'));
+          if (h.depositCents !== undefined && (!integer(h.depositCents) || h.depositCents < 0)) errors.push(error(`${hp}.depositCents`, 'INVALID_MONEY', '押金必須是非負整數分'));
           if (!integer(h.rentCents) || h.rentCents < 0) errors.push(error(`${hp}.rentCents`, 'INVALID_MONEY', '月租必須是非負整數分'));
           if (h.payDay !== undefined && h.payDay !== '' && (!integer(h.payDay) || h.payDay < 1 || h.payDay > 31)) errors.push(error(`${hp}.payDay`, 'INVALID_PAY_DAY', '繳租日須為 1–31 的整數（每月幾號）'));
           if (!integer(h.occupants) || h.occupants < 1) errors.push(error(`${hp}.occupants`, 'INVALID_OCCUPANTS', '同住人數至少 1 人'));

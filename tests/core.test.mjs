@@ -1657,3 +1657,22 @@ test('租屋卡片說明最後一期不足週期的收費規則', () => {
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.match(src, /最後一期不足 \$\{r\.cycle\} 個月時只收到到期為止的月數/);
 });
+
+test('押金：入住（第一次繳租）時一次付，只進第一筆繳款，不進每月平均；負數會被驗證擋下', () => {
+  const h = { rentCents: 1000000, payCycleMonths: 6, contractStart: '2026-01-15', contractEnd: '', occupants: 1, fees: [], depositCents: 2000000 };
+  const r = api.Money.calcHousing(h);
+  assert.equal(r.paymentOn('2026-01-15').cents, 6000000 + 2000000);
+  assert.ok(r.paymentOn('2026-01-15').parts.some(p => /押金/.test(p.label)));
+  assert.equal(r.paymentOn('2026-07-15').cents, 6000000);
+  assert.equal(r.monthlyCents, calcMonthlyWithoutDeposit(h));
+  assert.equal(api.Money.housingDueInMonth(h, '2026-01').totalCents, 8000000);
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.recurringCashFlows = [{ id: 'r', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0].id, active: true, housing: { ...h, depositCents: -1 } }];
+  const codes = [...api.Validation.validateWorkspace({ config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) }).errors.map(e => e.code)];
+  assert.ok(codes.includes('INVALID_MONEY'));
+});
+function calcMonthlyWithoutDeposit(h) { return api.Money.calcHousing({ ...h, depositCents: 0 }).monthlyCents; }
+
+test('租屋卡片有押金欄位', () => {
+  assert.match(fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8'), /押金（元，入住時一次付）/);
+});

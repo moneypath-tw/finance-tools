@@ -1724,6 +1724,7 @@ const App = (() => {
           el('div', { class: 'field' }, [el('label', { text: '名稱' }), el('input', { value: flow.name || '', onchange: (ev) => { flow.name = ev.target.value.trim(); saveFlow(); } })]),
           numField('月租（元）', Money.toYuan(h.rentCents || 0), (v) => { h.rentCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
           el('div', { class: 'field' }, [el('label', { text: '繳租方式' }), el('select', { onchange: (ev) => { h.payCycleMonths = Number(ev.target.value); saveFlow(); } }, Money.RENT_CYCLES.map(n => el('option', { value: n, text: `${rentCycleNames[n]}繳`, selected: r.cycle === n ? 'selected' : undefined })))]),
+          numField('押金（元，入住時一次付）', Money.toYuan(h.depositCents || 0), (v) => { h.depositCents = Money.toCents(Math.max(0, v)); saveFlow(); }),
           dateField('簽約起租日（第一個繳租月）', h.contractStart, (v) => { h.contractStart = v; saveFlow(); }),
           numField('繳租日（每月幾號，空白＝同起租日）', h.payDay || '', (v) => { h.payDay = v >= 1 && v <= 31 ? Math.trunc(v) : undefined; saveFlow(); }),
           dateField('上次實際繳租日（可空，空白＝依排程推估）', h.lastPaidDate, (v) => { h.lastPaidDate = v; saveFlow(); }),
