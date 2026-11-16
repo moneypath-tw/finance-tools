@@ -2099,7 +2099,7 @@ const App = (() => {
         xy.forEach(([x, y], i) => chart.append(svg('circle', { cx: x, cy: y, r: 3, fill: assets[i].trend === 'down' ? '#c0392b' : 'currentColor' })));
         const lastPt = assets[assets.length - 1];
         box.append(el('div', { class: 'summary-block' }, [el('h3', { text: `總資產曲線（目前 ${Money.formatTWD(lastPt.totalCents)}）` }), chart,
-          el('p', { class: 'notice', text: `最近一期資產${lastPt.changeCents < 0 ? '減少' : '增加'} ${Money.formatTWD(Math.abs(lastPt.changeCents))}${lastPt.trend ? `，每 30 天換算比前一期${{ up: '進步', down: '退步', flat: '持平' }[lastPt.trend]}` : ''}；紅點＝比前一期退步。` })]));
+          el('p', { class: 'notice', text: `最近一期資產${lastPt.changeCents < 0 ? '減少' : '增加'} ${Money.formatTWD(Math.abs(lastPt.changeCents))}${lastPt.trend ? `・${{ up: '進步', down: '退步', flat: '持平' }[lastPt.trend]}` : ''}（紅點＝退步）` })]));
       }
       box.append(
         el('h3', { text: `最近一期：${p.from} → ${p.to}（${p.days} 天）` }),
@@ -2107,7 +2107,7 @@ const App = (() => {
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '推算用掉' }), el('p', { class: 'mono big', text: outflowText(t.outflowCents) }),
             el('p', { class: 'notice', text: t.outflowPer30Cents === null ? '' : `換算每 30 天 ${outflowText(t.outflowPer30Cents)}` })]),
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '其中固定支出（計畫）' }), el('p', { class: 'mono big', text: Money.formatTWD(t.fixedOutCents) }),
-            el('p', { class: 'notice', text: `生活花費約 ${outflowText(t.livingCents)}${t.floatingInCents || t.floatingOutCents ? `（已排除浮動收入${Money.formatTWD(t.floatingInCents)}、浮動支出 ${Money.formatTWD(t.floatingOutCents)}）` : ''}` })]),
+            el('p', { class: 'notice', text: `生活花費約 ${outflowText(t.livingCents)}` })]),
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '全部帳戶變動' }), el('p', { class: 'mono big', text: Money.formatTWD(t.changeCents) }),
             el('p', { class: 'notice', text: `計畫存入 ${Money.formatTWD(t.inCents)}` })])
         ]),
