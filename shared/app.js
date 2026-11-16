@@ -700,6 +700,8 @@ const App = (() => {
     for (const c of [].concat(children)) if (c) node.appendChild(c);
     return node;
   };
+  // 附加子節點的唯一入口：條件式的 null／false 直接略過（原生 append 會把 null 印成「null」文字，浮動收支下曾出現 nullnull）
+  const put = (parent, ...kids) => parent.append(...kids.filter(Boolean));
   const empty = () => document.createDocumentFragment();
   // 說明文字的唯一建構處：一行一個短句（每行 ≤40 字，由 tests/long-text.test.mjs 把關），長說明用這個拆開、放進折疊
   const noteLines = (lines) => lines.filter(Boolean).map(text => el('p', { class: 'notice', text }));
@@ -1258,7 +1260,7 @@ const App = (() => {
       ])
     ]);
     root.innerHTML = '';
-    root.append(
+    put(root,
       overview,
       ...(estimateNotice ? [estimateNotice] : []),
       ...(accountNotice ? [accountNotice] : []),
@@ -1325,7 +1327,7 @@ const App = (() => {
       ]),
       el('small', { class: 'notice', text: linkedGoal ? '直接引用成本試算的目標總額；該頁更新後同步重算，不重複加計通膨。' : (noGoal ? '不另外設目標；首頁資金分配勾選的成本目標照常計算。' : '先填「如果今天完成，總共要花多少」；系統再推算完成月份需要準備的總額。') })
     ]);
-    form.append(
+    put(form,
       birthYearField(),
       numField('緊急預備金目標（月數）', q.emergencyTargetMonths, (v) => { q.emergencyTargetMonths = Math.max(PLANNING_RULES.emergencyMonths.min, Math.min(PLANNING_RULES.emergencyMonths.max, Math.trunc(v))); IO.markDirty(); renderHealth(); }),
       hasRecurringIncome ? derivedField('每月勞健保扣除後收入粗估', recurringForHealth.incomeCents, '由固定收入自動帶入') : healthMoneyField('每月勞健保扣除後收入粗估（元）', 'monthlyNetIncomeCents'),
@@ -1353,7 +1355,7 @@ const App = (() => {
     const pct = (v) => v === null ? '無法計算' : `${Math.round(v * 100)}%`;
     const [goalYear, goalMonth] = String(effectiveTargetMonth || '').split('-');
     const goalDeadlineLabel = goalYear && goalMonth ? `${goalYear} 年 ${Number(goalMonth)} 月主要儲蓄目標` : '主要儲蓄目標';
-    resultRoot.append(
+    put(resultRoot,
       el('div', { class: 'health-grid' }, [
         // 跟摘要卡「應儲蓄／月度餘裕」不同：這裡是還沒分配儲蓄前，收入扣掉支出最多能存多少
         el('div', { class: 'summary-block highlight' }, [el('h3', { text: '每月最多可存' }), el('p', { class: `mono big${result.monthlySurplus < 0 ? ' neg' : ''}`, text: Money.formatTWD(result.monthlySurplus) }), el('p', { text: `收入扣固定支出與生活費・占收入 ${pct(result.savingsRate)}（建議至少 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）` }), el('p', { class: 'notice', text: `＝上方應儲蓄 ${Money.formatTWD(allocationNow.recommendedSavingCents)}＋月度餘裕 ${Money.formatTWD(allocationNow.monthlyFlexCents)}` })]),
@@ -1439,7 +1441,7 @@ const App = (() => {
       incomeSourceField.style.display = t === 'income' ? '' : 'none';
     });
 
-    wrap.append(
+    put(wrap,
       el('div', { class: 'field' }, [el('label', { text: '類型' }), typeSel]),
       el('div', { class: 'field' }, [el('label', { text: '日期' }), dateInput]),
       catField, accField, toAccField,
@@ -1626,7 +1628,7 @@ const App = (() => {
       ])]) : el('p', { class: 'notice', text: '尚無支出資料。' })
     ]);
 
-    box.append(
+    put(box,
       el('div', { class: 'health-grid' }, [
         el('div', { class: 'summary-block highlight' }, [el('h3', { text: '本月實際儲蓄' }), el('p', { class: 'mono big', text: Money.formatTWD(savingsHealth.actualSavingsCents) })]),
         el('div', { class: 'summary-block highlight' }, [el('h3', { text: '本月儲蓄率' }), el('p', { class: 'mono big', text: savingsHealth.actualSavingsRate === null ? '尚無收入' : `${(savingsHealth.actualSavingsRate * 100).toFixed(1)}%` }), el('p', { class: `notice health-${savingsHealth.health.level}`, text: savingsHealth.health.label })]),
@@ -1986,7 +1988,7 @@ const App = (() => {
       ]),
       foldNotes('settings-recurring-how', '固定項目怎麼入帳', ['到設定日期後，當月自動建一次帳目。', '同一項目同月不會重複。', '每項收入可獨立選擇是否扣勞健保。'])
     ]);
-    box.append(
+    put(box,
       fileBindingManager,
       recurringManager,
       accountManager,
@@ -2048,7 +2050,7 @@ const App = (() => {
     const noteInput = el('input', { type: 'text', placeholder: '想到再寫，例如：繳了年度保險' });
     const status = el('p', { class: 'notice', text: snapshotMessage });
     snapshotMessage = '';
-    box.append(
+    put(box,
       el('h3', { text: '記下各帳戶目前的數字' }),
       el('p', { class: 'notice', text: '不用記每一筆花費：照網銀或存摺上的餘額填，沒變的帳戶直接沿用上次的數字。' }),
       el('div', { class: 'field' }, [el('label', { text: '核對日期' }), dateInput]),
@@ -2111,7 +2113,7 @@ const App = (() => {
         box.append(el('div', { class: 'summary-block' }, [el('h3', { text: `總資產曲線（目前 ${Money.formatTWD(lastPt.totalCents)}）` }), chart,
           el('p', { class: 'notice', text: `最近一期資產${lastPt.changeCents < 0 ? '減少' : '增加'} ${Money.formatTWD(Math.abs(lastPt.changeCents))}${lastPt.trend ? `・${{ up: '進步', down: '退步', flat: '持平' }[lastPt.trend]}` : ''}（紅點＝退步）` })]));
       }
-      box.append(
+      put(box,
         el('h3', { text: `最近一期：${p.from} → ${p.to}（${p.days} 天）` }),
         el('div', { class: 'health-grid' }, [
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '推算用掉' }), el('p', { class: 'mono big', text: outflowText(t.outflowCents) }),
@@ -2240,7 +2242,7 @@ const App = (() => {
     const year = Planning.floatingSummary(ledger.entries, yearAgo, tomorrow);
     const signed = (type, cents) => `${type === 'income' ? '+' : '−'}${Money.formatTWD(cents)}`;
     const list = ledger.entries.filter(e => e.floating).sort((a, b) => b.date.localeCompare(a.date));
-    box.append(
+    put(box,
       el('h3', { text: '浮動收支' }),
       foldNotes('ledger-floating-how', '浮動收支怎麼算', ['金額或時間不固定的收支記在這裡，例如接案、旅遊、禮金。', '會算進帳戶餘額與帳戶核對。', '不算每月計畫收入，支出也不算生活花費。']),
       el('div', {}, [
@@ -2479,7 +2481,7 @@ const App = (() => {
     const targetForHint = result && (result.gap !== null ? result.gap : (scenario.applyInflation ? result.inflated : result.total));
     const headers = ['項目', '類型', ...(isTrip ? ['計算方式'] : []), ...(isTrip && localCurrency !== 'TWD' ? ['幣別'] : []), isTrip ? '單價' : '金額（元）', ...(isTrip ? ['小計（台幣）'] : []), ''];
     // 原生 append 會把 null 印成文字「null」，先濾掉不顯示的區塊
-    root.append(...[
+    put(root, ...[
       scenario.scenarioId === 'buy_house' ? renderMortgageRepaymentBlock(scenario) : null,
       isTrip ? renderTripSettings(scenario, result) : null,
       el('div', { class: 'table-scroll editor-only' }, [el('table', { class: 'items-table estimator-items-table' }, [
@@ -2660,7 +2662,7 @@ const App = (() => {
       ]);
     };
     root.innerHTML = '';
-    root.append(
+    put(root,
       el('div', { class: 'editor-only' }, [foldNotes('estimator-periods-how', '期別怎麼用', isStudentLoan
         ? ['每期套用同一組項目範本，個別期別可覆寫單一項目金額。', '休學：用學期卡片上的「此學期後休學」插入。', '再用＋／−調整學期數。', '休學不佔年級、不計學費，復學後接續下一學期。']
         : ['此情境為期別型，每期套用同一組項目範本。', '個別期別可覆寫單一項目金額。'])]),
@@ -2724,7 +2726,7 @@ const App = (() => {
     const root = $('#estimator-body');
     const result = calcScenario(scenario);
     root.innerHTML = '';
-    root.append(
+    put(root,
       el('div', { class: 'estimator-field-grid' }, [
         el('div', { class: 'field estimator-field' }, [el('label', { text: '目前年齡（由出生年份推算）' }), el('span', { class: 'mono readonly-value', text: `${scenario.currentAge} 歲` })]),
         retireAgeField(scenario),
@@ -2753,7 +2755,7 @@ const App = (() => {
     const moneyInput = (label, key) => numField(`${label}（元）`, Money.toYuan(scenario[key] || 0), (v) => { scenario[key] = Money.toCents(v); IO.markDirty(); renderEstimator(); });
     const linkedMoney = (label, key, isLinked, note) => isLinked ? shown(label, Money.formatTWD(scenario[key] || 0), note) : moneyInput(label, key);
     root.innerHTML = '';
-    root.append(
+    put(root,
       el('label', { class: 'field' }, [el('input', { type: 'checkbox', checked: linked ? 'checked' : undefined, onchange: (ev) => { scenario.linkLedger = ev.target.checked; IO.markDirty(); renderEstimator(); } }), document.createTextNode(' 與帳本、首頁連動（月薪、月支出、已存資產、其他目標、緊急預備金）')]),
       el('div', { class: 'estimator-field-grid' }, [
         shown('目前年齡（由出生年份推算）', `${scenario.startAge} 歲`, '個人參數的出生年份'),
@@ -2917,7 +2919,7 @@ const App = (() => {
     const result = Money.calcWageReverse(s, config);
 
     root.innerHTML = '';
-    root.append(
+    put(root,
       el('div', { class: 'card wage-source-card' }, [
         el('div', { class: 'section-heading' }, [el('div', {}, [el('h3', { text: '收入來源與時薪' }), el('p', { class: 'notice', text: '選擇既有收入即可自動沿用；只有自訂模式需要輸入。' })])]),
         el('div', { class: 'field source-field' }, [
