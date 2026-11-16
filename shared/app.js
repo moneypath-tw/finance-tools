@@ -693,6 +693,10 @@ const App = (() => {
     return node;
   };
   const empty = () => document.createDocumentFragment();
+  // 說明文字的唯一建構處：一行一個短句（每行 ≤40 字，由 tests/long-text.test.mjs 把關），長說明用這個拆開、放進折疊
+  const noteLines = (lines) => lines.filter(Boolean).map(text => el('p', { class: 'notice', text }));
+  // 「一行標題＋折疊的短句清單」的唯一建構處；折疊狀態靠 data-collapse-id 記住，不新增存檔欄位
+  const foldNotes = (id, summary, lines) => el('details', { class: 'compact-settings', 'data-collapse-id': id }, [el('summary', { text: summary }), ...noteLines(lines)]);
   // 數字輸入欄位的唯一建構處；className 只決定排版（個人設定 'field'、成本試算 'field estimator-field'）
   const numberField = (label, value, onchange, className) => el('div', { class: className }, [
     el('label', { text: label }),
@@ -853,7 +857,7 @@ const App = (() => {
         el('tbody', {}, reports.map(r => el('tr', {}, [`${r.start.slice(5).replace('-', '/')} 起`, fmt(r.incomeCents), fmt(r.expenseCents), fmt(r.savedCents), pct(r.savingsRate), fmt(r.toSavingsCents), fmt(r.withdrawnCents + r.spentFromSavingsCents), fmt(r.netWorthEndCents)].map(text => el('td', { class: 'mono', text })))))
       ]) : null,
       ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：照近期實際速度每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，比目標 ${i.targetMonth} 晚` : ''}` })),
-      el('p', { class: 'notice', text: '存下＝收入－全部支出；帳戶間轉帳不算收支，但從儲蓄帳戶轉回或直接付款算動用存款。帳面淨資產不含投資市價變動。' })
+      ...noteLines(['存下＝收入－全部支出。', '帳戶間轉帳不算收支。', '從儲蓄帳戶轉回或直接付款，算動用存款。', '帳面淨資產不含投資市價變動。'])
     ]);
     return { node, actions: habits.lines.slice(0, 1) };
   };
@@ -1082,7 +1086,8 @@ const App = (() => {
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
     const openIncomeSettings = () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); const personal = $('#personal-settings'); const fold = personal?.closest('details'); if (fold) fold.open = true; personal?.scrollIntoView({ block: 'start' }); };
     const estimateNotice = hasRecurringIncome ? null : el('div', { class: 'estimate-notice editor-only' }, [
-      el('p', { text: `收入 ${Money.formatTWD(income)} 與支出是「進階財務健檢」的估計值，沒改過就是範例數字。到帳本設定固定收入與支出後，這裡會改用你的實際設定。` }),
+      el('p', { text: `收入 ${Money.formatTWD(income)} 是估計值，沒改過就是範例。` }),
+      el('p', { class: 'notice', text: '到帳本設定固定收入與支出，這裡就改用你的實際數字。' }),
       el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: openIncomeSettings })
     ]);
     // 帳戶數字本身有問題時，上面的狀態都建立在錯的餘額上：非信用帳戶出現負餘額（多半漏記收入或期初餘額），
@@ -1165,7 +1170,13 @@ const App = (() => {
           el('td', { class: `mono${(balances[f.accountId] || 0) < f.beforeCents ? ' neg' : ''}`, text: Money.formatTWD(balances[f.accountId] || 0) }),
           el('td', { class: 'mono', text: savingsHealth.facts.fixedEarlyByAccount[f.accountId] ? Money.formatTWD(savingsHealth.facts.fixedEarlyByAccount[f.accountId]) : '—' })])))
       ])]),
-      el('p', { class: 'notice', text: '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝；扣款後至少留＝扣完後仍要在的預存與緩衝。年繳、季繳的項目每月預存「金額÷週期」，扣款前剛好存滿。本期建議多存不強制：進度已達標但離整筆還有差距時，把差額平均分到扣款前的每一期，早存比晚存好。' }),
+      foldNotes('home-floors-how', '這兩欄怎麼算', [
+        '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝。',
+        '扣款後至少留＝扣完後仍要在的預存與緩衝。',
+        '年繳、季繳項目每月預存「金額÷週期」，扣款前剛好存滿。',
+        '本期建議多存不強制。',
+        '進度已達標但離整筆還有差距時，差額平均分到扣款前每一期。'
+      ]),
       savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
     ]) : null;
     const bar = el('div', { class: 'home-bar', role: 'img', 'aria-label': verdict.segments.map(s => `${s.label} ${Money.formatTWD(s.cents)}`).join('、') }, verdict.segments.map(s => {
@@ -1214,7 +1225,12 @@ const App = (() => {
       floorsView,
       el('details', { class: 'compact-settings', 'data-collapse-id': 'home-how' }, [
         el('summary', { text: '怎麼算的' }),
-        el('p', { class: 'notice', text: `收入 ${Money.formatTWD(income)} 依序分給固定支出、生活費、緊急預備金、儲蓄與目標；建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。每天可花＝生活費＋未分配的錢 ÷ 本月天數。` }),
+        ...noteLines([
+          `收入 ${Money.formatTWD(income)} 依序分給下列用途：`,
+          '固定支出、生活費、緊急預備金、儲蓄與目標。',
+          `建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。`,
+          '每天可花＝生活費＋未分配的錢 ÷ 本月天數。'
+        ]),
         standingPlan.length ? el('p', { class: 'notice', text: `每期發薪後${sourceName ? `從${sourceName}` : ''}：${standingPlan.join('；')}，合計 ${Money.formatTWD(allocation.totalAllocatedCents)}。` }) : null,
         el('p', { class: 'notice', text: `生活花費計入${spendAccounts.auto ? '（自動判斷）' : ''}：${config.accountProfiles.filter(a => spendAccounts.ids.has(a.id)).map(a => a.name).join('、') || '無'}；不含固定支出與帳戶間轉帳。${living.actual.ready ? `各發薪週期實際：${living.actual.perCycle.slice(-4).map(c => `${c.start.slice(5).replace('-', '/')} 起 ${Money.formatTWD(c.cents)}（${c.kind === 'measured' ? '實測' : '推估'}）`).join('、')}。` : '核對不足，暫不給實際生活費。'}` }),
         ...statusRows.filter(s => s.status.level !== 'ok').map(({ row, status }) => el('p', { class: 'notice', text: `${row.label}：${status.text}` }))
@@ -2084,7 +2100,13 @@ const App = (() => {
           el('div', { class: 'summary-block highlight' }, [el('h3', { text: '全部帳戶變動' }), el('p', { class: 'mono big', text: Money.formatTWD(t.changeCents) }),
             el('p', { class: 'notice', text: `計畫存入 ${Money.formatTWD(t.inCents)}` })])
         ]),
-        el('p', { class: 'notice', text: '「用掉」是推算值：期初＋計畫存入（固定出入帳）−期末，不是逐筆明細。帳戶之間互轉沒有記錄時，個別帳戶會一邊多花、一邊多存，但全部加總不受影響；利息、退款、計畫外收入會讓數字變成「多出」。第一次核對的新帳戶期初以 0 計（視為從其他帳戶轉入）；之前填過、這次或上次沒填的帳戶不計入。' }),
+        foldNotes('recon-used-how', '「用掉」怎麼算', [
+          '用掉＝期初＋計畫存入（固定出入帳）−期末，是推算值，不是逐筆明細。',
+          '互轉沒有記錄時，個別帳戶會一邊多花、一邊多存，全部加總不受影響。',
+          '利息、退款、計畫外收入會讓數字變成「多出」。',
+          '第一次核對的新帳戶，期初以 0 計。',
+          '這次或上次沒填的帳戶不計入。'
+        ]),
         el('details', {}, [el('summary', { text: '各帳戶明細（互轉未記錄時僅供參考）' }), el('div', { class: 'table-scroll' }, [el('table', {}, [
           el('thead', {}, [el('tr', {}, ['帳戶', '期初', '計畫存入', '期末', '推算用掉'].map(h => el('th', { text: h })))]),
           el('tbody', {}, p.accounts.map(a => el('tr', {}, [el('td', { text: a.isNew ? `${nameOf(a.id)}（新帳戶，期初以 0 計）` : nameOf(a.id) }),
@@ -2114,7 +2136,15 @@ const App = (() => {
         ])]);
           return [periodTable(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodTable(g.rows)]))];
         })(),
-        el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）＋浮動收入－浮動支出（浮動收支另列，不算生活花費）。對帳＝餘額變化與「固定出入帳排程＋這段期間的逐筆帳目」比對；推算用掉已含固定支出，自己手記的同金額固定收支會配對掉，不會重複扣。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
+        foldNotes('recon-formula-how', '生活花費與對帳怎麼算', [
+          '生活花費＝推算用掉－固定支出＋浮動收入－浮動支出。',
+          '固定支出依排程，非月繳只算繳款月。',
+          '浮動收支另列，不算生活花費。',
+          '對帳＝餘額變化，比對固定出入帳排程與逐筆帳目。',
+          '手記的同金額固定收支會配對掉，不會重複扣。',
+          '總資產＝每次核對的帳戶合計，漏填的沿用上次。',
+          '「比前一期」比較每 30 天的資產變化。'
+        ])
       );
     }
     if (sorted.length) {
