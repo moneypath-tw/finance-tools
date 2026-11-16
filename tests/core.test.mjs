@@ -1836,3 +1836,11 @@ test("多行 append 一律走 put()：條件式 null 不會被印成 null 文字
   assert.match(src, /const put = \(parent, \.\.\.kids\) => parent\.append\(\.\.\.kids\.filter\(Boolean\)\)/);
   assert.doesNotMatch(src, /\w+\.append\(\s*$/m);
 });
+
+test("摺疊卡片的 summary 標題不在卡片內容裡再放同名 h3（浮動收支曾標題重複）", () => {
+  const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  const src = fs.readFileSync(path.join(root, "shared/app.js"), "utf8");
+  const titles = [...html.matchAll(/<details class="card[^"]*"[^>]*>\s*<summary>([^<]+)<\/summary>/g)].map((m) => m[1].trim());
+  assert.ok(titles.length >= 2, "找不到摺疊卡片，測試的正規式失效");
+  for (const t of titles) assert.ok(!src.includes(`el('h3', { text: '${t}' })`), `「${t}」摺疊卡片內又有同名 h3`);
+});

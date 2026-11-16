@@ -2242,8 +2242,8 @@ const App = (() => {
     const year = Planning.floatingSummary(ledger.entries, yearAgo, tomorrow);
     const signed = (type, cents) => `${type === 'income' ? '+' : '−'}${Money.formatTWD(cents)}`;
     const list = ledger.entries.filter(e => e.floating).sort((a, b) => b.date.localeCompare(a.date));
+    // 區塊標題由外層摺疊的 summary 提供（index.html），這裡不再放同名 h3
     put(box,
-      el('h3', { text: '浮動收支' }),
       foldNotes('ledger-floating-how', '浮動收支怎麼算', ['金額或時間不固定的收支記在這裡，例如接案、旅遊、禮金。', '會算進帳戶餘額與帳戶核對。', '不算每月計畫收入，支出也不算生活花費。']),
       el('div', {}, [
         el('div', { class: 'field' }, [el('label', { text: '類型' }), typeSel]),
