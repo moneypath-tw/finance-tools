@@ -292,11 +292,12 @@ const Money = (() => {
         const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * months;
         if (cents > 0) parts.push({ label: '電費（預估）', cents });
       }
-      // 押金：入住（第一次繳租）時一次付，不是每月成本，不進每月平均
-      if (start && depositCents > 0 && date === paymentDateAt(0)) parts.push({ label: '押金（入住時一次付）', cents: depositCents });
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };
     };
-    return { cycle, payDay, lastPaid, depositCents, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
+    // 押金是退租會退回的暫付款，不是租金也不是支出：另列一項，絕不併入 paymentOn／monthlyCents／perPaymentCents／固定項目與帳本預測，
+    // 否則會把可退回的錢當成花掉的租金，墊高每期應付與每月負擔
+    const deposit = depositCents > 0 ? { cents: depositCents, paidOn: start ? paymentDateAt(0) : null, refundOn: h.contractEnd || null } : null;
+    return { cycle, payDay, lastPaid, deposit, occupants, rentCents, fees, feesCents, electricity, grossMonthlyCents, subsidyCents, monthlyCents, perPaymentCents, paymentDateAt: start ? paymentDateAt : null, nextPaymentOnOrAfter, paymentOn };
   };
   // 某月實際要付的錢（現金流）：只有繳租月要付，房租、費用、電費同一天繳
   const housingDueInMonth = (housing, ym) => {
