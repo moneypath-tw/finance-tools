@@ -1182,13 +1182,22 @@ const App = (() => {
       ]),
       savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
     ]) : null;
-    // 分配圖：一個用途一列（名稱、細線、金額），收入＝100%；不用圖例，數字直接標在列上
+    // 分配圖：一條依比例分段的長條（收入＝100%，含固定支出）＋每段一行「名稱・占比・金額」；只有生活費用強調色，不足用斜線
     const allocTotal = Math.max(1, verdict.segments.reduce((sum, s) => sum + s.cents, 0));
-    const bar = el('ul', { class: 'home-alloc' }, verdict.segments.filter(s => s.cents > 0).map(s => {
-      const fill = el('span', { class: 'alloc-fill' });
-      fill.style.width = `${Math.max(1, Math.round(s.cents / allocTotal * 100))}%`; // CSP style-src 'self' blocks style attributes, not CSSOM
-      return el('li', { class: `seg-${s.key}` }, [el('span', { class: 'alloc-label', text: s.label }), el('span', { class: 'alloc-track', 'aria-hidden': 'true' }, [fill]), el('span', { class: 'alloc-amt mono', text: Money.formatTWD(s.cents) })]);
-    }));
+    const pctOf = (cents) => `${Math.round(cents / allocTotal * 100)}%`;
+    const stackBar = el('div', { class: 'stack-bar', role: 'img', 'aria-label': verdict.segments.map(s => `${s.label} ${pctOf(s.cents)} ${Money.formatTWD(s.cents)}`).join('、') },
+      verdict.segments.map(s => {
+        const part = el('span', { class: `stack-seg seg-${s.key}` });
+        part.style.flexGrow = String(s.cents); // CSSOM, not a style attribute (CSP)
+        return part;
+      }));
+    const stackList = el('ul', { class: 'stack-list' }, verdict.segments.map(s => el('li', { class: `seg-${s.key}` }, [
+      el('span', { class: 'stack-swatch', 'aria-hidden': 'true' }),
+      el('span', { class: 'stack-name', text: s.label }),
+      el('span', { class: 'stack-pct', text: pctOf(s.cents) }),
+      el('span', { class: 'stack-amt mono', text: Money.formatTWD(s.cents) })
+    ])));
+    const bar = el('div', { class: 'home-stack' }, [stackBar, stackList]);
     // 生活費是唯一能直接調的大項；放開滑桿才重算，拖動時只更新數字
     const livingFloor = expenses.derived ? 0 : q.monthlyEssentialExpenseCents;
     const livingMax = Math.max(livingFloor, income - fixedExpense, expenses.livingCents);
