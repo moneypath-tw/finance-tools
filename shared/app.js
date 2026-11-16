@@ -1257,7 +1257,7 @@ const App = (() => {
       ])]),
       selectedGoalLists,
       requiredSettings, optionalGoals,
-      el('p', { class: 'notice editor-only', text: '此表會自動重算建議用途；不會連線或操作真實銀行帳戶。所選目標的已存金額取自指定帳戶目前餘額。' })
+      el('div', { class: 'editor-only' }, [foldNotes('goals-table-how', '這張表怎麼算', ['建議用途會自動重算。', '不會連線或操作真實銀行帳戶。', '目標已存金額取自指定帳戶目前餘額。'])])
     );
   };
 
@@ -1598,7 +1598,7 @@ const App = (() => {
     trendBlock.appendChild(trendChartHolder);
     const expenseAverageBlock = el('div', { class: 'summary-block detail-only' }, [
       el('h3', { text: `分類花費分析・平均 ${expenseAverages.monthCount} 個月` }),
-      el('p', { class: 'notice', text: '平均月份從第一筆支出到最後一筆支出連續計算，包含期間內沒有消費的月份；占比以全部支出為分母。' }),
+      foldNotes('ledger-avg-how', '平均怎麼算', ['月份從第一筆到最後一筆支出連續算。', '沒有消費的月份也算進去。', '占比以全部支出為分母。']),
       expenseAverages.rows.length ? el('div', { class: 'table-scroll' }, [el('table', {}, [
         el('thead', {}, [el('tr', {}, [el('th', { text: '分類' }), el('th', { text: '累計花費' }), el('th', { text: '平均每月' }), el('th', { text: '占全部支出' })])]),
         el('tbody', {}, expenseAverages.rows.map(row => el('tr', {}, [el('td', { text: row.label }), el('td', { class: 'mono', text: Money.formatTWD(row.totalCents) }), el('td', { class: 'mono', text: Money.formatTWD(row.monthlyAverageCents) }), el('td', { class: 'mono', text: `${(row.share * 100).toFixed(1)}%` })])))
@@ -1657,7 +1657,7 @@ const App = (() => {
         }),
         el('button', { class: 'btn small', text: '＋自訂性質', onclick: () => { if (!Array.isArray(config.customAccountNatures)) config.customAccountNatures = []; config.customAccountNatures.push({ id: `custom-${createEntryId()}`, label: '', liquid: true }); IO.markDirty(); renderPersonalSettings(); } })
       ]),
-      el('p', { class: 'notice', text: '收入與支出都會計入指定帳戶；已有交易的帳戶不可直接刪除，以免餘額失去歸屬。關閉「連動固定收支」的帳戶不會出現在固定項目的帳戶選單，掛在上面的固定項目也不計入每月總額。' })
+      foldNotes('settings-accounts-how', '帳戶規則', ['收支都會計入指定帳戶。', '已有交易的帳戶不能刪除。', '關閉「連動固定收支」的帳戶，不出現在固定項目選單。', '掛在它上面的固定項目，不計入每月總額。'])
     ]);
     // 收入的 amountCents／monthlyWorkHours 由計薪方式推得後寫回，帳本、健檢與工時反推都沿用同一數字
     const syncIncomeFlow = (flow) => {
@@ -1937,7 +1937,7 @@ const App = (() => {
         binding.name ? el('button', { class: 'btn small', text: '立即同步', onclick: async () => { await IO.saveBoundFile({ requestPermission: true }); } }) : null,
         binding.name ? el('button', { class: 'btn small danger', text: '解除綁定', onclick: async () => { await IO.unbindWorkspaceFile(); renderPersonalSettings(); } }) : null
       ]),
-      el('p', { class: 'notice', text: binding.supported ? '每次修改會立即保存到瀏覽器本機並同步綁定 JSON；切到背景、關閉分頁或離開頁面前會再強制刷新。重新開啟後若權限失效，按「立即同步」重新授權即可。' : '目前瀏覽器不支援直接綁定檔案；仍會在每次修改及關閉頁面前保存到瀏覽器本機；請定期用 JSON 匯出備份。' })
+      foldNotes('settings-save-how', '保存怎麼運作', binding.supported ? ['每次修改立即存到瀏覽器，並同步綁定的 JSON。', '離開頁面前會再存一次。', '權限失效時，按「立即同步」重新授權。'] : ['這個瀏覽器不能綁定檔案。', '每次修改仍會存到瀏覽器本機。', '請定期用 JSON 匯出備份。'])
     ]);
     const recurringManager = el('details', {}, [
       el('summary', { text: '每月固定出入帳（正職／兼職／接案／固定支出）' }),
@@ -1963,7 +1963,7 @@ const App = (() => {
         el('button', { class: 'btn small', text: '＋新增固定支出', onclick: () => { config.recurringCashFlows.push({ id: createEntryId(), name: '新固定支出', type: 'expense', kind: 'fixed_expense', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0]?.id, essential: true, active: true }); IO.markDirty(); renderPersonalSettings(); } }),
         el('button', { class: 'btn small', text: '＋新增固定儲蓄', onclick: () => { const from = config.accountProfiles[0]?.id; const to = ensureSavingsAccount(from); config.recurringCashFlows.push({ id: createEntryId(), name: '固定儲蓄', type: 'saving', kind: 'fixed_saving', amountCents: 0, dayOfMonth: 6, fromAccountId: from, accountId: to, active: true }); IO.markDirty(); renderPersonalSettings(); renderLedgerForm(); } })
       ]),
-      el('p', { class: 'notice', text: '到設定日期後，系統會為當月自動建立一次帳目；同一固定項目同月不會重複。每項收入可獨立選擇是否扣勞健保。' })
+      foldNotes('settings-recurring-how', '固定項目怎麼入帳', ['到設定日期後，當月自動建一次帳目。', '同一項目同月不會重複。', '每項收入可獨立選擇是否扣勞健保。'])
     ]);
     box.append(
       fileBindingManager,
@@ -2205,7 +2205,7 @@ const App = (() => {
     const list = ledger.entries.filter(e => e.floating).sort((a, b) => b.date.localeCompare(a.date));
     box.append(
       el('h3', { text: '浮動收支' }),
-      el('p', { class: 'notice', text: '金額或時間不固定的收入與支出（例如接案、旅遊、3C、禮金）記在這裡：會算進帳戶餘額與帳戶核對，但不算進每月計畫收入，支出也不算生活花費。' }),
+      foldNotes('ledger-floating-how', '浮動收支怎麼算', ['金額或時間不固定的收支記在這裡，例如接案、旅遊、禮金。', '會算進帳戶餘額與帳戶核對。', '不算每月計畫收入，支出也不算生活花費。']),
       el('div', {}, [
         el('div', { class: 'field' }, [el('label', { text: '類型' }), typeSel]),
         el('div', { class: 'field' }, [el('label', { text: '性質' }), natureSel]),
