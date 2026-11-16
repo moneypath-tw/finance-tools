@@ -900,7 +900,7 @@ const App = (() => {
       ...goalLines.map(text => el('p', { class: 'notice', text })),
       wage.current ? el('p', { class: `notice${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? ' negative' : ''}`, text: `法定基本工資時薪 ${fmt(wage.current.hourlyCents)}（${wage.current.effectiveFrom} 起）${wage.next ? `；${wage.next.effectiveFrom} 起 ${fmt(wage.next.hourlyCents)}` : ''}${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? '。你的時薪低於基本工資，可向雇主或勞工局反映' : ''}` }) : null,
       el('label', { class: 'field' }, [document.createTextNode('每週可工作時數上限 '), el('input', { type: 'number', min: '1', max: '84', value: String(weeklyMax), onchange: e => { config.personalBaseline.maxWeeklyWorkHours = Math.max(1, Math.min(84, Number(e.target.value) || PLANNING_RULES.defaultMaxWeeklyWorkHours)); IO.markDirty(); renderAllocationDashboard(); } })]),
-      el('p', { class: 'notice', text: `調整的是「${flow.name}」，其他收入照舊；淨額換稅前用這份收入目前的比例（勞健保大致隨薪資）。上限預設為勞基法每週正常工時 ${REFERENCE_DATA.twLaborStandards.weeklyNormalHours} 小時。` })
+      el('div', {}, noteLines([`調整的是「${flow.name}」，其他收入照舊。`, '淨額換稅前用這份收入目前的比例（勞健保大致隨薪資）。', `上限預設為勞基法每週正常工時 ${REFERENCE_DATA.twLaborStandards.weeklyNormalHours} 小時。`]))
     ]);
   };
   const renderAllocationDashboard = () => {
@@ -2395,7 +2395,8 @@ const App = (() => {
           el('input', { type: 'number', id: 'trip-rate', step: '0.0001', min: '0', class: 'mono', value: scenario.rateToTWD > 0 ? scenario.rateToTWD : '', placeholder: '例如 0.2', onchange: e => { scenario.rateToTWD = Math.max(0, Number(e.target.value) || 0); refresh(); } })
         ]) : null
       ]),
-      el('p', { class: 'notice' }, [document.createTextNode(`${trip.days} 天 ${nights} 晚、${trip.people} 人；項目可選「每人」「每天」「每晚」等計算方式，數量自動依天數與人數計算。`),
+      el('p', { class: 'notice' }, [document.createTextNode(`${trip.days} 天 ${nights} 晚、${trip.people} 人。`),
+        document.createTextNode('項目可選「每人」「每天」「每晚」計算，數量自動依天數與人數算。'),
         currency !== 'TWD' ? el('span', {}, [document.createTextNode(`項目可用台幣或 ${currency} 輸入；匯率請查`), el('a', { href: FX_RATE_SOURCE.url, target: '_blank', rel: 'noopener', text: FX_RATE_SOURCE.label }), document.createTextNode('（換現金看「現金賣出」，刷卡看「即期賣出」再加海外刷卡手續費）。')]) : null,
         TRIP_DESTINATIONS[trip.destination]?.inflationKey ? null : document.createTextNode('此目的地沒有內建的官方通膨預測，總額不套用通膨。')]),
       result && trip.people > 1 ? el('p', { text: `每人平均 ${Money.formatTWD(Math.round((scenario.applyInflation ? result.inflated : result.total) / trip.people))}` }) : null
@@ -2565,7 +2566,7 @@ const App = (() => {
       ]) : null,
       el('details', { class: 'compact-settings' }, [el('summary', { text: '進階設定：利率、寬限期、扣款帳戶與還款預備金' }), el('div', { class: 'estimator-field-grid' }, [
         numField('畢業後寬限年數', repayment.graceYears, v => { repayment.graceYears = Math.max(0, v); refresh(); }),
-        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學辦異動後到畢業前的利息（辦妥復學展延後，在學利息恢復由政府負擔；實際以承貸銀行為準）' }), el('select', { onchange: e => { repayment.interestAfterNotice = e.target.value; refresh(); } }, [
+        el('label', { class: 'field estimator-field' }, [el('span', { text: '休學異動後到畢業前的利息（復學展延後政府付，以銀行為準）' }), el('select', { onchange: e => { repayment.interestAfterNotice = e.target.value; refresh(); } }, [
           el('option', { value: 'government', text: '政府付', selected: repayment.interestAfterNotice !== 'student' ? 'selected' : undefined }),
           el('option', { value: 'student', text: '自己付（供比較）', selected: repayment.interestAfterNotice === 'student' ? 'selected' : undefined })
         ])]),
@@ -2621,9 +2622,9 @@ const App = (() => {
     };
     root.innerHTML = '';
     root.append(
-      el('p', { class: 'notice editor-only', text: isStudentLoan
-        ? '每期套用同一組項目範本，個別期別可覆寫單一項目金額。休學請用學期卡片上的「此學期後休學」插入，再用＋／−調整學期數：休學不佔年級、不計學費，復學後接續下一學期。'
-        : '此情境為期別型，每期套用同一組項目範本，個別期別可覆寫單一項目金額。' }),
+      el('div', { class: 'editor-only' }, [foldNotes('estimator-periods-how', '期別怎麼用', isStudentLoan
+        ? ['每期套用同一組項目範本，個別期別可覆寫單一項目金額。', '休學：用學期卡片上的「此學期後休學」插入。', '再用＋／−調整學期數。', '休學不佔年級、不計學費，復學後接續下一學期。']
+        : ['此情境為期別型，每期套用同一組項目範本。', '個別期別可覆寫單一項目金額。'])]),
       scenario.scenarioId === 'student_loan' ? renderStudentLoanRepaymentBlock(scenario, result) : empty(),
       el('details', { class: 'estimator-section editor-only' }, [
         el('summary', { text: '編輯共用欄目' }),
