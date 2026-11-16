@@ -271,12 +271,20 @@ const Money = (() => {
     const monthlyCents = Math.max(0, grossMonthlyCents - subsidyCents);
     const perPaymentCents = (rentCents + feesCents) * cycle;
     // 某次繳租日的總額：房租＋費用 × 週期，加上這段期間的電費（下次結算用實測推估，之後用每月平均）
+    // 這次繳租涵蓋幾個月：繳租日在租約到期日之前就一定要繳，但最後一期不足一個週期時只收到期為止的月數
+    // （例如半年繳、離到期只剩 4 個月，最後一次繳 4 個月；四捨五入到整月，至少 1 個月）
+    const monthsCovered = (date) => {
+      const from = parseYmd(date), end = parseYmd(h.contractEnd);
+      if (!from || !end) return cycle;
+      return Math.min(cycle, Math.max(1, Math.round(daysBetween(from, end) / (365 / 12))));
+    };
     const paymentOn = (date) => {
       const parts = [];
-      if (rentCents > 0) parts.push({ label: cycle === 1 ? '房租' : `房租 ${cycle} 個月`, cents: rentCents * cycle });
-      if (feesCents > 0) parts.push({ label: cycle === 1 ? '其他費用' : `其他費用 ${cycle} 個月`, cents: feesCents * cycle });
+      const months = monthsCovered(date);
+      if (rentCents > 0) parts.push({ label: months === 1 ? '房租' : `房租 ${months} 個月`, cents: rentCents * months });
+      if (feesCents > 0) parts.push({ label: months === 1 ? '其他費用' : `其他費用 ${months} 個月`, cents: feesCents * months });
       if (electricity.enabled) {
-        const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * cycle;
+        const cents = date === nextSettleDate ? electricity.projectedBillCents : electricity.monthlyCents * months;
         if (cents > 0) parts.push({ label: '電費（預估）', cents });
       }
       return { date, parts, cents: parts.reduce((s, p) => s + p.cents, 0) };

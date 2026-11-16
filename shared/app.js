@@ -1733,7 +1733,7 @@ const App = (() => {
         el('div', { class: 'flow-result' }, [
           el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
           el('p', { class: 'mono', text: `上次繳租 ${r.lastPaid ? `${r.lastPaid.date}${r.lastPaid.estimated ? '（依排程推估）' : ''}` : '無'}　／下次應繳 ${next ? next.date : '無'}` }),
-          el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費` }),
+          el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費；繳租日在到期日之前就要繳，最後一期不足 ${r.cycle} 個月時只收到到期為止的月數` }),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
             : el('p', { class: 'notice', text: h.contractStart ? '租約期間內已無繳款日。' : '填入簽約起租日，就會列出接下來的繳款日。' })

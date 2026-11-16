@@ -258,7 +258,7 @@ test('租屋：房租、費用、電費同一天繳；簽約日推出繳款日�
   const elecMonthly = api.Money.calcHousing(h).electricity.monthlyCents;
   const schedule = api.Money.housingPaymentSchedule(h, '2026-02-01', 6);
   assert.deepEqual(Array.from(schedule, p => p.date), ['2026-07-31', '2027-01-31', '2027-07-31']);
-  assert.deepEqual(Array.from(schedule, p => p.cents), [PER_PAYMENT + elecMonthly * 6, PER_PAYMENT + BILL_TO_JAN, PER_PAYMENT + elecMonthly * 6]);
+  assert.deepEqual(Array.from(schedule, p => p.cents), [PER_PAYMENT + elecMonthly * 6, PER_PAYMENT + BILL_TO_JAN, PER_PAYMENT / 6 + elecMonthly]); // 最後一期離到期日 2027-08-01 只剩 1 天，只收 1 個月
   assert.deepEqual(Array.from(api.Money.housingPaymentSchedule({ ...h, payCycleMonths: 1 }, '2026-02-01', 2), p => p.date), ['2026-02-28', '2026-03-31']);
   const due = (ym) => api.Money.housingDueInMonth(h, ym).totalCents;
   assert.equal(due('2025-12'), 0);
@@ -1641,4 +1641,19 @@ test('租屋卡片顯示上次繳租日欄位與推估標示', () => {
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.match(src, /上次實際繳租日/);
   assert.match(src, /r\.lastPaid\.estimated/);
+});
+
+test('最後一期不足一個週期：繳租日在到期日前仍要繳，只收到期為止的月數', () => {
+  const h = { rentCents: 1000000, payCycleMonths: 6, contractStart: '2026-01-15', contractEnd: '2026-11-20', occupants: 1, fees: [] };
+  const r = api.Money.calcHousing(h);
+  assert.equal(r.paymentOn('2026-01-15').cents, 6000000);
+  assert.equal(r.paymentOn('2026-07-15').cents, 4000000);
+  assert.deepEqual([...api.Money.housingPaymentSchedule(h, '2026-01-01', 6).map(p => p.date)], ['2026-01-15', '2026-07-15']);
+  // 沒填到期日：每次都收滿一個週期
+  assert.equal(api.Money.calcHousing({ ...h, contractEnd: '' }).paymentOn('2026-07-15').cents, 6000000);
+});
+
+test('租屋卡片說明最後一期不足週期的收費規則', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /最後一期不足 \$\{r\.cycle\} 個月時只收到到期為止的月數/);
 });
