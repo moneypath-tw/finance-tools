@@ -1830,3 +1830,9 @@ test('帳戶性質與浮動收支性質含市面常見項目，且流動／非�
   assert.equal(natures.income.at(-1), '其他');
   assert.equal(natures.expense.at(-1), '其他');
 });
+
+test("多行 append 一律走 put()：條件式 null 不會被印成 null 文字", () => {
+  const src = fs.readFileSync(path.join(root, "shared/app.js"), "utf8");
+  assert.match(src, /const put = \(parent, \.\.\.kids\) => parent\.append\(\.\.\.kids\.filter\(Boolean\)\)/);
+  assert.doesNotMatch(src, /\w+\.append\(\s*$/m);
+});
