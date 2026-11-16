@@ -28,3 +28,11 @@ test('摺疊卡片（.card.compact-settings）左右內距不為 0；深色主�
   assert.ok(dark.length > 100 && colorVars.length >= 8, '深色區塊或色彩變數找不到');
   for (const v of colorVars) assert.ok(dark.includes(`${v}:`), `深色主題沒有覆寫 ${v}`);
 });
+
+test('手機寬度分頁按鈕折成 2 欄（4 個分頁 2×2），不橫向捲動', () => {
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  const mobile = css.slice(css.indexOf('@media (max-width: 720px)'));
+  const rule = mobile.match(/nav\.tabs \{[^}]*\}/)[0];
+  assert.match(rule, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.doesNotMatch(rule, /overflow-x/);
+});
