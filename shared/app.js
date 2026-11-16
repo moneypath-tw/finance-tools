@@ -2687,8 +2687,7 @@ const App = (() => {
               el('button', { class: 'btn small', text: '＋', 'aria-label': '多休一學期', onclick: () => addLeaveGaps(idx + gaps, 1) }),
               el('button', { class: 'btn small danger', text: '取消休學', onclick: () => removeLeaveGaps(idx, gaps) })
             ]),
-            isStudentLoan ? leaveControls(idx) : null,
-            el('p', { class: 'notice', text: '休學期間不計學費、不佔年級；復學後接續下一學期' })
+            isStudentLoan ? leaveControls(idx) : null
           ]);
         }
         return el('div', { class: 'period-block editor-only' }, [
@@ -2921,7 +2920,7 @@ const App = (() => {
     root.innerHTML = '';
     put(root,
       el('div', { class: 'card wage-source-card' }, [
-        el('div', { class: 'section-heading' }, [el('div', {}, [el('h3', { text: '收入來源與時薪' }), el('p', { class: 'notice', text: '選擇既有收入即可自動沿用；只有自訂模式需要輸入。' })])]),
+        el('div', { class: 'section-heading' }, [el('div', {}, [el('h3', { text: '收入來源與時薪' })])]),
         el('div', { class: 'field source-field' }, [
           el('label', { text: '使用收入來源' }),
           el('select', { onchange: e => { s.linkedRecurringFlowId = e.target.value; IO.markDirty(); renderWageReverse(); } }, [
@@ -2929,7 +2928,7 @@ const App = (() => {
             el('option', { value: 'custom', text: '自訂收入', selected: s.linkedRecurringFlowId === 'custom' ? 'selected' : undefined })
           ])
         ]),
-        linkedFlow ? el('p', { class: 'linked-note', text: `已連動「${linkedFlow.name || recurringKinds[linkedFlow.kind]}」的月收入、工時、投保薪資與勞健保設定。` }) : el('div', { class: 'toolbar' }, [
+        linkedFlow ? el('p', { class: 'linked-note', text: `已連動「${linkedFlow.name || recurringKinds[linkedFlow.kind]}」的收入與勞健保設定。` }) : el('div', { class: 'toolbar' }, [
           el('div', { class: 'field' }, [el('label', { text: '月總工資（稅前）' }), el('input', { type: 'number', value: Money.toYuan(s.grossMonthlySalaryCents), onchange: (ev) => { const v = Money.toCents(ev.target.value); if (!(v > 0)) return alert('月總工資必須大於 0'); s.grossMonthlySalaryCents = v; IO.markDirty(); renderWageReverse(); } })]),
           el('div', { class: 'field' }, [el('label', { text: '每月工作時數' }), el('input', { type: 'number', step: '0.5', value: s.monthlyWorkHours, onchange: (ev) => { const v = Number(ev.target.value); if (!(v > 0)) return alert('月工時必須大於 0'); s.monthlyWorkHours = v; IO.markDirty(); renderWageReverse(); } })]),
           el('label', {}, [el('input', { type: 'checkbox', checked: s.insuredSalaryFollowsGross ? 'checked' : undefined, onchange: (ev) => { s.insuredSalaryFollowsGross = ev.target.checked; IO.markDirty(); renderWageReverse(); } }), document.createTextNode(' 投保薪資同月總工資')]),
@@ -2941,7 +2940,7 @@ const App = (() => {
           el('div', { class: 'summary-block' }, [el('h3', { text: '健保自付' }), el('p', { class: 'mono big', text: Money.formatTWD(payroll.healthFee) })]),
           el('div', { class: 'summary-block' }, [el('h3', { text: '勞健保扣除後粗估' }), el('p', { class: 'mono big', text: Money.formatTWD(payroll.net) })])
         ]),
-        el('p', { class: 'notice', text: '時薪 ＝ 月總工資 ÷ 月工時；勞健保依個人參數中的費率及投保薪資計算。' })
+        el('p', { class: 'notice', text: '時薪 ＝ 月總工資 ÷ 月工時' })
       ]),
       el('div', { class: 'toolbar editor-only' }, [
         el('div', { class: 'field' }, [
@@ -3001,8 +3000,7 @@ const App = (() => {
         el('table', {}, [el('tbody', {}, result.altChain.map((step) => el('tr', {}, [
           el('td', { text: step.label }), el('td', { class: 'mono', text: step.rounded.toLocaleString() })
         ])))])
-      ]) : empty(),
-      el('p', { class: 'notice', text: '精度規則：每一層用「上一步無條件進位後的整數」往下除，已用真實數字驗證過此規則。' })
+      ]) : empty()
     );
   };
 
