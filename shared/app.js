@@ -1739,6 +1739,8 @@ const App = (() => {
         ]),
         el('div', { class: 'flow-result' }, [
           el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
+          // 住宅押金上限 2 個月租金（租賃住宅市場發展及管理條例第 7 條）；只提醒不阻擋，營業用租賃不受限
+          r.deposit && h.rentCents > 0 && r.deposit.cents > h.rentCents * 2 ? el('p', { class: 'notice', text: '押金超過 2 個月租金；住宅租賃法定上限是 2 個月（租賃住宅市場發展及管理條例第 7 條），營業用不受限。' }) : null,
           r.deposit ? el('p', { class: 'notice', text: `押金 ${yuan(r.deposit.cents)}：${r.deposit.paidOn ? `${r.deposit.paidOn} 入住時另付` : '入住時另付'}，${r.deposit.refundOn ? `${r.deposit.refundOn} 退租時退回` : '退租時退回'}；是暫付款，不算租金也不算支出，不進每月平均與上方每次繳款金額` }) : null,
           el('p', { class: 'mono', text: `上次繳租${r.lastPaid ? `${r.lastPaid.date}${r.lastPaid.estimated ? '（依排程推估）' : ''}` : '無'}　／下次應繳 ${next ? next.date : '無'}` }),
           el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費；繳租日在到期日之前就要繳，最後一期不足 ${r.cycle} 個月時只收到到期為止的月數` }),
