@@ -437,7 +437,9 @@ footer.io-bar span { color: var(--ink-soft); font-size: 0.875rem; }
   main { width: 100vw; max-width: 100vw; overflow: hidden; }
   .tab-panel, .card { width: 100%; max-width: 100%; }
   footer.io-bar { margin-left: 16px; margin-right: 16px; }
-  nav.tabs { overflow-x: auto; }
+  /* 4 個分頁在手機折成 2×2，不橫向捲動 */
+  nav.tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tab-btn { text-align: center; }
   .card { padding: 17px; border-radius: 12px; }
   .dashboard-card { width: 100%; max-width: 100%; overflow: hidden; contain: inline-size; }
   #allocation-dashboard { width: 100%; max-width: 100%; overflow: hidden; }
