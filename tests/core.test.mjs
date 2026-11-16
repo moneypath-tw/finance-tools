@@ -1618,3 +1618,27 @@ test('繳租日要出現在各租屋區塊：卡片欄位、扣款日同步、�
   assert.match(src, /號繳租）/); // 帳本預測備註
   assert.match(src, /f\.rents\.map/); // 最低餘額表
 });
+
+test('上次繳租日：有記錄用記錄，沒記錄依排程推估；租約開始前為空；日期格式錯會被驗證擋下', () => {
+  const base = { rentCents: 1000000, payCycleMonths: 3, contractStart: '2020-01-15', contractEnd: '', occupants: 1, fees: [] };
+  const r = api.Money.calcHousing(base);
+  assert.equal(r.lastPaid.estimated, true);
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  assert.ok(r.lastPaid.date <= todayStr);
+  assert.match(r.lastPaid.date, /^\d{4}-(01|04|07|10)-15$/);
+  const rec = api.Money.calcHousing({ ...base, lastPaidDate: '2026-02-03' });
+  assert.deepEqual({ ...rec.lastPaid }, { date: '2026-02-03', estimated: false });
+  assert.equal(api.Money.calcHousing({ ...base, contractStart: '2999-01-15' }).lastPaid, null);
+  assert.equal(api.Money.calcHousing({ ...base, contractEnd: '2020-02-01' }).lastPaid, null);
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.recurringCashFlows = [{ id: 'r', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0].id, active: true, housing: { ...base, lastPaidDate: '2026-13-99' } }];
+  const codes = [...api.Validation.validateWorkspace({ config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) }).errors.map(e => e.code)];
+  assert.ok(codes.includes('INVALID_DATE'));
+});
+
+test('租屋卡片顯示上次繳租日欄位與推估標示', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /上次實際繳租日/);
+  assert.match(src, /r\.lastPaid\.estimated/);
+});

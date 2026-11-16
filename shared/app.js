@@ -1726,11 +1726,13 @@ const App = (() => {
           el('div', { class: 'field' }, [el('label', { text: '繳租方式' }), el('select', { onchange: (ev) => { h.payCycleMonths = Number(ev.target.value); saveFlow(); } }, Money.RENT_CYCLES.map(n => el('option', { value: n, text: `${rentCycleNames[n]}繳`, selected: r.cycle === n ? 'selected' : undefined })))]),
           dateField('簽約起租日（第一個繳租月）', h.contractStart, (v) => { h.contractStart = v; saveFlow(); }),
           numField('繳租日（每月幾號，空白＝同起租日）', h.payDay || '', (v) => { h.payDay = v >= 1 && v <= 31 ? Math.trunc(v) : undefined; saveFlow(); }),
+          dateField('上次實際繳租日（可空，空白＝依排程推估）', h.lastPaidDate, (v) => { h.lastPaidDate = v; saveFlow(); }),
           dateField('租約到期日（可空）', h.contractEnd, (v) => { h.contractEnd = v; saveFlow(); }),
           numField('同住人數', r.occupants, (v) => { h.occupants = Math.max(1, Math.trunc(v)); saveFlow(); })
         ]),
         el('div', { class: 'flow-result' }, [
           el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
+          el('p', { class: 'mono', text: `上次繳租 ${r.lastPaid ? `${r.lastPaid.date}${r.lastPaid.estimated ? '（依排程推估）' : ''}` : '無'}　／下次應繳 ${next ? next.date : '無'}` }),
           el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費` }),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
