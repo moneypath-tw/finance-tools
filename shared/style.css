@@ -574,3 +574,47 @@ tbody tr:last-child td { border-bottom: 0; }
 .living-spend-accounts label { display: flex; align-items: flex-start; gap: 6px; }
 .living-spend-accounts .spend-reason { display: block; color: var(--ink-soft); font-size: 0.875rem; }
 .period-lines .alloc-amt { min-width: 6.5em; }
+
+/* 摺疊卡片同時是 .card 與 .compact-settings：後者的 padding:12px 0 會蓋掉卡片內距，內容貼左緣（桌面詳細模式的浮動收支、個人設定） */
+details.card.compact-settings { padding: 12px 20px; }
+@media (max-width: 720px) { details.card.compact-settings { padding: 12px 16px; } }
+
+/* 深色主題：跟隨系統設定（prefers-color-scheme），不加切換鈕。同一組綠灰色相、無新增彩色；
+   文字與底色對比：內文 13:1、次要文字 7:1、主色 7.8:1、主色上的字 8.7:1（皆 ≥ 4.5:1）。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #121A17;
+    --paper-card: #1A2420;
+    --rule: #2E3B36;
+    --ink: #E4EDE8;
+    --ink-soft: #9DB0A7;
+    --accent: #7CC4A4;
+    --accent-strong: #A5DAC3;
+    --accent-soft: #22322B;
+    --negative: #F0919D;
+    --over-limit: #F0A184;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    --focus-ring: 0 0 0 3px rgba(124, 196, 164, 0.35);
+  }
+  body { background: var(--paper); }
+  .view-mode-btn.active, .tab-btn.active, .btn, .setup-steps li::before { color: #0E1A15; }
+  .tab-btn.active { box-shadow: none; }
+  .btn.danger:hover { background: #F4A8B1; }
+  .field input, .field select, .field textarea,
+  .summary-card-setting-row input[type="text"], .summary-card-setting-row select,
+  .goal-picker select, .goal-picker input[type="month"], .compact-settings select,
+  #estimator-body input:not([type="checkbox"]), #estimator-body select,
+  .setup-steps li, .mortgage-stress, .formula, .period-block, .basis-option, .pay-chip,
+  .save-indicator { background: #121A17; color: var(--ink); }
+  .summary-block.highlight, .dashboard-mini-card, #estimator-body > .result-block,
+  body[data-view-mode="simple"] #estimator-body > .result-block,
+  body[data-view-mode="simple"] #wage-body > .result-block { background: var(--accent-soft); border-color: var(--rule); }
+  .dashboard-mini-card.negative-card, .dashboard-mini-card.watch-card, .dashboard-mini-card.missing-card,
+  .estimate-notice, .savings-issues, .savings-strengths, .estimator-controls, .estimator-section,
+  .student-loan-plan { background: var(--paper-card); border-color: var(--rule); }
+  .status-tag.tag-watch, .status-tag.tag-short, .flow-tag.warn { background: #2C1F22; }
+  .period-block.leave { background: repeating-linear-gradient(45deg, var(--paper-card), var(--paper-card) 8px, var(--rule) 8px, var(--rule) 9px); }
+  tbody tr:hover { background: rgba(124, 196, 164, 0.1); }
+  .summary-block.highlight { border-color: var(--rule); }
+}
