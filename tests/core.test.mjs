@@ -1657,3 +1657,31 @@ test('租屋卡片說明最後一期不足週期的收費規則', () => {
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.match(src, /最後一期不足 \$\{r\.cycle\} 個月時只收到到期為止的月數/);
 });
+
+test('押金是會退回的暫付款：另列一項，絕不併入租金、每月平均、固定項目或帳本預測；負數會被驗證擋下', () => {
+  const h = { rentCents: 1000000, payCycleMonths: 6, contractStart: '2026-01-15', contractEnd: '2027-01-15', occupants: 1, fees: [], depositCents: 2000000 };
+  const without = { ...h, depositCents: 0 };
+  const r = api.Money.calcHousing(h), r0 = api.Money.calcHousing(without);
+  assert.deepEqual({ ...r.deposit }, { cents: 2000000, paidOn: '2026-01-15', refundOn: '2027-01-15' });
+  assert.equal(r0.deposit, null);
+  // 有沒有押金，下面每一項都必須完全相同
+  for (const date of ['2026-01-15', '2026-07-15']) assert.deepEqual(JSON.parse(JSON.stringify(r.paymentOn(date))), JSON.parse(JSON.stringify(r0.paymentOn(date))));
+  assert.equal(r.paymentOn('2026-01-15').cents, 6000000);
+  assert.equal(r.monthlyCents, r0.monthlyCents);
+  assert.equal(r.perPaymentCents, r0.perPaymentCents);
+  assert.equal(api.Money.housingDueInMonth(h, '2026-01').totalCents, api.Money.housingDueInMonth(without, '2026-01').totalCents);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.Money.housingPaymentSchedule(h, '2025-12-01', 4))), JSON.parse(JSON.stringify(api.Money.housingPaymentSchedule(without, '2025-12-01', 4))));
+  const flows = (housing) => [{ id: 'r', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 15, active: true, accountId: 'a', housing }];
+  const money = (housing) => { const s = api.Money.calcRecurringMonthly(flows(housing)); return [s.essentialExpenseCents, ...s.items.map(i => i.monthlyCents)]; };
+  assert.deepEqual([...money(h)], [...money(without)]);
+  const config = structuredClone(api.DEFAULT_CONFIG);
+  config.recurringCashFlows = [{ id: 'r', name: '租屋', type: 'expense', kind: 'rent', amountCents: 0, dayOfMonth: 1, accountId: config.accountProfiles[0].id, active: true, housing: { ...h, depositCents: -1 } }];
+  const codes = [...api.Validation.validateWorkspace({ config, ledger: structuredClone(api.DEFAULT_LEDGER), scenarios: structuredClone(api.DEFAULT_SCENARIOS) }).errors.map(e => e.code)];
+  assert.ok(codes.includes('INVALID_MONEY'));
+});
+
+test('租屋卡片有押金欄位並說明是暫付款', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(src, /押金（元，退租時退回，不算支出）/);
+  assert.match(src, /是暫付款，不算租金也不算支出/);
+});
