@@ -62,11 +62,7 @@
   </section>
 
   <section id="panel-ledger" class="tab-panel">
-    <div class="card edit-card" id="personal-settings"></div>
-
     <div class="card" id="ledger-view"></div>
-
-    <div class="card" id="floating-view"></div>
 
     <div id="entries-view">
     <div class="card edit-card">
@@ -86,6 +82,16 @@
 
     <div class="card" id="ledger-summary"></div>
     </div>
+
+    <details class="card compact-settings" data-collapse-id="ledger-floating">
+      <summary>浮動收支</summary>
+      <div id="floating-view"></div>
+    </details>
+
+    <details class="card compact-settings" data-collapse-id="ledger-personal">
+      <summary>個人設定</summary>
+      <div id="personal-settings"></div>
+    </details>
   </section>
 
   <section id="panel-estimator" class="tab-panel">

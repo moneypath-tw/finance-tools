@@ -933,7 +933,7 @@ const App = (() => {
         document.createTextNode(`生活花費計入帳戶（${spendAccounts.auto ? '自動判斷' : '自選'}）　`),
         ...config.accountProfiles.map(a => el('label', {}, [
           el('input', { type: 'checkbox', value: a.id, checked: spendAccounts.ids.has(a.id) ? 'checked' : undefined, disabled: a.id === config.dashboard.livingCashAccountId ? 'disabled' : undefined, title: a.id === config.dashboard.livingCashAccountId ? '生活費現金一定計入' : undefined, onchange: e => { const ids = new Set(spendAccounts.ids); if (e.target.checked) ids.add(a.id); else ids.delete(a.id); config.dashboard.livingSpendAccountIds = [...ids]; IO.markDirty(); renderAllocationDashboard(); } }),
-          document.createTextNode(` ${a.name}`)
+          document.createTextNode(` ${a.name}（${spendAccounts.ids.has(a.id) ? "計入" : "不計入"}：${a.id === config.dashboard.livingCashAccountId ? "生活費現金一定計入" : (spendAccounts.reasons?.[a.id] || "")}）`)
         ])),
         spendAccounts.auto ? null : el('button', { type: 'button', class: 'btn small', text: '改回自動', onclick: () => { config.dashboard.livingSpendAccountIds = []; IO.markDirty(); renderAllocationDashboard(); } })
       ])
@@ -1075,7 +1075,7 @@ const App = (() => {
       showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
-    const openIncomeSettings = () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); $('#personal-settings')?.scrollIntoView({ block: 'start' }); };
+    const openIncomeSettings = () => { config.ui.viewMode = 'detailed'; applyViewMode({ force: true }); $('.tab-btn[data-tab="ledger"]')?.click(); const personal = $('#personal-settings'); const fold = personal?.closest('details'); if (fold) fold.open = true; personal?.scrollIntoView({ block: 'start' }); };
     const estimateNotice = hasRecurringIncome ? null : el('div', { class: 'estimate-notice editor-only' }, [
       el('p', { text: `收入 ${Money.formatTWD(income)} 與支出是「進階財務健檢」的估計值，沒改過就是範例數字。到帳本設定固定收入與支出後，這裡會改用你的實際設定。` }),
       el('button', { type: 'button', class: 'btn small', text: '設定收入與支出', onclick: openIncomeSettings })

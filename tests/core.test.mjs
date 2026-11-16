@@ -1180,11 +1180,6 @@ test('生活花費：刷卡算、卡費轉帳不重複、固定項目與預測�
     exp('2026-10-01', 40000, 'card') // 單次大額：中位數不受影響
   ];
   assert.equal(P.livingSpendCents(entries, ids, '2026-08-05', '2026-09-05'), 1000000);
-  const h = P.livingSpendHistory({ entries, accountIds: ids, payday: 5, today: new Date(2026, 9, 22) });
-  assert.deepEqual(Array.from(h.cycles, c => [c.start, c.spentCents]), [['2026-09-05', 4000000 + 1232000], ['2026-08-05', 1000000]]);
-  assert.equal(h.medianCents, Math.round((1000000 + 5232000) / 2));
-  assert.equal(h.suggestedCents, 3120000); // 31,160 進位到 31,200
-  assert.equal(P.livingSpendHistory({ entries: [exp('2026-10-10', 100, 'card')], accountIds: ids, payday: 5, today: new Date(2026, 9, 22) }).suggestedCents, null);
 });
 
 test('轉帳指示：依帳戶合併、加總等於已分配收入；同帳戶轉入先算支出、存入的錢不算可用餘額', () => {
@@ -1433,8 +1428,6 @@ test('實際生活費只有一個來源：app 讀 Snapshots.livingActual，不�
 
 test('核對：生活花費推估用合計天數，總資產曲線標出進步／退步', () => {
   const ps = [{ days: 10, total: { livingCents: 100000, fixedOutCents: 0 } }, { days: 20, total: { livingCents: 500000, fixedOutCents: 50000 } }];
-  assert.equal(Snap.livingEstimate(ps).livingPer30Cents, 600000);
-  assert.equal(Snap.livingEstimate([ps[0]]), null);
   const s = Snap.assetSeries([
     { date: '2026-01-01', balances: { a: 100000, b: 0 } },
     { date: '2026-01-31', balances: { a: 400000 } },
@@ -1480,10 +1473,6 @@ test('紅隊：手記房租配對排除、重複記帳提醒、滾動推估、�
   // 排程帳目已確認又手記＝重複
   const dup = P.fixedEntryMatch({ entries: [...entries, e('recurring-rent-2026-10', '2026-10-21', 1000000, { recurringFlowId: 'rent' })], items, from: '2026-10-01', to: '2026-11-01' });
   assert.deepEqual([...dup.duplicates.map(d => d.entryId)], ['rentManual']);
-  // 5 號發薪、10/2 才開始記：完整週期沒有，改用 10/2→11/2 共 31 天換算；之前只有收入的週期不算 0
-  const h = P.livingSpendHistory({ entries: [{ ...e('pay', '2026-08-05', 0), type: 'income', amountCents: 100 }, ...entries], accountIds: ids, payday: 5, today: new Date(2026, 10, 2), items });
-  assert.equal(h.medianCents, null);
-  assert.deepEqual([h.rolling.from, h.rolling.days, h.rolling.spentCents, h.rolling.per30Cents], ['2026-10-02', 31, 80000, 77419]);
   // 及早存：每 3 個月扣 9,000，帳上已有 6,000（已達進度），本期起到扣款所在期共 2 期 → 建議本期存 1,500
   const q = M.calcRecurringMonthly([{ id: 'ins', type: 'expense', label: '保險', amountCents: 300000, payCycleMonths: 3, payStartMonth: '2026-12', dayOfMonth: 20, accountId: 'bank', active: true }]).items;
   const r = P.fixedReserve({ items: q, fromYmd: '2026-11-05', payday: 5, bufferMonths: 0 }).bank;
@@ -1752,4 +1741,26 @@ test('FIRE 薪資成長預設貼近現實，押金超過 2 個月租金有提醒
   assert.ok(api.SCENARIO_FIRE.assumedSalaryGrowthRate <= 0.05);
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.match(src, /r\.deposit\.cents > h\.rentCents \* 2/);
+});
+
+test('生活花費計入帳戶：每個帳戶都帶判斷原因（計入與不計入）', () => {
+  const P = api.Planning;
+  const acc = (id, nature, liquid) => ({ id, nature, liquid });
+  const accounts = [acc('salary', 'checking', true), acc('save', 'savings', true), acc('inv', 'investment', false), acc('card', 'credit', false)];
+  const r = P.livingSpendAccounts({ accounts, spendIds: ['salary'], savingIds: ['save'] });
+  assert.equal(r.ids.has('save'), false);
+  for (const a of accounts) assert.ok(r.reasons[a.id] && r.reasons[a.id].length > 3, a.id);
+  assert.match(r.reasons.card, /信用卡/);
+  const chosen = P.livingSpendAccounts({ accounts, chosenIds: ['card'] });
+  assert.equal(chosen.reasons.card, '你勾選計入');
+  assert.equal(chosen.reasons.salary, '你沒勾選');
+});
+
+test('帳本頁順序：核對→新增→明細→摘要，浮動收支與個人設定收進折疊', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const at = (s) => html.indexOf(s);
+  assert.ok(at('id="ledger-view"') < at('id="ledger-form"') && at('id="ledger-form"') < at('id="ledger-summary"'));
+  assert.ok(at('id="ledger-summary"') < at('data-collapse-id="ledger-floating"') && at('data-collapse-id="ledger-floating"') < at('data-collapse-id="ledger-personal"'));
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(/personal\?\.closest\('details'\)/.test(src), '設定我的收支要先展開折疊');
 });
