@@ -1460,8 +1460,12 @@ const App = (() => {
   const renderLedgerList = () => {
     const body = $('#ledger-table-body');
     body.innerHTML = '';
+    const older = $('#ledger-older');
+    older.innerHTML = '';
     const sorted = [...ledger.entries].sort((a, b) => (a.date < b.date ? 1 : -1));
-    for (const e of sorted) {
+    // 只直接列近 3 個月；更舊的按年月收起來，資料累積數年頁面也不變長
+    const split = Money.splitRecentMonths(sorted, (e) => e.date, localToday(), 3);
+    const entryRow = (e) => {
       const typeLabel = { expense: '支出', income: '收入', wishlist: '願望', transfer: '轉帳' }[e.type];
       const currency = e.currency || 'TWD';
       const twdEquivalent = Money.entryTWDCents(e);
@@ -1471,7 +1475,7 @@ const App = (() => {
             el('div', { class: 'mono notice', text: '≈ ' + Money.formatMoney(twdEquivalent, 'TWD') })
           ])
         : el('td', { class: e.amountCents < 0 ? 'neg mono' : 'mono', text: Money.formatMoney(e.amountCents, currency) });
-      body.appendChild(el('tr', { 'data-entry-id': e.id }, [
+      return el('tr', { 'data-entry-id': e.id }, [
         el('td', {}, [document.createTextNode(e.date), e.status === 'projected' ? el('span', { class: 'badge', text: '預測' }) : null]),
         el('td', { text: e.floating ? `浮動${typeLabel}（${e.nature}）` : typeLabel + (e.type === 'income' && e.incomeSource ? `（${e.incomeSource}）` : '') }),
         el('td', { text: e.type === 'transfer' ? `${accountName(e.fromAccount)} → ${accountName(e.toAccount)}` : ([e.category, e.account ? accountName(e.account) : null].filter(Boolean).join('／') || '—') }),
@@ -1480,6 +1484,17 @@ const App = (() => {
         el('td', { text: e.type === 'expense' ? (e.reimbursable ? '可報銷' : '—') : '—' }),
         el('td', { text: e.note || '' }),
         el('td', {}, [e.status === 'projected' ? el('input', { type: 'number', min: '1', step: '1', class: 'confirm-amount', 'aria-label': '實際金額（元）', value: String(Math.abs(e.amountCents) / 100) }) : null, e.status === 'projected' ? el('button', { class: 'btn small', text: '確認入帳', onclick: (ev) => confirmEntry(e.id, ev.target.parentElement.querySelector('.confirm-amount')?.value) }) : null, el('button', { class: 'btn small danger', text: '刪除', onclick: () => deleteEntry(e.id) })])
+      ]);
+    };
+    for (const e of split.recent) body.appendChild(entryRow(e));
+    const headers = ['日期', '類型', '分類/帳戶', '金額', '必要性', '可報銷', '備註', ''];
+    for (const group of split.older) {
+      older.appendChild(el('details', { class: 'compact-settings', 'data-collapse-id': `ledger-older-${group.ym}` }, [
+        el('summary', { text: `${group.ym}（${group.rows.length} 筆）` }),
+        el('div', { class: 'table-scroll' }, [el('table', {}, [
+          el('thead', {}, [el('tr', {}, headers.map((h) => el('th', { text: h })))]),
+          el('tbody', {}, group.rows.map(entryRow))
+        ])])
       ]));
     }
   };
@@ -2052,9 +2067,11 @@ const App = (() => {
             el('td', { class: 'mono', text: outflowText(a.outflowCents) })])))
         ])])]),
         el('h3', { text: '各期比較' }),
-        el('div', { class: 'table-scroll' }, [el('table', {}, [
+        ...(() => {
+          const periodSplit = Money.splitRecentMonths(periods, x => x.to, localToday(), 3);
+          const periodTable = (list) => el('div', { class: 'table-scroll' }, [el('table', {}, [
           el('thead', {}, [el('tr', {}, ['期間', '天數', '推算用掉', '其中固定支出', '浮動收支', '生活花費', '每 30 天', '對帳', '總資產變化', '每 30 天', '比前一期', '備註'].map(h => el('th', { text: h })))]),
-          el('tbody', {}, periods.map(x => {
+          el('tbody', {}, list.map(x => {
             const pt = assets.find(a => a.date === x.to) || {};
             const per30 = (cents) => (x.days > 0 ? Math.round(cents * 30 / x.days) : null);
             return el('tr', {}, [el('td', { text: `${x.from} → ${x.to}` }), el('td', { class: 'mono', text: String(x.days) }),
@@ -2069,20 +2086,25 @@ const App = (() => {
               el('td', { class: pt.trend === 'down' ? 'neg' : '', text: { up: '進步', down: '退步', flat: '持平' }[pt.trend] || '—' }),
               el('td', { text: x.note })]);
           }))
-        ])]),
+        ])]);
+          return [periodTable(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodTable(g.rows)]))];
+        })(),
         el('p', { class: 'notice', text: '生活花費＝推算用掉－固定支出（依固定出入帳排程，非月繳只算繳款月）＋浮動收入－浮動支出（浮動收支另列，不算生活花費）。對帳＝餘額變化與「固定出入帳排程＋這段期間的逐筆帳目」比對；推算用掉已含固定支出，自己手記的同金額固定收支會配對掉，不會重複扣。總資產＝每次核對的帳戶合計（漏填的帳戶沿用上次數字）；「比前一期」比較每 30 天的資產變化，多存或少花就是進步。' })
       );
     }
     if (sorted.length) {
-      box.append(el('details', {}, [el('summary', { text: `核對紀錄（${sorted.length} 筆）` }),
-        ...[...sorted].reverse().map(s => el('div', { class: 'toolbar' }, [
+      const logSplit = Money.splitRecentMonths([...sorted].reverse(), s => s.date, localToday(), 3);
+      const logRow = (s) => el('div', { class: 'toolbar' }, [
           el('span', { text: `${s.date}　合計 ${Money.formatTWD(Object.values(s.balances).reduce((a, b) => a + b, 0))}${s.note ? `　${s.note}` : ''}` }),
           el('button', { class: 'btn small danger', text: pendingSnapshotDelete === s.id ? '確定刪除' : '刪除', onclick: () => {
             if (pendingSnapshotDelete !== s.id) { pendingSnapshotDelete = s.id; renderSnapshots(); return; }
             ledger.snapshots = ledger.snapshots.filter(x => x.id !== s.id);
             pendingSnapshotDelete = null; IO.markDirty(); renderSnapshots();
           } })
-        ]))]));
+        ]);
+      box.append(el('details', {}, [el('summary', { text: `核對紀錄（${sorted.length} 筆）` }),
+        ...logSplit.recent.map(logRow),
+        ...logSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `snapshots-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 筆）` }), ...g.rows.map(logRow)]))]));
     }
   };
 
