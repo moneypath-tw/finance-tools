@@ -1684,7 +1684,7 @@ test('最後一期不足一個週期：繳租日在到期日前仍要繳，只�
 
 test('租屋卡片說明最後一期不足週期的收費規則', () => {
   const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
-  assert.match(src, /最後一期不足 \$\{r\.cycle\} 個月時只收到到期為止的月數/);
+  assert.match(src, /最後一期不足 \$\{r\.cycle\} 個月，只收到到期為止的月數/);
 });
 
 test('押金是會退回的暫付款：另列一項，絕不併入租金、每月平均、固定項目或帳本預測；負數會被驗證擋下', () => {

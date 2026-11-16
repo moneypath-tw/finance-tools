@@ -1776,10 +1776,10 @@ const App = (() => {
         el('div', { class: 'flow-result' }, [
           el('p', { text: `每月平均 ${yuan(r.monthlyCents)} ＝ 房租 ${yuan(r.rentCents)} ＋ 其他費用 ${yuan(r.feesCents)} ＋ 電費 ${yuan(r.electricity.monthlyCents)}${r.subsidyCents ? ` － 租屋補助 ${yuan(r.subsidyCents)}` : ''}` }),
           // 住宅押金上限 2 個月租金（租賃住宅市場發展及管理條例第 7 條）；只提醒不阻擋，營業用租賃不受限
-          r.deposit && h.rentCents > 0 && r.deposit.cents > h.rentCents * 2 ? el('p', { class: 'notice', text: '押金超過 2 個月租金；住宅租賃法定上限是 2 個月（租賃住宅市場發展及管理條例第 7 條），營業用不受限。' }) : null,
-          r.deposit ? el('p', { class: 'notice', text: `押金 ${yuan(r.deposit.cents)}：${r.deposit.paidOn ? `${r.deposit.paidOn} 入住時另付` : '入住時另付'}，${r.deposit.refundOn ? `${r.deposit.refundOn} 退租時退回` : '退租時退回'}；是暫付款，不算租金也不算支出，不進每月平均與上方每次繳款金額` }) : null,
+          r.deposit && h.rentCents > 0 && r.deposit.cents > h.rentCents * 2 ? el('div', {}, noteLines(['押金超過 2 個月租金，高於住宅法定上限。', '依租賃住宅市場發展及管理條例第 7 條；營業用不受限。'])) : null,
+          r.deposit ? el('div', {}, noteLines([`押金 ${yuan(r.deposit.cents)}：${r.deposit.paidOn ? `${r.deposit.paidOn} ` : ''}入住時另付，${r.deposit.refundOn ? `${r.deposit.refundOn} ` : ''}退租時退回。`, '是暫付款，不算租金也不算支出。', '不進每月平均與每次繳款金額。'])) : null,
           el('p', { class: 'mono', text: `上次繳租${r.lastPaid ? `${r.lastPaid.date}${r.lastPaid.estimated ? '（依排程推估）' : ''}` : '無'}　／下次應繳 ${next ? next.date : '無'}` }),
-          el('p', { text: `房租、其他費用、電費同一天繳：每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費；繳租日在到期日之前就要繳，最後一期不足 ${r.cycle} 個月時只收到到期為止的月數` }),
+          el('div', {}, noteLines(['房租、其他費用、電費同一天繳。', `每次 ＝ (房租＋其他費用) × ${r.cycle} 個月＋該期電費。`, `繳租日在到期日前；最後一期不足 ${r.cycle} 個月，只收到到期為止的月數。`])),
           schedule.length
             ? el('div', { class: 'pay-schedule' }, schedule.map(p => el('span', { class: 'pay-chip mono', text: `${p.date}　${yuan(p.cents)}` })))
             : el('p', { class: 'notice', text: h.contractStart ? '租約期間內已無繳款日。' : '填入簽約起租日，就會列出接下來的繳款日。' })
@@ -1799,7 +1799,7 @@ const App = (() => {
             monthField('核定結束月（可空）', sub.endMonth, (v) => { sub.endMonth = v; saveFlow(); }),
             numField('每月幾號撥款', sub.dayOfMonth || 1, (v) => { sub.dayOfMonth = Math.min(31, Math.max(1, Math.trunc(v))); saveFlow(); })
           ]) : null,
-          sub.enabled ? el('p', { class: 'notice', text: '補助撥到自己的帳戶，不從房租扣；金額與期間請依核定通知填寫，到期續辦後更新結束月。' }) : null
+          sub.enabled ? el('div', {}, noteLines(['補助撥到自己的帳戶，不從房租扣。', '金額與期間依核定通知填寫。', '到期續辦後更新結束月。'])) : null
         ]),
         el('details', { class: 'flow-sub' }, [
           el('summary', { text: `其他費用${h.fees.length ? `：每月 ${yuan(r.feesCents)}` : '（管理費、網路費…）'}` }),
@@ -2367,7 +2367,7 @@ const App = (() => {
         numField('每月扣款日', settings.paymentDay, v => { settings.paymentDay = Math.min(31, Math.max(1, Math.trunc(v))); refresh(); }),
         numField('還款預備金月數', settings.reserveMonths, v => { settings.reserveMonths = Math.max(0, Math.trunc(v)); refresh(); }),
         el('label', { class: 'field estimator-field' }, [el('span', { text: '固定支出扣款帳戶' }), el('select', { onchange: e => { settings.accountId = e.target.value; refresh(); } }, accountOptions)])
-      ]), restricted ? el('p', { class: 'savings-issues', text: '目前選擇的房貸情況可能受央行貸款成數及不得有寬限期等限制；本工具已將寬限期歸零，實際仍以銀行與央行最新規定為準。' }) : null]),
+      ]), restricted ? el('p', { class: 'savings-issues', text: '房貸情況受央行成數與寬限期限制；已將寬限期歸零，實際以銀行與央行規定為準。' }) : null]),
       el('p', { class: 'notice' }, [document.createTextNode(`${REFERENCE_DATA.twMortgage.source}。${REFERENCE_DATA.twMortgage.note} `), el('a', { href: REFERENCE_DATA.twMortgage.regulationUrl, target: '_blank', rel: 'noopener', text: '查看央行最新規定' })])
     ]);
   };
@@ -2503,7 +2503,7 @@ const App = (() => {
     });
     return el('details', { class: 'compact-settings billed-student-loans', open: repayment.billedLoans.length ? 'open' : undefined }, [
       el('summary', { text: repayment.billedLoans.length ? `已在扣款的貸款（依帳單）・${repayment.billedLoans.length} 筆` : '已經開始被扣款？依帳單輸入' }),
-      el('p', { class: 'notice', text: '銀行已在扣款的貸款另列一筆，依帳單日期推算已繳／剩餘期數與餘額；「涵蓋前幾個已借學期」的學期不再列入上方畢業後的估算。' }),
+      el('div', {}, noteLines(['銀行已在扣款的貸款另列一筆。', '依帳單日期推算已繳／剩餘期數與餘額。', '「涵蓋前幾個已借學期」的學期，不再列入上方畢業後的估算。'])),
       ...rows,
       el('button', { class: 'btn small', text: '新增一筆', onclick: () => { repayment.billedLoans.push({ label: '', principalCents: 0, firstDueDate: '', termMonths: 12, semesters: 1 }); refresh(); } }),
       el('p', { class: 'notice', text: `利率：${ref.effectiveFrom} 前 ${(ref.previousBorrowerAnnualRate * 100).toFixed(3)}%，之後 ${(ref.borrowerAnnualRate * 100).toFixed(3)}%。${ref.rateChangeSource}。` })
