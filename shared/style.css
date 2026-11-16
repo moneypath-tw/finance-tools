@@ -272,14 +272,25 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .home-overview.level-short .home-headline { color: var(--negative); }
 .home-overview.level-watch .home-headline { color: var(--over-limit); }
 .home-daily { color: var(--ink-soft); }
-/* 分配圖：一個用途一列，細線長度＝占收入比例；只有生活費用強調色，不足用斜線，沒有圖例 */
-.home-alloc { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; font-size: 0.9rem; }
-.home-alloc li { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+/* 分配圖：一條依比例分段的長條（含固定支出）＋一行一段的名稱・占比・金額；只有生活費用強調色，沒有圖例 */
+.home-stack { display: grid; gap: 10px; }
+.stack-bar { display: flex; gap: 2px; height: 14px; }
+.stack-seg { flex: 1 1 0; min-width: 4px; border-radius: 3px; background: var(--seg); }
+.stack-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 0.9rem; }
+.stack-list li { display: grid; grid-template-columns: 12px minmax(0, 1fr) 3em auto; align-items: center; gap: 8px; }
+.stack-swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--seg); }
+.stack-pct { text-align: right; color: var(--ink-soft); }
+.stack-amt { text-align: right; min-width: 6.5em; font-variant-numeric: tabular-nums; }
+.seg-fixed { --seg: #7C8D85; }
+.seg-living { --seg: var(--accent); }
+.seg-saving { --seg: var(--ink-soft); }
+.seg-spare { --seg: var(--rule); }
+.seg-short { --seg: var(--negative); }
+.stack-seg.seg-short, .stack-list .seg-short .stack-swatch { background: repeating-linear-gradient(45deg, var(--negative) 0 3px, var(--rule) 3px 6px); }
+.stack-list .seg-short .stack-amt { color: var(--negative); }
+.stack-list .seg-spare .stack-swatch { border: 1px solid var(--ink-soft); }
 .alloc-track { display: block; height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; }
 .alloc-fill { display: block; height: 100%; min-width: 3px; background: var(--ink-soft); }
-.home-alloc .seg-living .alloc-fill { background: var(--accent); }
-.home-alloc .seg-short .alloc-fill { background: repeating-linear-gradient(45deg, var(--negative) 0 4px, var(--rule) 4px 8px); }
-.home-alloc .seg-short .alloc-amt { color: var(--negative); }
 .alloc-amt { text-align: right; font-variant-numeric: tabular-nums; }
 .home-slider, .home-progress { display: grid; gap: 4px; font-size: 0.9rem; }
 .home-slider input, .home-progress progress { width: 100%; accent-color: var(--accent); }

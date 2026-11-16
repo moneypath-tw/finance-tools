@@ -1805,3 +1805,15 @@ test('首頁有扣款帳戶檢核表（只提醒不擋），帳戶核對頁有�
   assert.equal((src.match(/Planning\.accountFloors\(/g) || []).length, 1);
   assert.match(src, /progress\.transfers\.checks/);
 });
+
+test('首頁分配圖是依比例分段的單一長條，每段標占比與金額，固定支出納入', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.match(src, /class: 'stack-bar'/);
+  assert.match(src, /class: 'stack-pct'/);
+  assert.match(src, /flexGrow = String\(s\.cents\)/);
+  assert.doesNotMatch(src, /home-alloc|home-legend/);
+  assert.match(css, /\.stack-seg/);
+  const planning = fs.readFileSync(path.join(root, 'shared/planning.js'), 'utf8');
+  assert.match(planning, /\{ key: 'fixed', label: fixed\.label, cents: fixed\.allocatedCents \}/);
+});
