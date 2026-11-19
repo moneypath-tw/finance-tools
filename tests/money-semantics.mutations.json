@@ -1,0 +1,3 @@
+[{"file":"shared/planning.js","old":"!e.recurringFlowId && !e.floating && !(fixedIds","new":"!e.recurringFlowId && !(fixedIds","note":"floating counted as living"},
+ {"file":"shared/money.js","old":"return Math.min(cycle, Math.max(1, Math.round(daysBetween(from, end) / (365 / 12))));","new":"return cycle;","note":"last period charged a full cycle"},
+ {"file":"shared/money.js","old":"const grossMonthlyCents = rentCents + feesCents + electricity.monthlyCents;","new":"const grossMonthlyCents = rentCents + feesCents + electricity.monthlyCents + depositCents;","note":"deposit folded into monthly"}]
