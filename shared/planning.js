@@ -582,6 +582,40 @@ const Planning = (() => {
     const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
     return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
   };
+  // 生活費建議值（首頁「套用為預算」的唯一來源）：三個依據各管一件事
+  //   1. 歷史：各期每 30 天生活費，用 Tukey 圍籬把極端期壓到邊界（不剔除、不改成 0），再按天數加權平均
+  //   2. 負擔：收入 − 固定支出 − 建議儲蓄＝付得起的上限，歷史超過就要求減少
+  //   3. 對照：主計總處每人消費扣居住類；歷史遠低於它多半是漏記，不據此建議「大幅縮減」
+  const livingGuide = ({ periods = [], incomeCents, fixedExpenseCents = 0, savingCents = 0, minDays = 14, lowRatio = 0.4 }) => {
+    const ref = REFERENCE_DATA.twPerCapitaConsumption;
+    const refCents = Math.round(ref.annualPerPersonCents * (1 - ref.housingShare) / 12);
+    const used = periods.filter(p => p.days > 0);
+    const days = used.reduce((s, p) => s + p.days, 0);
+    if (!days) return { ready: false, refCents };
+    const rate = (p) => p.livingCents * 30 / p.days;
+    const long = used.filter(p => p.days >= minDays).map(rate).sort((a, b) => a - b);
+    let lo = -Infinity, hi = Infinity;
+    if (long.length >= 4) {
+      const q = (f) => { const pos = (long.length - 1) * f, b = Math.floor(pos); return long[b] + (long[Math.min(b + 1, long.length - 1)] - long[b]) * (pos - b); };
+      const q1 = q(0.25), q3 = q(0.75), iqr = q3 - q1;
+      lo = q1 - 1.5 * iqr; hi = q3 + 1.5 * iqr;
+    }
+    // 太短的期間（隔兩天就核對）速率太抖：不算進圍籬，但仍按天數加權
+    let clipped = 0, sum = 0;
+    for (const p of used) {
+      const r = rate(p), c = Math.min(hi, Math.max(lo, r));
+      if (p.days >= minDays && c !== r) clipped += 1;
+      sum += c * p.days;
+    }
+    const rawPer30Cents = Math.round(used.reduce((s, p) => s + p.livingCents, 0) * 30 / days);
+    const typicalPer30Cents = Math.max(0, Math.round(sum / days));
+    const affordableCents = incomeCents - fixedExpenseCents - savingCents;
+    const base = { ready: true, days, clipped, rawPer30Cents, typicalPer30Cents, affordableCents, refCents };
+    if (affordableCents <= 0) return { ...base, verdict: 'unaffordable', recommendedCents: null, cutCents: 0 };
+    if (typicalPer30Cents < refCents * lowRatio) return { ...base, verdict: 'lowCheck', recommendedCents: typicalPer30Cents, cutCents: 0 };
+    if (typicalPer30Cents > affordableCents) return { ...base, verdict: 'cut', recommendedCents: affordableCents, cutCents: typicalPer30Cents - affordableCents };
+    return { ...base, verdict: 'ok', recommendedCents: typicalPer30Cents, cutCents: 0 };
+  };
   // recommendedSavingCents 由呼叫端算好（含緊急預備金與成本目標）時直接用，問題點與摘要卡才會看同一個應儲蓄
   // spendableCents（可選）＝分配表的生活費＋未分配的錢；有給時每日生活費用它，跟分配表與生活費狀態同一個數字
   const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents, spendableCents, targetRate = PLANNING_RULES.savingsRateTarget }) => {
@@ -674,5 +708,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, monthlyGoalCapacity, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, moneyMap, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, moneyMap, livingGuide, assessMonthlySavings, assess };
 })();
