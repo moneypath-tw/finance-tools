@@ -2113,11 +2113,11 @@ test('結論模式只留 5 塊；說明、習慣、收入目標、明細表都�
   const b = app.indexOf("const detailExtras = el('div', { class: 'home-extras editor-only' }");
   assert.ok(a > 0 && b > a);
   const overview = app.slice(a, b);
-  for (const name of ['habitsView.node', 'incomeView', 'floorsView', 'debitCheckView', 'mmDetails', 'living.guideLines', 'goalLine', 'home-how']) {
+  for (const name of ['habitsView.node', 'incomeView', 'accountsView', 'living.guideLines', 'goalLine', 'home-how']) {
     assert.ok(!overview.includes(name), `${name} 不該在結論模式`);
   }
   const extras = app.slice(b, app.indexOf("root.innerHTML = '';", b));
-  for (const name of ['habitsView.node', 'incomeView', 'floorsView', 'debitCheckView', 'mmDetails', 'living.guideLines', 'goalLine', 'home-how']) {
+  for (const name of ['habitsView.node', 'incomeView', 'accountsView', 'living.guideLines', 'goalLine', 'home-how']) {
     assert.ok(extras.includes(name), `${name} 要在編輯模式`);
   }
   assert.match(overview, /debitLine,/);
@@ -2148,4 +2148,14 @@ test('錢在哪裡：一般儲蓄帳戶的剩餘與固定支出緩衝金屬緩�
   const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.match(app, /\['bufferCents', '緩衝預備金'\]/);
   assert.match(app, /savingAccountId: savingsAccountId/);
+});
+
+test('首頁編輯模式：扣款檢核、最低餘額、存款明細併成一張「各帳戶」表，原三張表的欄位一欄不少', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  for (const h of ['帳戶', '餘額', '本期需留', '檢核', '下次扣款', '扣款前一天至少', '扣款後至少留', '本期建議多存', '固定支出', '生活費', '緊急金', '緩衝', '目標', '可動用', '不可動用']) {
+    assert.ok(app.includes(`'${h}'`), `合併表缺欄位 ${h}`);
+  }
+  assert.equal((app.match(/const accountsView =/g) || []).length, 1);
+  assert.doesNotMatch(app, /const (debitCheckView|floorsView|mmDetails) =/, '舊的三張表不可再各自存在');
+  assert.match(app, /foldNotes\('home-money-map-how'/);
 });
