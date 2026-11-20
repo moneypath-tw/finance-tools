@@ -1218,15 +1218,6 @@ const App = (() => {
     ]) : null;
     // 固定扣款帳戶檢核（只提醒、不擋）：每個有本期扣款的帳戶一列；需要的錢與缺額取自 transferPlan，不另算
     const debitChecks = savingsHealth.facts.noData ? [] : progress.transfers.checks;
-    const debitCheckView = debitChecks.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-debit-check', open: debitChecks.some(t => t.lackCents > 0) ? 'open' : undefined }, [
-      el('summary', { text: debitChecks.some(t => t.lackCents > 0) ? '有帳戶錢不夠扣款' : '扣款帳戶的錢都夠' }),
-      el('div', { class: 'table-scroll' }, [el('table', {}, [
-        el('thead', {}, [el('tr', {}, ['帳戶', '本期需留', '目前餘額', '檢核'].map(h => el('th', { text: h })))]),
-        el('tbody', {}, debitChecks.map(t => el('tr', {}, [el('td', { text: accountName(t.accountId) }), el('td', { class: 'mono', text: Money.formatTWD(t.needCents) }),
-          el('td', { class: 'mono', text: Money.formatTWD(t.balanceCents) }),
-          el('td', { class: `mono${t.lackCents > 0 ? ' neg' : ''}`, text: t.lackCents > 0 ? `差 ${Money.formatTWD(t.lackCents)}` : '夠' })])))
-      ])])
-    ]) : null;
     const actions = [...accountWarnings, ...verdict.fixes, ...flagged.filter(s => !s.status.transfer).map(s => s.status.action).filter(Boolean), ...goalRisks, ...habitsView.actions].slice(0, 3);
     // 每期固定的轉帳計畫：各帳戶分配額＋留在薪資帳戶的錢＝已分配的收入
     const standingPlan = [
@@ -1237,24 +1228,6 @@ const App = (() => {
     const living = livingEstimate(recurring, spendAccounts.ids, savingsHealth.facts.cycle.payday, savingsHealth);
     // 各固定支出扣款帳戶的最低餘額（每月預存＋緩衝），與轉帳指示、分配表同一份 Planning.fixedReserve
     const floors = fixedFloorsNow(recurring);
-    const floorsView = floors.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-floors' }, [
-      el('summary', { text: `扣款帳戶最低餘額（緩衝 ${config.dashboard.fixedBufferMonths} 個月）` }),
-      el('div', { class: 'table-scroll' }, [el('table', {}, [
-        el('thead', {}, [el('tr', {}, ['帳戶', '下次扣款', '扣款前一天至少', '扣款後至少留', '目前餘額', '本期建議多存'].map(h => el('th', { text: h })))]),
-        el('tbody', {}, floors.map(f => el('tr', {}, [el('td', { text: accountName(f.accountId) }), el('td', { class: 'mono', text: `${f.nextDate.slice(5).replace('-', '/')}　扣 ${Money.formatTWD(f.debitCents)}${f.rents.map(r => `；${r.name} ${r.date.slice(5).replace('-', '/')}（每月 ${r.payDay} 號）繳 ${Money.formatTWD(r.cents)}`).join('')}` }),
-          el('td', { class: 'mono', text: Money.formatTWD(f.beforeCents) }), el('td', { class: 'mono', text: Money.formatTWD(f.afterCents) }),
-          el('td', { class: `mono${(balances[f.accountId] || 0) < f.beforeCents ? ' neg' : ''}`, text: Money.formatTWD(balances[f.accountId] || 0) }),
-          el('td', { class: 'mono', text: savingsHealth.facts.fixedEarlyByAccount[f.accountId] ? Money.formatTWD(savingsHealth.facts.fixedEarlyByAccount[f.accountId]) : '—' })])))
-      ])]),
-      foldNotes('home-floors-how', '這兩欄怎麼算', [
-        '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝。',
-        '扣款後至少留＝扣完後仍要在的預存與緩衝。',
-        '年繳、季繳項目每月預存「金額÷週期」，扣款前剛好存滿。',
-        '本期建議多存不強制。',
-        '進度已達標但離整筆還有差距時，差額平均分到扣款前每一期。'
-      ]),
-      savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
-    ]) : null;
     // 分配圖：一條依比例分段的長條（收入＝100%，含固定支出）＋每段一行「名稱・占比・金額」；只有生活費用強調色，不足用斜線
     const allocTotal = Math.max(1, verdict.segments.reduce((sum, s) => sum + s.cents, 0));
     const pctOf = (cents) => `${Math.round(cents / allocTotal * 100)}%`;
@@ -1282,21 +1255,43 @@ const App = (() => {
     // 每個分類在哪些帳戶、各多少（同一份 mm.rows，與下方明細表同源）；只列有金額的帳戶，金額大的在前
     const mmAccounts = (key) => mm.rows.filter(r => r[key] > 0).sort((a, b) => b[key] - a[key]).map(r => `${r.name} ${Money.formatTWD(r[key])}`).join('・');
     const mmName = (label, key) => el('span', { class: 'stack-name' }, [document.createTextNode(label), el('small', { class: 'stack-accounts', text: mmAccounts(key) })]);
-    const mmDetails = mm.rows.some(r => r.balanceCents) ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-money-map' }, [
-        el('summary', { text: '各帳戶明細' }),
-        el('div', { class: 'table-scroll' }, [el('table', {}, [
-          el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '固定支出', '生活費', '緊急金', '緩衝', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
-          el('tbody', {}, mm.rows.filter(r => r.balanceCents).map(r => el('tr', {}, [
-            el('td', { text: r.name }), el('td', { class: `mono${r.balanceCents < 0 ? ' neg' : ''}`, text: Money.formatTWD(r.balanceCents) }),
-            ...mmCols.map(k => el('td', { class: 'mono', text: r[k] ? Money.formatTWD(r[k]) : '—' }))
-          ])))
-        ])]),
-        ...noteLines([
-          '每個帳戶的錢依序保留：本期固定支出、本期生活費、緊急預備金、目標、緩衝預備金。',
-          '剩下的才是可自由動用。',
-          '同一筆錢只算一次，與上面的分配用同一份需求。'
-        ])
-      ]) : null;
+    // 各帳戶一張表（扣款檢核＋最低餘額＋存款分佈）：每個帳戶一列，欄位全保留，數字各自取自原來的唯一來源
+    //   需留與缺額＝progress.transfers.checks（transferPlan）；下限＝floors（Planning.fixedReserve）；各用途＝mm.rows（Planning.moneyMap）
+    const acctIds = [...new Set([...debitChecks.map(t => t.accountId), ...floors.map(f => f.accountId), ...mm.rows.filter(r => r.balanceCents).map(r => r.id)])];
+    const dash = (cents, cls = '') => el('td', { class: `mono${cls}`, text: cents ? Money.formatTWD(cents) : '—' });
+    const accountsView = acctIds.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-debit-check', open: debitChecks.some(t => t.lackCents > 0) ? 'open' : undefined }, [
+      el('summary', { text: debitChecks.some(t => t.lackCents > 0) ? '有帳戶錢不夠扣款（各帳戶明細）' : `各帳戶：扣款檢核、最低餘額、錢在哪裡（緩衝 ${config.dashboard.fixedBufferMonths} 個月）` }),
+      el('div', { class: 'table-scroll' }, [el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '本期需留', '檢核', '下次扣款', '扣款前一天至少', '扣款後至少留', '本期建議多存', '固定支出', '生活費', '緊急金', '緩衝', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
+        el('tbody', {}, acctIds.map(id => {
+          const t = debitChecks.find(x => x.accountId === id), f = floors.find(x => x.accountId === id), r = mm.rows.find(x => x.id === id);
+          const bal = r ? r.balanceCents : (balances[id] || 0);
+          return el('tr', {}, [
+            el('td', { text: accountName(id) }),
+            el('td', { class: `mono${bal < 0 || (f && bal < f.beforeCents) ? ' neg' : ''}`, text: Money.formatTWD(bal) }),
+            t ? el('td', { class: 'mono', text: Money.formatTWD(t.needCents) }) : el('td', { class: 'mono', text: '—' }),
+            t ? el('td', { class: `mono${t.lackCents > 0 ? ' neg' : ''}`, text: t.lackCents > 0 ? `差 ${Money.formatTWD(t.lackCents)}` : '夠' }) : el('td', { class: 'mono', text: '—' }),
+            f ? el('td', { class: 'mono', text: `${f.nextDate.slice(5).replace('-', '/')}　扣 ${Money.formatTWD(f.debitCents)}${f.rents.map(x => `；${x.name} ${x.date.slice(5).replace('-', '/')}（每月 ${x.payDay} 號）繳 ${Money.formatTWD(x.cents)}`).join('')}` }) : el('td', { class: 'mono', text: '—' }),
+            f ? dash(f.beforeCents) : dash(0), f ? dash(f.afterCents) : dash(0),
+            dash(savingsHealth.facts.fixedEarlyByAccount[id] || 0),
+            ...mmCols.map(k => dash(r ? r[k] : 0))
+          ]);
+        }))
+      ])]),
+      foldNotes('home-floors-how', '扣款欄怎麼算', [
+        '扣款前一天至少＝這次要扣的整筆＋其他非月繳項目已預存的部分＋緩衝。',
+        '扣款後至少留＝扣完後仍要在的預存與緩衝。',
+        '年繳、季繳項目每月預存「金額÷週期」，扣款前剛好存滿。',
+        '本期建議多存不強制。',
+        '進度已達標但離整筆還有差距時，差額平均分到扣款前每一期。'
+      ]),
+      foldNotes('home-money-map-how', '各用途怎麼分', [
+        '每個帳戶的錢依序保留：本期固定支出、本期生活費、緊急預備金、目標、緩衝預備金。',
+        '剩下的才是可自由動用。',
+        '同一筆錢只算一次，與上面的分配用同一份需求。'
+      ]),
+      savingsHealth.fixedFreedCents > 0 ? el('p', { class: 'notice', text: `扣款帳戶的錢已夠，本期固定支出只要補 ${Money.formatTWD(savingsHealth.fixedRequestedCents)}，省下的 ${Money.formatTWD(savingsHealth.fixedFreedCents)} 列入儲蓄。` }) : null
+    ]) : null;
     const moneyMapView = mm.rows.some(r => r.balanceCents) ? el('div', { class: 'home-money-map' }, [
       el('p', { class: 'home-goal', text: `現有存款 ${Money.formatTWD(mmTotal)}，錢在這些地方` }),
       el('ul', { class: 'stack-list money-list' }, [
@@ -1372,9 +1367,7 @@ const App = (() => {
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       habitsView.node,
       incomeView,
-      debitCheckView,
-      mmDetails,
-      floorsView,
+      accountsView,
       el('details', { class: 'compact-settings', 'data-collapse-id': 'home-how' }, [
         el('summary', { text: '怎麼算的' }),
         ...noteLines([
