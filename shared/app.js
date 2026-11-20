@@ -617,8 +617,15 @@ const App = (() => {
     // 每日生活費＝分配表給生活費的錢＋分配完沒有用途的錢，跟分配表、生活費狀態是同一個數字
     const spendableCents = (allocation.rows.find(r => r.key === 'living')?.allocatedCents || 0) + allocation.unallocatedCents;
     const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents, spendableCents, targetRate: rateUsed });
+    // 存款分佈（錢在哪裡）：與上面 reserved 同一份需求與順序，生活費需求＝spendNeed 扣掉固定部分
+    const livingNeedByAccount = Object.fromEntries(Object.entries(spendNeed).map(([id, c]) => [id, Math.max(0, c - (facts.fixedNeedByAccount[id] || 0))]));
+    const moneyMap = Planning.moneyMap({
+      accounts: config.accountProfiles.map(a => ({ id: a.id, name: a.name, nature: a.nature, liquid: isLiquidNature(a.nature) })),
+      balances, fixedNeedByAccount: facts.fixedNeedByAccount, livingNeedByAccount, emergencyAccountId, emergencyTargetCents,
+      goalSavedByAccount: goals.reduce((m, g) => { m[g.accountId] = (m[g.accountId] || 0) + g.savedCents; return m; }, {})
+    });
     return {
-      ...assessed, rolling, rateUsed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
+      ...assessed, moneyMap, rolling, rateUsed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
       emergencyMonthlyCents, savingCents, savingsAccountId, goals, allocation, plan, facts, fixedRequestedCents, fixedFreedCents,
       // 應儲蓄的下限（與上面 savingCents 同一規則）：緊急預備金＋成本目標＋存到其他帳戶的固定儲蓄；Planning.requiredIncome 用
       savingFloorCents: emergencyMonthlyCents + goalMonthlyCents + (sameAccount ? 0 : recurring.fixedSavingCents),
@@ -1227,6 +1234,38 @@ const App = (() => {
       el('span', { class: 'stack-amt mono', text: Money.formatTWD(s.cents) })
     ])));
     const bar = el('div', { class: 'home-stack' }, [stackBar, stackList]);
+    // 錢在哪裡：每個帳戶的餘額分成「已預留」與「可自由動用」，不可動用與負債另列；數字來自 savingsHealth.moneyMap（Planning.moneyMap）
+    const mm = savingsHealth.moneyMap;
+    const mmParts = [
+      ['freeCents', '可自由動用'], ['fixedCents', '預留給本期固定支出'], ['livingCents', '預留給本期生活費'],
+      ['emergencyCents', '緊急預備金'], ['goalCents', '目標已存'], ['lockedCents', '不可動用（投資、定存等）']
+    ];
+    const mmCols = ['fixedCents', 'livingCents', 'emergencyCents', 'goalCents', 'freeCents', 'lockedCents'];
+    const mmTotal = mmParts.reduce((s, [k]) => s + mm.totals[k], 0);
+    const moneyMapView = mm.rows.some(r => r.balanceCents) ? el('div', { class: 'home-money-map' }, [
+      el('p', { class: 'home-goal', text: `現有存款 ${Money.formatTWD(mmTotal)}，錢在這些地方` }),
+      el('ul', { class: 'stack-list' }, [
+        ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', { class: k === 'freeCents' ? 'seg-living' : '' }, [
+          el('span', { class: 'stack-name', text: label }), el('span', { class: 'stack-amt mono', text: Money.formatTWD(mm.totals[k]) })])),
+        mm.totals.fixedLackCents ? el('li', {}, [el('span', { class: 'stack-name', text: '固定支出還缺（帳戶錢不夠）' }), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.fixedLackCents) })]) : null,
+        mm.totals.debtCents ? el('li', {}, [el('span', { class: 'stack-name', text: '負債（信用卡等）' }), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.debtCents) })]) : null
+      ]),
+      el('details', { class: 'compact-settings', 'data-collapse-id': 'home-money-map' }, [
+        el('summary', { text: '各帳戶明細' }),
+        el('div', { class: 'table-scroll' }, [el('table', {}, [
+          el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '固定支出', '生活費', '緊急金', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
+          el('tbody', {}, mm.rows.filter(r => r.balanceCents).map(r => el('tr', {}, [
+            el('td', { text: r.name }), el('td', { class: `mono${r.balanceCents < 0 ? ' neg' : ''}`, text: Money.formatTWD(r.balanceCents) }),
+            ...mmCols.map(k => el('td', { class: 'mono', text: r[k] ? Money.formatTWD(r[k]) : '—' }))
+          ])))
+        ])]),
+        ...noteLines([
+          '每個帳戶的錢依序保留：本期固定支出、本期生活費、緊急預備金、目標。',
+          '剩下的才是可自由動用。',
+          '同一筆錢只算一次，與上面的分配用同一份需求。'
+        ])
+      ])
+    ]) : null;
     // 生活費是唯一能直接調的大項；放開滑桿才重算，拖動時只更新數字
     const livingFloor = expenses.derived ? 0 : q.monthlyEssentialExpenseCents;
     const livingMax = Math.max(livingFloor, income - fixedExpense, expenses.livingCents);
@@ -1244,6 +1283,7 @@ const App = (() => {
       transferView,
       debitCheckView,
       bar,
+      moneyMapView,
       el('label', { class: 'home-slider' }, [
         el('span', {}, [document.createTextNode(`${allocation.rows.find(r => r.key === 'living').label}預算 `), livingValue]),
         el('input', {

@@ -558,6 +558,30 @@ const Planning = (() => {
       return { ...g, targetCents: target, savedCents: saved, gapCents: gap, monthlyRequiredCents: Math.ceil(gap / Math.max(1, g.months || 1)) };
     });
   };
+  // 「錢在哪裡」的唯一算法（首頁存款分佈讀這裡）：每個帳戶的餘額依序切成
+  //   本期還要付的固定支出 → 本期還要付的生活費 → 緊急預備金 → 目標已存 → 可自由動用；
+  // 順序與 currentMonthSavingsHealth 的保留順序相同，同一筆錢只算一次。
+  // 不算可動用的帳戶（投資、定存、保險、退休金、不動產）整筆列「不可動用」，負債列負債。
+  // fixedNeedByAccount＝cycleFacts 的固定支出需求；livingNeedByAccount＝spendingNeedByAccount 扣掉固定部分；goalSavedByAccount＝poolGoalSavings 的已存
+  const moneyMap = ({ accounts, balances, fixedNeedByAccount = {}, livingNeedByAccount = {}, emergencyAccountId, emergencyTargetCents = 0, goalSavedByAccount = {} }) => {
+    const take = (left, want) => Math.min(left, Math.max(0, Math.round(want || 0)));
+    const rows = accounts.map((a) => {
+      const bal = Math.round(balances[a.id] || 0);
+      const row = { id: a.id, name: a.name, nature: a.nature, balanceCents: bal, fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0, fixedLackCents: 0 };
+      if (a.nature === 'credit') { row.debtCents = bal; return row; }
+      if (!a.liquid) { row.lockedCents = Math.max(0, bal); return row; }
+      let left = Math.max(0, bal);
+      row.fixedCents = take(left, fixedNeedByAccount[a.id]); left -= row.fixedCents;
+      row.fixedLackCents = Math.max(0, Math.round(fixedNeedByAccount[a.id] || 0) - row.fixedCents);
+      row.livingCents = take(left, livingNeedByAccount[a.id]); left -= row.livingCents;
+      if (a.id === emergencyAccountId) { row.emergencyCents = take(left, emergencyTargetCents); left -= row.emergencyCents; }
+      row.goalCents = take(left, goalSavedByAccount[a.id]); left -= row.goalCents;
+      row.freeCents = left;
+      return row;
+    });
+    const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
+    return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
+  };
   // recommendedSavingCents 由呼叫端算好（含緊急預備金與成本目標）時直接用，問題點與摘要卡才會看同一個應儲蓄
   // spendableCents（可選）＝分配表的生活費＋未分配的錢；有給時每日生活費用它，跟分配表與生活費狀態同一個數字
   const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents, spendableCents, targetRate = PLANNING_RULES.savingsRateTarget }) => {
@@ -650,5 +674,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, monthlyGoalCapacity, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, moneyMap, assessMonthlySavings, assess };
 })();
