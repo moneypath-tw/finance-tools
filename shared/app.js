@@ -635,7 +635,8 @@ const App = (() => {
     const livingNeedByAccount = Object.fromEntries(Object.entries(spendNeed).map(([id, c]) => [id, Math.max(0, c - (facts.fixedNeedByAccount[id] || 0))]));
     const moneyMap = Planning.moneyMap({
       accounts: config.accountProfiles.map(a => ({ id: a.id, name: a.name, nature: a.nature, liquid: isLiquidNature(a.nature) })),
-      balances, fixedNeedByAccount: facts.fixedNeedByAccount, livingNeedByAccount, emergencyAccountId, emergencyTargetCents,
+      balances, fixedNeedByAccount: facts.fixedNeedByAccount, livingNeedByAccount, emergencyAccountId, emergencyTargetCents, savingAccountId: savingsAccountId,
+      bufferNeedByAccount: Object.fromEntries(fixedFloorsNow(recurring).map(f => [f.accountId, f.bufferCents || 0])),
       goalSavedByAccount: goals.reduce((m, g) => { m[g.accountId] = (m[g.accountId] || 0) + g.savedCents; return m; }, {})
     });
     return {
@@ -1274,9 +1275,9 @@ const App = (() => {
     const mm = savingsHealth.moneyMap;
     const mmParts = [
       ['freeCents', '可自由動用'], ['fixedCents', '預留給本期固定支出'], ['livingCents', '預留給本期生活費'],
-      ['emergencyCents', '緊急預備金'], ['goalCents', '目標已存'], ['lockedCents', '不可動用（投資、定存等）']
+      ['emergencyCents', '緊急預備金（必備）'], ['bufferCents', '緩衝預備金'], ['goalCents', '目標已存'], ['lockedCents', '不可動用（投資、定存等）']
     ];
-    const mmCols = ['fixedCents', 'livingCents', 'emergencyCents', 'goalCents', 'freeCents', 'lockedCents'];
+    const mmCols = ['fixedCents', 'livingCents', 'emergencyCents', 'bufferCents', 'goalCents', 'freeCents', 'lockedCents'];
     const mmTotal = mmParts.reduce((s, [k]) => s + mm.totals[k], 0);
     // 每個分類在哪些帳戶、各多少（同一份 mm.rows，與下方明細表同源）；只列有金額的帳戶，金額大的在前
     const mmAccounts = (key) => mm.rows.filter(r => r[key] > 0).sort((a, b) => b[key] - a[key]).map(r => `${r.name} ${Money.formatTWD(r[key])}`).join('・');
@@ -1284,14 +1285,14 @@ const App = (() => {
     const mmDetails = mm.rows.some(r => r.balanceCents) ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-money-map' }, [
         el('summary', { text: '各帳戶明細' }),
         el('div', { class: 'table-scroll' }, [el('table', {}, [
-          el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '固定支出', '生活費', '緊急金', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
+          el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '固定支出', '生活費', '緊急金', '緩衝', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
           el('tbody', {}, mm.rows.filter(r => r.balanceCents).map(r => el('tr', {}, [
             el('td', { text: r.name }), el('td', { class: `mono${r.balanceCents < 0 ? ' neg' : ''}`, text: Money.formatTWD(r.balanceCents) }),
             ...mmCols.map(k => el('td', { class: 'mono', text: r[k] ? Money.formatTWD(r[k]) : '—' }))
           ])))
         ])]),
         ...noteLines([
-          '每個帳戶的錢依序保留：本期固定支出、本期生活費、緊急預備金、目標。',
+          '每個帳戶的錢依序保留：本期固定支出、本期生活費、緊急預備金、目標、緩衝預備金。',
           '剩下的才是可自由動用。',
           '同一筆錢只算一次，與上面的分配用同一份需求。'
         ])

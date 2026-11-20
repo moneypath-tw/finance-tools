@@ -559,15 +559,16 @@ const Planning = (() => {
     });
   };
   // 「錢在哪裡」的唯一算法（首頁存款分佈讀這裡）：每個帳戶的餘額依序切成
-  //   本期還要付的固定支出 → 本期還要付的生活費 → 緊急預備金 → 目標已存 → 可自由動用；
+  //   本期還要付的固定支出 → 本期還要付的生活費 → 緊急預備金（必備）→ 目標已存 → 緩衝預備金 → 可自由動用；
+  // 緩衝預備金＝一般儲蓄帳戶的剩餘＋各固定支出扣款帳戶的緩衝金，都屬預備金、不算可自由動用（使用者 2026-11-20）；
   // 順序與 currentMonthSavingsHealth 的保留順序相同，同一筆錢只算一次。
   // 不算可動用的帳戶（投資、定存、保險、退休金、不動產）整筆列「不可動用」，負債列負債。
   // fixedNeedByAccount＝cycleFacts 的固定支出需求；livingNeedByAccount＝spendingNeedByAccount 扣掉固定部分；goalSavedByAccount＝poolGoalSavings 的已存
-  const moneyMap = ({ accounts, balances, fixedNeedByAccount = {}, livingNeedByAccount = {}, emergencyAccountId, emergencyTargetCents = 0, goalSavedByAccount = {} }) => {
+  const moneyMap = ({ accounts, balances, fixedNeedByAccount = {}, livingNeedByAccount = {}, emergencyAccountId, emergencyTargetCents = 0, goalSavedByAccount = {}, savingAccountId = null, bufferNeedByAccount = {} }) => {
     const take = (left, want) => Math.min(left, Math.max(0, Math.round(want || 0)));
     const rows = accounts.map((a) => {
       const bal = Math.round(balances[a.id] || 0);
-      const row = { id: a.id, name: a.name, nature: a.nature, balanceCents: bal, fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0, fixedLackCents: 0 };
+      const row = { id: a.id, name: a.name, nature: a.nature, balanceCents: bal, fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, bufferCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0, fixedLackCents: 0 };
       if (a.nature === 'credit') { row.debtCents = bal; return row; }
       if (!a.liquid) { row.lockedCents = Math.max(0, bal); return row; }
       let left = Math.max(0, bal);
@@ -576,11 +577,13 @@ const Planning = (() => {
       row.livingCents = take(left, livingNeedByAccount[a.id]); left -= row.livingCents;
       if (a.id === emergencyAccountId) { row.emergencyCents = take(left, emergencyTargetCents); left -= row.emergencyCents; }
       row.goalCents = take(left, goalSavedByAccount[a.id]); left -= row.goalCents;
+      // 一般儲蓄帳戶：剩下的整筆是緩衝；其他帳戶只留固定支出的緩衝金
+      row.bufferCents = a.id === savingAccountId ? left : take(left, bufferNeedByAccount[a.id]); left -= row.bufferCents;
       row.freeCents = left;
       return row;
     });
     const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
-    return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
+    return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), bufferCents: sum('bufferCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
   };
   // 數據對帳檢核（docs/設計架構與計算邏輯.md「數據一致性規範」）：同一件事的兩種算法必須相等，差超過 tolerance（分）就列出。
   //   純函式、只比對已算好的數字；任何一條不成立代表某處算法漂移，首頁會顯示警示，測試用固定資料鎖住「全部成立」。
@@ -595,7 +598,7 @@ const Planning = (() => {
     add('allocation-sum', '分配合計＝收入', health.allocation.totalAllocatedCents + health.allocation.unallocatedCents, health.allocation.incomeCents);
     // 3. 存款分佈：各部位加總＝帳戶餘額（可動用＋不可動用－信用卡欠款）
     const t = health.moneyMap.totals, rows = health.moneyMap.rows;
-    const mapParts = t.fixedCents + t.livingCents + t.emergencyCents + t.goalCents + t.freeCents + t.lockedCents - t.debtCents;
+    const mapParts = t.fixedCents + t.livingCents + t.emergencyCents + t.goalCents + (t.bufferCents || 0) + t.freeCents + t.lockedCents - t.debtCents;
     add('money-map-sum', '存款分佈合計＝帳戶餘額', mapParts, sumOf(rows, r => r.nature === 'credit' ? -r.balanceCents : Math.max(0, r.balanceCents)));
     // 4. 月度餘裕：收入－固定－生活費預算－建議儲蓄
     add('flex', '月度餘裕＝收入扣各項', health.monthlyFlexCents, health.incomeCents - health.fixedExpenseCents - health.expenses.livingCents - health.recommendedSavingCents);

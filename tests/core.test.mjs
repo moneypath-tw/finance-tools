@@ -2112,3 +2112,26 @@ test('結論模式只留 5 塊；說明、習慣、收入目標、明細表都�
   const plan = fs.readFileSync(path.join(root, 'shared/planning.js'), 'utf8');
   assert.match(plan, /lackCents: t \? t\.spendLackCents : 0, purposes: t \? t\.mustPurposes : \[\]/);
 });
+
+test('錢在哪裡：一般儲蓄帳戶的剩餘與固定支出緩衝金屬緩衝預備金，不算可自由動用', () => {
+  const accounts = [
+    { id: 'a', name: '薪轉', nature: 'checking', liquid: true }, { id: 's', name: '儲蓄', nature: 'savings', liquid: true }
+  ];
+  const r = api.Planning.moneyMap({
+    accounts, balances: { a: 900000, s: 700000 },
+    fixedNeedByAccount: { a: 300000 }, livingNeedByAccount: {}, emergencyAccountId: 's', emergencyTargetCents: 400000,
+    savingAccountId: 's', bufferNeedByAccount: { a: 200000 }
+  });
+  const [a, s] = r.rows;
+  // 薪轉：固定 30 萬、緩衝金 20 萬，其餘 40 萬才可自由動用
+  assert.deepEqual([a.fixedCents, a.bufferCents, a.freeCents], [300000, 200000, 400000]);
+  // 儲蓄帳戶：緊急 40 萬，剩下 30 萬整筆是緩衝，沒有可自由動用
+  assert.deepEqual([s.emergencyCents, s.bufferCents, s.freeCents], [400000, 300000, 0]);
+  assert.equal(r.totals.bufferCents, 500000);
+  for (const x of r.rows) {
+    assert.equal(x.fixedCents + x.livingCents + x.emergencyCents + x.goalCents + x.bufferCents + x.freeCents + x.lockedCents, Math.max(0, x.balanceCents));
+  }
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(app, /\['bufferCents', '緩衝預備金'\]/);
+  assert.match(app, /savingAccountId: savingsAccountId/);
+});
