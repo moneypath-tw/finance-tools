@@ -1967,6 +1967,20 @@ test('單一權威：首頁實際生活費每 30 天＝各期比較的滾動平�
   assert.equal(a.per30Cents, Snap.rollingAverage(list, null).livingPer30Cents);
 });
 
+test('錢在哪裡：生活費缺額與「扣款帳戶錢不夠」同一個數字（現金差 5,988 的對齊）', () => {
+  const P = api.Planning;
+  const need = { cash: 1000000, bank: 200000 };
+  const bal = { cash: 401200, bank: 900000 };
+  const map = P.moneyMap({ accounts: [{ id: 'cash', name: '現金', nature: 'cash', liquid: true }, { id: 'bank', name: '銀行', nature: 'checking', liquid: true }],
+    balances: bal, fixedNeedByAccount: { bank: 200000 }, livingNeedByAccount: { cash: 1000000 } });
+  const living = { key: 'living', label: '生活費', allocatedCents: 1000000, accountId: 'cash' };
+  const lack = P.transferPlan({ rows: [living], accounts: { cash: { balanceCents: bal.cash }, bank: { balanceCents: bal.bank } }, spendingNeed: need }).checks.find(c => c.accountId === 'cash').lackCents;
+  assert.equal(map.totals.livingLackCents, lack);
+  assert.equal(map.rows[0].livingLackCents, 598800);
+  assert.equal(map.rows[0].livingCents + map.rows[0].freeCents, 401200, '缺額不改變各部位加總');
+  assert.match(fs.readFileSync(new URL('../shared/app.js', import.meta.url), 'utf8'), /生活費還缺（帳戶錢不夠）/);
+});
+
 test('錢在哪裡清單用兩欄樣式：沿用四欄格線會把名稱擠成一字一行（2026-11-20 線上跑版）', () => {
   const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
@@ -2071,7 +2085,7 @@ test('錢在哪裡：每個分類都標出所屬帳戶（同源於 moneyMap.rows
   const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
   assert.match(app, /const mmAccounts = \(key\) => mm\.rows\.filter\(r => r\[key\] > 0\)/);
-  assert.equal((app.match(/mmName\(/g) || []).length, 3);
+  assert.equal((app.match(/mmName\(/g) || []).length, 4); // 通用列、固定缺、生活費缺、負債各一處
   assert.doesNotMatch(app, /el\('span', \{ class: 'stack-name', text: label \}\), el\('span', \{ class: 'stack-amt mono', text: Money\.formatTWD\(mm\.totals/);
   assert.match(css, /\.stack-accounts \{ display: block/);
 });
