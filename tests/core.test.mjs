@@ -2066,3 +2066,12 @@ test('一致性規範表與 crossChecks 的編號逐條相同（文件不得與�
   const actual = Array.from(new Set(api.Planning.crossChecks({ health, periods: [period] }).map(c => c.id.replace(/-\d+$/, '')))).sort();
   assert.equal(documented.join(), actual.join());
 });
+
+test('錢在哪裡：每個分類都標出所屬帳戶（同源於 moneyMap.rows）', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.match(app, /const mmAccounts = \(key\) => mm\.rows\.filter\(r => r\[key\] > 0\)/);
+  assert.equal((app.match(/mmName\(/g) || []).length, 3);
+  assert.doesNotMatch(app, /el\('span', \{ class: 'stack-name', text: label \}\), el\('span', \{ class: 'stack-amt mono', text: Money\.formatTWD\(mm\.totals/);
+  assert.match(css, /\.stack-accounts \{ display: block/);
+});
