@@ -512,8 +512,7 @@ const App = (() => {
     if (guide.clipped) lines.push(`有 ${guide.clipped} 期特別高或低，已壓到常態範圍再平均`);
     if (guide.verdict === 'cut') lines.push(`收入扣固定支出與儲蓄後只剩 ${fmt(guide.affordableCents)}，生活費要比常態少 ${fmt(guide.cutCents)}`);
     else if (guide.verdict === 'unaffordable') lines.push('收入扣固定支出與建議儲蓄已不夠生活費，先調儲蓄目標或固定支出');
-    else if (guide.verdict === 'lowCheck') lines.push(`比台灣人均（不含居住）約 ${fmt(guide.refCents)} 低很多，可能漏記，先核對`);
-    else lines.push(`台灣人均（不含居住）約 ${fmt(guide.refCents)}，僅供對照`);
+    else if (guide.verdict === 'lowCheck') lines.push('比台灣人均低很多，可能漏記，先核對');
     const down = (cents) => Math.floor(cents / 10000) * 10000;
     const suggestedCents = guide.recommendedCents === null ? null : (guide.verdict === 'cut' ? down(guide.recommendedCents) : roundUp(guide.recommendedCents));
     return { ...plain, monthlyCents: guide.typicalPer30Cents, suggestedCents, text: `生活費常態每 30 天約 ${fmt(guide.typicalPer30Cents)}`, guide, guideLines: lines };
@@ -731,6 +730,20 @@ const App = (() => {
   const empty = () => document.createDocumentFragment();
   // 說明文字的唯一建構處：一行一個短句（每行 ≤40 字，由 tests/long-text.test.mjs 把關），長說明用這個拆開、放進折疊
   const noteLines = (lines) => lines.filter(Boolean).map(text => el('p', { class: 'notice', text }));
+  // 「名稱＋細線＋數字」比例列的唯一建構處（同組數字跨項目比較用線長，不用整句話）：
+  //   rows＝[{label, value, max?, text}]；線長＝value／max（沒給 max 就用本組最大值），顏色只用變數
+  const meterRows = (rows) => {
+    const top = Math.max(1, ...rows.map(r => r.max ?? r.value));
+    return el('ul', { class: 'period-lines meter-rows' }, rows.map(r => {
+      const fill = el('span', { class: 'alloc-fill' });
+      fill.style.width = `${Math.min(100, Math.max(1, Math.round(Math.max(0, r.value) / (r.max ?? top) * 100)))}%`; // CSSOM, not a style attribute (CSP)
+      return el('li', {}, [
+        el('span', { class: 'period-label', text: r.label }),
+        el('span', { class: 'alloc-track', 'aria-hidden': 'true' }, [fill]),
+        el('span', { class: 'alloc-amt mono', text: r.text })
+      ]);
+    }));
+  };
   // 「一行標題＋折疊的短句清單」的唯一建構處；折疊狀態靠 data-collapse-id 記住，不新增存檔欄位
   const foldNotes = (id, summary, lines) => el('details', { class: 'compact-settings', 'data-collapse-id': id }, [el('summary', { text: summary }), ...noteLines(lines)]);
   // 數字輸入欄位的唯一建構處；className 只決定排版（個人設定 'field'、成本試算 'field estimator-field'）
@@ -934,12 +947,13 @@ const App = (() => {
       const t = Planning.workTarget({ needNetCents: extra, flow, maxMonthlyHours, minimumHourlyCents });
       const hrs = t.hoursAtRate === null ? '—' : weekly(t.hoursAtRate);
       const wage = t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents);
-      return extra > 0 ? `${g.label}（${g.targetMonth}前）：每月多 ${fmt(extra)}，週多 ${hrs} 小時或時薪多 ${wage}` : null;
+      return extra > 0 ? [`${g.label}（${g.targetMonth}前）`, fmt(extra), `${hrs} 小時`, wage] : null;
     }).filter(Boolean);
     const gap = req.recommendedCents - health.incomeCents;
     return el('details', { class: 'compact-settings home-income-target', 'data-collapse-id': 'home-income-target' }, [
       el('summary', { text: '收入目標（工時／時薪）' }),
-      el('p', { class: 'notice income-verdict', text: gap > 0 ? `要支應整個計畫，每月淨收入需 ${fmt(req.recommendedCents)}，目前差 ${fmt(gap)}` : `目前收入已足夠支應計畫（建議 ${fmt(req.recommendedCents)}）` }),
+      el('p', { class: `notice income-verdict${gap > 0 ? ' negative' : ''}`, text: gap > 0 ? `每月淨收入差 ${fmt(gap)}` : '目前收入足夠支應計畫' }),
+      meterRows(tiers.map(([label, cents]) => ({ label: label.split('（')[0], value: cents, text: fmt(cents) }))),
       el('table', { class: 'income-target-table' }, [
         el('thead', {}, [el('tr', {}, ['', '每月淨收入', `照目前時薪 ${flow.hourlyRateCents ? fmt(flow.hourlyRateCents) : '—'}：每週工時`, `照目前每週 ${weekly(flow.monthlyWorkHours || 0)} 小時：時薪`].map(text => el('th', { text })))]),
         el('tbody', {}, tiers.map(([label, need]) => {
@@ -948,7 +962,10 @@ const App = (() => {
           return el('tr', {}, [label, fmt(need), hoursText, t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents)].map(text => el('td', { class: 'mono', text })));
         }))
       ]),
-      ...goalLines.map(text => el('p', { class: 'notice', text })),
+      goalLines.length ? el('table', { class: 'income-target-table' }, [
+        el('thead', {}, [el('tr', {}, ['目標（期限）', '每月多', '每週多工時', '或時薪多'].map(text => el('th', { text })))]),
+        el('tbody', {}, goalLines.map(cells => el('tr', {}, cells.map(text => el('td', { class: 'mono', text })))))
+      ]) : null,
       wage.current ? el('p', { class: `notice${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? ' negative' : ''}`, text: `法定基本工資時薪 ${fmt(wage.current.hourlyCents)}（${wage.current.effectiveFrom} 起）${wage.next ? `；${wage.next.effectiveFrom} 起 ${fmt(wage.next.hourlyCents)}` : ''}${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? '。你的時薪低於基本工資，可向雇主或勞工局反映' : ''}` }) : null,
       el('label', { class: 'field' }, [document.createTextNode('每週可工作時數上限 '), el('input', { type: 'number', min: '1', max: '84', value: String(weeklyMax), onchange: e => { config.personalBaseline.maxWeeklyWorkHours = Math.max(1, Math.min(84, Number(e.target.value) || PLANNING_RULES.defaultMaxWeeklyWorkHours)); IO.markDirty(); renderAllocationDashboard(); } })]),
       el('div', {}, noteLines([`調整的是「${flow.name}」，其他收入照舊。`, '淨額換稅前用這份收入目前的比例（勞健保大致隨薪資）。', `上限預設為勞基法每週正常工時 ${REFERENCE_DATA.twLaborStandards.weeklyNormalHours} 小時。`]))
@@ -1131,7 +1148,10 @@ const App = (() => {
         studentLoanScenario ? el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') }) : null,
         mortgageScenario ? el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') }) : null
       ]) : null,
-      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), ...studentLoan.billed.filter(b => b && b.status === 'repaying').map(b => el('p', { class: 'notice', text: `${b.label || '帳單中的貸款'}：已繳 ${b.paidTerms}／${b.termMonths} 期・待償還 ${Money.formatTWD(b.balanceCents)}・月繳 ${Money.formatTWD(b.next.paymentCents)}` })), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
+      showStudentLoan ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '學貸' }), ...studentLoan.billed.filter(b => b && b.status === 'repaying').map(b => el('div', {}, [
+          meterRows([{ label: b.label || '帳單中的貸款', value: b.paidTerms, max: b.termMonths, text: `${b.paidTerms}／${b.termMonths} 期` }]),
+          el('p', { class: 'notice', text: `待償還 ${Money.formatTWD(b.balanceCents)}・月繳 ${Money.formatTWD(b.next.paymentCents)}` })
+        ])), el('p', { class: 'notice', text: studentLoan.status === 'waiting' ? `${studentLoan.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}` : (studentLoan.status === 'repaying' ? `攤還中・月繳 ${Money.formatTWD(studentLoan.monthlyPaymentCents)}・${studentLoanSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定學貸', onclick: () => openLoanSettings('student_loan') })]) : null,
       showMortgage ? el('div', { class: 'loan-overview-row' }, [el('div', {}, [el('strong', { text: '房貸' }), el('p', { class: 'notice', text: mortgage.status === 'waiting' ? `${mortgage.repaymentStartAge} 歲起・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}` : (['grace', 'repaying'].includes(mortgage.status) ? `${mortgage.status === 'grace' ? '寬限期' : '攤還中'}・月繳 ${Money.formatTWD(mortgage.currentPaymentCents)}・${mortgageSettings.includeAsFixedExpense ? '已連動帳本' : '尚未連動'}` : '估算已完成') })]), el('button', { class: 'btn small', text: '設定房貸', onclick: () => openLoanSettings('buy_house') })]) : null
     ]);
     // 收入不是來自固定項目時，上面的數字是健檢欄位的估計值（沒改過就是預設範例），要講清楚，不能當成使用者的實際狀況
@@ -1317,6 +1337,11 @@ const App = (() => {
       ]),
       living.hint ? el('p', { class: 'home-goal', text: living.hint }) : null,
       ...living.guideLines.map(text => el('p', { class: 'home-goal', text })),
+      living.guide ? meterRows([
+        { label: '歷史常態', value: living.guide.typicalPer30Cents, text: Money.formatTWD(living.guide.typicalPer30Cents) },
+        { label: '付得起', value: Math.max(0, living.guide.affordableCents), text: Money.formatTWD(Math.max(0, living.guide.affordableCents)) },
+        { label: '人均（不含居住）', value: living.guide.refCents, text: Money.formatTWD(living.guide.refCents) }
+      ]) : null,
       living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，與已確認固定帳同額，餘額會重複計算；請刪其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       habitsView.node,

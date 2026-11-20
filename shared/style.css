@@ -621,3 +621,5 @@ details.card.compact-settings { padding: 12px 20px; }
   tbody tr:hover { background: rgba(124, 196, 164, 0.1); }
   .summary-block.highlight { border-color: var(--rule); }
 }
+.meter-rows li { grid-template-columns: 9em minmax(0, 1fr) auto; }
+.meter-rows .alloc-track { height: 6px; }
