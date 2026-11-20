@@ -506,7 +506,7 @@ const Planning = (() => {
     // 檢核表：每個本期有扣款需求的帳戶一列（不論夠不夠），缺額與上面轉帳指示同一份；首頁只提醒、不擋
     const checks = Object.entries(spendingNeed).filter(([, need]) => need > 0).map(([accountId, needCents]) => {
       const t = transfers.find(x => x.accountId === accountId);
-      return { accountId, needCents, balanceCents: Math.round(accounts[accountId]?.balanceCents || 0), lackCents: t ? t.spendLackCents : 0 };
+      return { accountId, needCents, balanceCents: Math.round(accounts[accountId]?.balanceCents || 0), lackCents: t ? t.spendLackCents : 0, purposes: t ? t.mustPurposes : [] };
     });
     return { transfers, stayCents, rowFacts, checks };
   };
@@ -607,12 +607,13 @@ const Planning = (() => {
   //   1. 歷史：各期每 30 天生活費，用 Tukey 圍籬把極端期壓到邊界（不剔除、不改成 0），再按天數加權平均
   //   2. 負擔：收入 − 固定支出 − 建議儲蓄＝付得起的上限，歷史超過就要求減少
   //   3. 對照：主計總處每人消費扣居住類；歷史遠低於它多半是漏記，不據此建議「大幅縮減」
-  const livingGuide = ({ periods = [], incomeCents, fixedExpenseCents = 0, savingCents = 0, minDays = 14, lowRatio = 0.4 }) => {
+  const livingGuide = ({ periods = [], incomeCents, fixedExpenseCents = 0, savingCents = 0, minDays = 14, lowRatio = 0.4, refGroup = 'adult' }) => {
     const ref = REFERENCE_DATA.twPerCapitaConsumption;
-    const refCents = Math.round(ref.annualPerPersonCents * (1 - ref.housingShare) / 12);
+    const group = ref.groups[refGroup] || ref.groups.adult;
+    const refCents = Math.round(group.annualPerPersonCents * (1 - ref.housingShare) / 12);
     const used = periods.filter(p => p.days > 0);
     const days = used.reduce((s, p) => s + p.days, 0);
-    if (!days) return { ready: false, refCents };
+    if (!days) return { ready: false, refCents, refLabel: group.label };
     const rate = (p) => p.livingCents * 30 / p.days;
     const long = used.filter(p => p.days >= minDays).map(rate).sort((a, b) => a - b);
     let lo = -Infinity, hi = Infinity;
@@ -631,7 +632,7 @@ const Planning = (() => {
     const rawPer30Cents = Math.round(used.reduce((s, p) => s + p.livingCents, 0) * 30 / days);
     const typicalPer30Cents = Math.max(0, Math.round(sum / days));
     const affordableCents = incomeCents - fixedExpenseCents - savingCents;
-    const base = { ready: true, days, clipped, rawPer30Cents, typicalPer30Cents, affordableCents, refCents };
+    const base = { ready: true, days, clipped, rawPer30Cents, typicalPer30Cents, affordableCents, refCents, refLabel: group.label };
     if (affordableCents <= 0) return { ...base, verdict: 'unaffordable', recommendedCents: null, cutCents: 0 };
     if (typicalPer30Cents < refCents * lowRatio) return { ...base, verdict: 'lowCheck', recommendedCents: typicalPer30Cents, cutCents: 0 };
     if (typicalPer30Cents > affordableCents) return { ...base, verdict: 'cut', recommendedCents: affordableCents, cutCents: typicalPer30Cents - affordableCents };

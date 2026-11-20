@@ -2075,3 +2075,40 @@ test('錢在哪裡：每個分類都標出所屬帳戶（同源於 moneyMap.rows
   assert.doesNotMatch(app, /el\('span', \{ class: 'stack-name', text: label \}\), el\('span', \{ class: 'stack-amt mono', text: Money\.formatTWD\(mm\.totals/);
   assert.match(css, /\.stack-accounts \{ display: block/);
 });
+
+test('人均對照可選社會人士／在學中，未知值退回社會人士', () => {
+  const P = api.Planning;
+  const periods = [{ days: 30, livingCents: 1000000 }];
+  const base = { periods, incomeCents: 5000000, fixedExpenseCents: 1000000, savingCents: 500000 };
+  const adult = P.livingGuide(base);
+  const student = P.livingGuide({ ...base, refGroup: 'student' });
+  const unknown = P.livingGuide({ ...base, refGroup: 'nope' });
+  assert.equal(adult.refLabel, '社會人士');
+  assert.equal(student.refLabel, '在學中');
+  assert.equal(student.refCents, Math.round(27007000 * (1 - 0.241) / 12));
+  assert.ok(student.refCents < adult.refCents);
+  assert.equal(unknown.refCents, adult.refCents);
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(app, /refGroup: config\.ui\.refGroup/);
+  assert.match(app, /config\.ui\.refGroup = key; IO\.markDirty\(\)/);
+});
+
+test('結論模式只留 5 塊；說明、習慣、收入目標、明細表都在編輯模式', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const a = app.indexOf("const overview = el('div', { class: `home-overview simple-only");
+  const b = app.indexOf("const detailExtras = el('div', { class: 'home-extras editor-only' }");
+  assert.ok(a > 0 && b > a);
+  const overview = app.slice(a, b);
+  for (const name of ['habitsView.node', 'incomeView', 'floorsView', 'debitCheckView', 'mmDetails', 'living.guideLines', 'goalLine', 'home-how']) {
+    assert.ok(!overview.includes(name), `${name} 不該在結論模式`);
+  }
+  const extras = app.slice(b, app.indexOf("root.innerHTML = '';", b));
+  for (const name of ['habitsView.node', 'incomeView', 'floorsView', 'debitCheckView', 'mmDetails', 'living.guideLines', 'goalLine', 'home-how']) {
+    assert.ok(extras.includes(name), `${name} 要在編輯模式`);
+  }
+  assert.match(overview, /debitLine,/);
+  assert.match(app, /扣款帳戶錢不夠：/);
+  assert.match(app, /t\.purposes\.join\('、'\)/);
+  const plan = fs.readFileSync(path.join(root, 'shared/planning.js'), 'utf8');
+  assert.match(plan, /lackCents: t \? t\.spendLackCents : 0, purposes: t \? t\.mustPurposes : \[\]/);
+});

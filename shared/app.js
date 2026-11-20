@@ -505,7 +505,7 @@ const App = (() => {
     const plain = { source: 'snapshot', actual, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `實際生活費每 30 天約 ${Money.formatTWD(monthlyCents)}`, hint: null, duplicates, guide: null, guideLines: [] };
     if (!health) return plain;
     // 建議值＝歷史常態（極端期壓到邊界）與付得起的上限取小；依據與判斷全在 Planning.livingGuide
-    const guide = Planning.livingGuide({ periods: periodList.slice(0, 12).map(p => ({ days: p.days, livingCents: p.total.livingCents })), incomeCents: health.incomeCents, fixedExpenseCents: health.fixedExpenseCents, savingCents: health.recommendedSavingCents });
+    const guide = Planning.livingGuide({ periods: periodList.slice(0, 12).map(p => ({ days: p.days, livingCents: p.total.livingCents })), incomeCents: health.incomeCents, fixedExpenseCents: health.fixedExpenseCents, savingCents: health.recommendedSavingCents, refGroup: config.ui.refGroup });
     if (!guide.ready) return plain;
     const fmt = Money.formatTWD;
     const lines = [];
@@ -780,6 +780,7 @@ const App = (() => {
   const normalizeViewMode = () => {
     if (!config.ui || typeof config.ui !== 'object') config.ui = {};
     if (!['simple', 'detailed'].includes(config.ui.viewMode)) config.ui.viewMode = 'simple';
+    if (!Object.keys(REFERENCE_DATA.twPerCapitaConsumption.groups).includes(config.ui.refGroup)) config.ui.refGroup = 'adult';
     return config.ui.viewMode;
   };
 
@@ -1280,15 +1281,7 @@ const App = (() => {
     // 每個分類在哪些帳戶、各多少（同一份 mm.rows，與下方明細表同源）；只列有金額的帳戶，金額大的在前
     const mmAccounts = (key) => mm.rows.filter(r => r[key] > 0).sort((a, b) => b[key] - a[key]).map(r => `${r.name} ${Money.formatTWD(r[key])}`).join('・');
     const mmName = (label, key) => el('span', { class: 'stack-name' }, [document.createTextNode(label), el('small', { class: 'stack-accounts', text: mmAccounts(key) })]);
-    const moneyMapView = mm.rows.some(r => r.balanceCents) ? el('div', { class: 'home-money-map' }, [
-      el('p', { class: 'home-goal', text: `現有存款 ${Money.formatTWD(mmTotal)}，錢在這些地方` }),
-      el('ul', { class: 'stack-list money-list' }, [
-        ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', {}, [
-          mmName(label, k), el('span', { class: 'stack-amt mono', text: Money.formatTWD(mm.totals[k]) })])),
-        mm.totals.fixedLackCents ? el('li', {}, [mmName('固定支出還缺（帳戶錢不夠）', 'fixedLackCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.fixedLackCents) })]) : null,
-        mm.totals.debtCents ? el('li', {}, [mmName('負債（信用卡等）', 'debtCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.debtCents) })]) : null
-      ]),
-      el('details', { class: 'compact-settings', 'data-collapse-id': 'home-money-map' }, [
+    const mmDetails = mm.rows.some(r => r.balanceCents) ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-money-map' }, [
         el('summary', { text: '各帳戶明細' }),
         el('div', { class: 'table-scroll' }, [el('table', {}, [
           el('thead', {}, [el('tr', {}, ['帳戶', '餘額', '固定支出', '生活費', '緊急金', '目標', '可動用', '不可動用'].map(h => el('th', { text: h })))]),
@@ -1302,6 +1295,14 @@ const App = (() => {
           '剩下的才是可自由動用。',
           '同一筆錢只算一次，與上面的分配用同一份需求。'
         ])
+      ]) : null;
+    const moneyMapView = mm.rows.some(r => r.balanceCents) ? el('div', { class: 'home-money-map' }, [
+      el('p', { class: 'home-goal', text: `現有存款 ${Money.formatTWD(mmTotal)}，錢在這些地方` }),
+      el('ul', { class: 'stack-list money-list' }, [
+        ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', {}, [
+          mmName(label, k), el('span', { class: 'stack-amt mono', text: Money.formatTWD(mm.totals[k]) })])),
+        mm.totals.fixedLackCents ? el('li', {}, [mmName('固定支出還缺（帳戶錢不夠）', 'fixedLackCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.fixedLackCents) })]) : null,
+        mm.totals.debtCents ? el('li', {}, [mmName('負債（信用卡等）', 'debtCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.debtCents) })]) : null
       ])
     ]) : null;
     // 生活費是唯一能直接調的大項；放開滑桿才重算，拖動時只更新數字
@@ -1313,18 +1314,32 @@ const App = (() => {
     const failedChecks = Planning.crossChecks({ health: savingsHealth, periods: Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries) }).filter(c => !c.ok);
     const suggestedLiving = living.suggestedCents === null ? null : Math.max(livingFloor, living.suggestedCents);
     const em = verdict.emergency;
+    // 扣款帳戶不夠：只剩一行「哪個帳戶、缺多少、用在什麼」，逐帳戶表格留在編輯模式
+    const lackLines = debitChecks.filter(t => t.lackCents > 0).map(t => `${accountName(t.accountId)} 差 ${Money.formatTWD(t.lackCents)}（${t.purposes.join('、')}）`);
+    const debitLine = lackLines.length ? el('p', { class: 'notice neg', text: `扣款帳戶錢不夠：${lackLines.join('、')}` }) : null;
+    // 人均對照可選社會人士／在學中（存在 config.ui.refGroup）
+    const refGroups = REFERENCE_DATA.twPerCapitaConsumption.groups;
+    const refToggle = el('div', { class: 'ref-toggle', role: 'group', 'aria-label': '人均對照' }, Object.entries(refGroups).map(([key, g]) => el('button', {
+      type: 'button', class: `btn small${config.ui.refGroup === key ? ' active' : ''}`, 'aria-pressed': String(config.ui.refGroup === key), text: g.label,
+      onclick: () => { config.ui.refGroup = key; IO.markDirty(); renderHealth(); }
+    })));
     const overview = el('div', { class: `home-overview simple-only level-${verdict.level}` }, [
       hasRecurringIncome ? null : el('p', { class: 'home-sample' }, [document.createTextNode('目前是範例數字 '), el('button', { type: 'button', class: 'btn small', text: '設定我的收支', onclick: openIncomeSettings })]),
+      // 1 結論＋要做的事
       el('p', { class: 'home-headline', text: verdict.headline }),
       el('p', { class: 'home-daily', text: `每天可花 ${Money.formatTWD(savingsHealth.dailyLivingCents)}` }),
-      // 結論 → 要做的事 → 本期轉帳 → 分配細節（長條、滑桿、進度）：使用者先看到該動手的，再看背景數字
       actions.length ? el('ol', { class: 'home-actions' }, actions.map(text => el('li', { text }))) : (transferView ? null : el('p', { class: 'home-ok', text: '目前不用做任何事' })),
       statusRows.some(s => s.status.tag === '待確認入帳') ? el('p', {}, [el('button', { type: 'button', class: 'btn small', text: '到帳本確認入帳', onclick: () => $('.tab-btn[data-tab="ledger"]')?.click() })]) : null,
+      // 2 本期轉帳（含扣款不夠的一行）
       transferView,
-      debitCheckView,
+      debitLine,
+      // 3 分配
       bar,
+      // 4 錢在哪裡
       moneyMapView,
       failedChecks.length ? el('p', { class: 'notice neg', text: `數據對不上：${failedChecks.map(c => `${c.label}（差 ${Money.formatTWD(Math.abs(c.diffCents))}）`).join('、')}` }) : null,
+      living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，與已確認固定帳同額，餘額會重複計算；請刪其中一筆。` }) : null,
+      // 5 生活費：預算滑桿、建議、三條對照線
       el('label', { class: 'home-slider' }, [
         el('span', {}, [document.createTextNode(`${allocation.rows.find(r => r.key === 'living').label}預算 `), livingValue]),
         el('input', {
@@ -1337,21 +1352,26 @@ const App = (() => {
         document.createTextNode(`${living.text} `),
         suggestedLiving === expenses.livingCents ? null : el('button', { type: 'button', class: 'btn small', text: `套用為預算 ${Money.formatTWD(suggestedLiving)}`, onclick: () => setLivingBudget(suggestedLiving) })
       ]),
+      living.guide ? meterRows([
+        { label: '歷史常態', value: living.guide.typicalPer30Cents, text: Money.formatTWD(living.guide.typicalPer30Cents) },
+        { label: '付得起', value: Math.max(0, living.guide.affordableCents), text: Money.formatTWD(Math.max(0, living.guide.affordableCents)) },
+        { label: '人均（不含居住）', value: living.guide.refCents, text: Money.formatTWD(living.guide.refCents) }
+      ]) : null,
+      living.guide ? refToggle : null
+    ]);
+    // 編輯模式才看的細節（結論模式不放）：說明句、習慣、收入目標、各表格、怎麼算
+    const detailExtras = el('div', { class: 'home-extras editor-only' }, [
       em.months === null ? null : el('label', { class: 'home-progress' }, [
         el('span', { text: `緊急預備金 ${em.months.toFixed(1)}／${em.targetMonths} 個月` }),
         el('progress', { max: String(em.targetMonths), value: String(Math.min(em.months, em.targetMonths)) })
       ]),
       living.hint ? el('p', { class: 'home-goal', text: living.hint }) : null,
       ...living.guideLines.map(text => el('p', { class: 'home-goal', text })),
-      living.guide ? meterRows([
-        { label: '歷史常態', value: living.guide.typicalPer30Cents, text: Money.formatTWD(living.guide.typicalPer30Cents) },
-        { label: '付得起', value: Math.max(0, living.guide.affordableCents), text: Money.formatTWD(Math.max(0, living.guide.affordableCents)) },
-        { label: '人均（不含居住）', value: living.guide.refCents, text: Money.formatTWD(living.guide.refCents) }
-      ]) : null,
-      living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，與已確認固定帳同額，餘額會重複計算；請刪其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       habitsView.node,
       incomeView,
+      debitCheckView,
+      mmDetails,
       floorsView,
       el('details', { class: 'compact-settings', 'data-collapse-id': 'home-how' }, [
         el('summary', { text: '怎麼算的' }),
@@ -1368,6 +1388,7 @@ const App = (() => {
     root.innerHTML = '';
     put(root,
       overview,
+      detailExtras,
       ...(estimateNotice ? [estimateNotice] : []),
       ...(accountNotice ? [accountNotice] : []),
       el('div', { class: 'dashboard-summary editor-only' }, summaryCards.length ? summaryCards : [el('p', { class: 'notice', text: '目前未顯示摘要卡；可在摘要卡設定重新勾選。' })]),
