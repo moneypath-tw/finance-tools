@@ -624,3 +624,5 @@ details.card.compact-settings { padding: 12px 20px; }
 .meter-rows li { grid-template-columns: 9em minmax(0, 1fr) auto; }
 .meter-rows .alloc-track { height: 6px; }
 .stack-accounts { display: block; font-size: 0.75rem; color: var(--ink-soft); overflow-wrap: anywhere; }
+.ref-toggle { display: flex; gap: 0.4rem; margin: 0.25rem 0 0; }
+.ref-toggle .btn.active { background: var(--ink); color: var(--paper); }

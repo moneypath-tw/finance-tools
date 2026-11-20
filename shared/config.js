@@ -20,7 +20,7 @@ const PLANNING_RULES = {
 
 const DEFAULT_CONFIG = {
   schemaVersion: 2,
-  ui: { viewMode: 'simple', activeTab: 'health', currentScenarioId: 'buy_house', expandedDetails: [] },
+  ui: { viewMode: 'simple', refGroup: 'adult', activeTab: 'health', currentScenarioId: 'buy_house', expandedDetails: [] },
   // 各地區年通膨率；預設取官方預測，使用者可覆寫。成本試算依目標月份複利換算
   inflationRates: Object.fromEntries(Object.entries(REFERENCE_DATA.inflation).map(([k, v]) => [k, v.annualRate])),
   categories: ['食', '超商', '飲料', '手續費', '娛', '居家', '行', '學用', '3C'],
