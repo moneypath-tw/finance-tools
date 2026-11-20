@@ -166,6 +166,25 @@ const Planning = (() => {
       };
     });
   };
+  // 滾動儲蓄率：薪水每月不固定，用最近幾個完整發薪週期的「累計實得」算真正平均，不看單月。
+  //   reports＝cycleReports 輸出（新的在前）。滾動儲蓄率＝累計存下÷累計收入（收入高的月份權重較大，不是各月比率的平均）。
+  //   累計差＝累計實際存下－基準率×累計收入（正＝超前、負＝落後）；建議儲蓄率＝基準率－累計差÷（平均月收入×補回期數），
+  //   限制在 low～strong 之間：落後就多存一點、超前就放鬆一點，但不跌破「偏低」線、也不逼到「充足」線以上。
+  //   完整週期不足 minCycles 時 ready＝false，呼叫端用基準率與計畫收入。
+  const rollingSavings = ({ reports, windowCycles = PLANNING_RULES.habitCycles, minCycles = PLANNING_RULES.rollingMinCycles, catchUpCycles = PLANNING_RULES.rollingCatchUpCycles, targetRate = PLANNING_RULES.savingsRateTarget }) => {
+    const used = (reports || []).slice(0, windowCycles);
+    const n = used.length;
+    const sum = (key) => used.reduce((s, r) => s + r[key], 0);
+    const incomeCents = sum('incomeCents'), expenseCents = sum('expenseCents'), savedCents = sum('savedCents');
+    const base = { ready: false, cycles: n, totalIncomeCents: incomeCents, totalExpenseCents: expenseCents, totalSavedCents: savedCents, avgIncomeCents: n ? Math.round(incomeCents / n) : null, avgExpenseCents: n ? Math.round(expenseCents / n) : null, avgSavedCents: n ? Math.round(savedCents / n) : null, minIncomeCents: n ? Math.min(...used.map(r => r.incomeCents)) : null, maxIncomeCents: n ? Math.max(...used.map(r => r.incomeCents)) : null, rollingRate: incomeCents > 0 ? savedCents / incomeCents : null, targetRate, adjustedRate: targetRate, gapCents: 0 };
+    if (n < minCycles || incomeCents <= 0) return base;
+    const gapCents = savedCents - Math.round(targetRate * incomeCents);
+    const avgIncome = incomeCents / n;
+    const bands = PLANNING_RULES.savingsRateBands;
+    const raw = targetRate - gapCents / (avgIncome * Math.max(1, catchUpCycles));
+    const adjustedRate = Math.round(Math.min(bands.strong, Math.max(bands.low, raw)) * 1000) / 1000;
+    return { ...base, ready: true, gapCents, adjustedRate };
+  };
   // 存花習慣：reports 新的在前（cycleReports），current＝本期到今天的報告
   //   上一期哪個分類比「平常」（再之前幾期的中位數）多花最多；本期哪些分類已超過平常一整期的量
   //   連續幾期實際存下的錢達到建議儲蓄；存下的錢有沒有轉進儲蓄帳戶、有沒有動用存款
@@ -541,13 +560,13 @@ const Planning = (() => {
   };
   // recommendedSavingCents 由呼叫端算好（含緊急預備金與成本目標）時直接用，問題點與摘要卡才會看同一個應儲蓄
   // spendableCents（可選）＝分配表的生活費＋未分配的錢；有給時每日生活費用它，跟分配表與生活費狀態同一個數字
-  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents, spendableCents }) => {
+  const assessMonthlySavings = ({ incomeCents, fixedExpenseCents, fixedSavingCents, actualIncomeCents, actualExpenseCents, daysInMonth, recommendedSavingCents: plannedSavingCents, spendableCents, targetRate = PLANNING_RULES.savingsRateTarget }) => {
     const income = Math.max(0, Math.round(incomeCents || 0));
     const fixedExpense = Math.max(0, Math.round(fixedExpenseCents || 0));
     const fixedSaving = Math.max(0, Math.round(fixedSavingCents || 0));
     const bands = PLANNING_RULES.savingsRateBands;
-    const targetPct = `${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%`;
-    const recommendedSavingCents = Number.isFinite(plannedSavingCents) ? Math.max(0, Math.round(plannedSavingCents)) : Math.max(fixedSaving, Math.ceil(income * PLANNING_RULES.savingsRateTarget));
+    const targetPct = `${Math.round(targetRate * 100)}%`;
+    const recommendedSavingCents = Number.isFinite(plannedSavingCents) ? Math.max(0, Math.round(plannedSavingCents)) : Math.max(fixedSaving, Math.ceil(income * targetRate));
     const plannedSavingsRate = income > 0 ? recommendedSavingCents / income : null;
     const actualSavingsCents = Math.round((actualIncomeCents || 0) - Math.max(0, actualExpenseCents || 0));
     const actualSavingsRate = actualIncomeCents > 0 ? actualSavingsCents / actualIncomeCents : null;
@@ -568,11 +587,11 @@ const Planning = (() => {
     if (income <= 0) issues.push('尚無本月收入，無法判斷儲蓄率');
     if (actualSavingsCents < 0) issues.push('本月支出已高於收入');
     else if (actualSavingsRate !== null && actualSavingsRate < bands.low) issues.push(`本月儲蓄率低於 ${Math.round(bands.low * 100)}%，緩衝不足`);
-    else if (actualSavingsRate !== null && actualSavingsRate < PLANNING_RULES.savingsRateTarget) issues.push(`本月儲蓄率尚未達到 ${targetPct} 規劃基準`);
+    else if (actualSavingsRate !== null && actualSavingsRate < targetRate) issues.push(`本月儲蓄率尚未達到 ${targetPct} 規劃基準`);
     if (livingSpaceCents <= 0 && income > 0) issues.push('扣除固定支出與應儲蓄後，已無每日生活費空間');
     if (attainmentRate !== null && attainmentRate < 1) issues.push('本月儲蓄尚未達成建議金額');
     if (actualIncomeCents > 0 && actualSavingsCents >= 0) strengths.push('本月收入仍高於或等於支出，現金流維持非負');
-    if (actualSavingsRate !== null && actualSavingsRate >= PLANNING_RULES.savingsRateTarget) strengths.push(`本月儲蓄率 ${(actualSavingsRate * 100).toFixed(1)}%，已達 ${targetPct} 規劃基準`);
+    if (actualSavingsRate !== null && actualSavingsRate >= targetRate) strengths.push(`本月儲蓄率 ${(actualSavingsRate * 100).toFixed(1)}%，已達 ${targetPct} 規劃基準`);
     if (attainmentRate !== null && attainmentRate >= 1) strengths.push('本月實際儲蓄已達成建議金額');
     if (fixedSaving > 0) strengths.push('已建立固定儲蓄安排，降低遺漏儲蓄的機會');
     if (livingSpaceCents > 0 && income > 0) strengths.push('依目前規劃，扣除固定支出與應儲蓄後仍保有生活費空間');
@@ -631,5 +650,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, monthlyGoalCapacity, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

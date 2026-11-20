@@ -160,6 +160,21 @@ const Snapshots = (() => {
     }
     return { ready: true, perCycle, per30Cents: Math.round(pooled * 30), basis: { from: earliest, to: latest.to, days }, negatives };
   };
+  // 各期比較的滾動平均：核對日不固定，所以按天數加權換成每 30 天，而不是把各期的數字直接平均。
+  //   periodList＝periods() 輸出（新到舊）；windowN＝最近幾期（null＝全部累計）。回傳最近 windowN 期的平均每 30 天，與涵蓋的起訖日、期數。
+  //   資產變化取 assetSeries 同一天的 changeCents（第一筆沒有前一次可比，不計入）。
+  const rollingAverage = (periodList, windowN, assets = []) => {
+    const used = (periodList || []).filter(p => p.days > 0).slice(0, windowN || undefined);
+    if (!used.length) return null;
+    const days = used.reduce((s, p) => s + p.days, 0);
+    const per30 = (cents) => Math.round(cents * 30 / days);
+    const sum = (pick) => used.reduce((s, p) => s + pick(p), 0);
+    const change = used.map(p => (assets.find(a => a.date === p.to) || {}).changeCents).filter(v => Number.isInteger(v));
+    return { periods: used.length, days, from: used[used.length - 1].from, to: used[0].to,
+      outflowPer30Cents: per30(sum(p => p.total.outflowCents || 0)), fixedPer30Cents: per30(sum(p => p.total.fixedOutCents || 0)), livingPer30Cents: per30(sum(p => p.total.livingCents || 0)),
+      unrecordedCents: sum(p => p.total.unrecordedCents || 0),
+      assetChangePer30Cents: change.length === used.length ? per30(change.reduce((s, v) => s + v, 0)) : null };
+  };
   // 總資產曲線：每次核對的帳戶合計（漏填的帳戶沿用上次數字）、與上次相比的變化，以及每 30 天換算的變化與前一期比進步或退步
   const assetSeries = (snapshots) => {
     const known = {};
@@ -179,5 +194,5 @@ const Snapshots = (() => {
     });
   };
 
-  return { occurrences, planned, periods, validate, livingActual, assetSeries };
+  return { occurrences, planned, periods, validate, livingActual, rollingAverage, assetSeries };
 })();
