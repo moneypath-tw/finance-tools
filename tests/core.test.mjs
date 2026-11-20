@@ -2007,3 +2007,13 @@ test('生活費建議值只有 Planning.livingGuide 一個來源，首頁經 liv
   assert.equal((app.match(/Planning\.livingGuide\(/g) || []).length, 1);
   assert.match(app, /savingsHealth\.facts\.cycle\.payday, savingsHealth\)/);
 });
+
+test('比例線只有 meterRows 一個建構處，首頁用它取代整句文字', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.equal((app.match(/const meterRows = /g) || []).length, 1);
+  assert.ok((app.match(/meterRows\(/g) || []).length >= 3);
+  assert.match(css, /\.meter-rows li \{ grid-template-columns: 9em/);
+  assert.doesNotMatch(app, /要支應整個計畫，每月淨收入需/);
+  assert.doesNotMatch(app, /已繳 \$\{b\.paidTerms\}／\$\{b\.termMonths\} 期・待償還/);
+});
