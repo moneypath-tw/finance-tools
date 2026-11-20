@@ -2017,3 +2017,52 @@ test('比例線只有 meterRows 一個建構處，首頁用它取代整句文字
   assert.doesNotMatch(app, /要支應整個計畫，每月淨收入需/);
   assert.doesNotMatch(app, /已繳 \$\{b\.paidTerms\}／\$\{b\.termMonths\} 期・待償還/);
 });
+
+test('crossChecks：同一件事的兩種算法相等才算對得上，漂移會被點名', () => {
+  const rows = [
+    { nature: 'bank', balanceCents: 1000000, lockedCents: 0 },
+    { nature: 'credit', balanceCents: 50000 },
+    { nature: 'fund', balanceCents: 300000 }
+  ];
+  const health = {
+    recommendedSavingCents: 300000, emergencyMonthlyCents: 100000, savingCents: 120000, goals: [{ monthlyRequiredCents: 80000 }],
+    allocation: { totalAllocatedCents: 900000, unallocatedCents: 100000, incomeCents: 1000000 },
+    moneyMap: { rows, totals: { fixedCents: 200000, livingCents: 300000, emergencyCents: 300000, goalCents: 100000, freeCents: 100000, lockedCents: 300000, debtCents: 50000 } },
+    monthlyFlexCents: 100000, incomeCents: 1000000, fixedExpenseCents: 300000, expenses: { livingCents: 300000 }
+  };
+  const period = { total: { livingCents: 40000, outflowCents: 150000, fixedOutCents: 100000, floatingOutCents: 20000, floatingInCents: 10000 } };
+  const run = (h, periods = [period]) => api.Planning.crossChecks({ health: h, periods });
+  assert.ok(run(health).every(c => c.ok), JSON.stringify(run(health)));
+  assert.equal(run(health).length, 5);
+  // 任一處漂移（建議儲蓄少算 5,000 元）就被點名
+  const drift = run({ ...health, recommendedSavingCents: 300000 + 500000 });
+  assert.equal(drift.filter(c => !c.ok).map(c => c.id).join(), "saving-sum,flex");
+  // 存款分佈少算一塊
+  const lost = run({ ...health, moneyMap: { rows, totals: { ...health.moneyMap.totals, freeCents: 0 } } });
+  assert.equal(lost.filter(c => !c.ok).map(c => c.id).join(), 'money-map-sum');
+  // 各期殘差與公式不符
+  assert.equal(run(health, [{ total: { ...period.total, livingCents: 99 } }]).filter(c => !c.ok).map(c => c.id).join(), 'period-0');
+});
+
+test('數據對帳檢核接在首頁，且設計文件有一致性規範', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(app, /Planning\.crossChecks\(/);
+  assert.equal((app.match(/Planning\.crossChecks\(/g) || []).length, 1);
+  const doc = fs.readFileSync(path.join(root, 'docs/設計架構與計算邏輯.md'), 'utf8');
+  assert.match(doc, /數據一致性規範/);
+});
+
+test('一致性規範表與 crossChecks 的編號逐條相同（文件不得與程式漂移）', () => {
+  const doc = fs.readFileSync(path.join(root, 'docs/設計架構與計算邏輯.md'), 'utf8');
+  const section = doc.slice(doc.indexOf('## 數據一致性規範'));
+  const documented = [...section.matchAll(/^\| `([a-z-]+)(?:-N)?` \|/gm)].map(m => m[1]).sort();
+  const health = {
+    recommendedSavingCents: 0, emergencyMonthlyCents: 0, savingCents: 0, goals: [],
+    allocation: { totalAllocatedCents: 0, unallocatedCents: 0, incomeCents: 0 },
+    moneyMap: { rows: [], totals: { fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0 } },
+    monthlyFlexCents: 0, incomeCents: 0, fixedExpenseCents: 0, expenses: { livingCents: 0 }
+  };
+  const period = { total: { livingCents: 0, outflowCents: 0, fixedOutCents: 0 } };
+  const actual = Array.from(new Set(api.Planning.crossChecks({ health, periods: [period] }).map(c => c.id.replace(/-\d+$/, '')))).sort();
+  assert.equal(documented.join(), actual.join());
+});

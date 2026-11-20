@@ -1306,6 +1306,8 @@ const App = (() => {
     const livingMax = Math.max(livingFloor, income - fixedExpense, expenses.livingCents);
     const livingValue = el('strong', { class: 'mono', text: Money.formatTWD(expenses.livingCents) });
     const setLivingBudget = (cents) => { q.monthlyOtherExpenseCents = Math.max(0, cents - livingFloor); IO.markDirty(); renderHealth(); };
+    // 數據對帳：同一件事的兩種算法對不上才顯示（Planning.crossChecks），平常一個字都不佔
+    const failedChecks = Planning.crossChecks({ health: savingsHealth, periods: Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries) }).filter(c => !c.ok);
     const suggestedLiving = living.suggestedCents === null ? null : Math.max(livingFloor, living.suggestedCents);
     const em = verdict.emergency;
     const overview = el('div', { class: `home-overview simple-only level-${verdict.level}` }, [
@@ -1319,6 +1321,7 @@ const App = (() => {
       debitCheckView,
       bar,
       moneyMapView,
+      failedChecks.length ? el('p', { class: 'notice neg', text: `數據對不上：${failedChecks.map(c => `${c.label}（差 ${Money.formatTWD(Math.abs(c.diffCents))}）`).join('、')}` }) : null,
       el('label', { class: 'home-slider' }, [
         el('span', {}, [document.createTextNode(`${allocation.rows.find(r => r.key === 'living').label}預算 `), livingValue]),
         el('input', {
