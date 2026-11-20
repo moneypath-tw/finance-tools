@@ -10,6 +10,8 @@ const PLANNING_RULES = {
   emergencyFillMonths: 12,
   fixedBufferMonths: { default: 1, min: 0, max: 12 }, // 固定支出扣款帳戶常留幾個月的每月平均扣款當緩衝（使用者可改）
   livingSuggestCycles: 3, // 生活費建議值取最近幾個完整發薪週期的實際花費中位數
+  rollingMinCycles: 2, // 滾動儲蓄率至少要有幾個完整發薪週期的實際收支才啟用，不足時用基準 20%
+  rollingCatchUpCycles: 6, // 累計落後（或超前）的儲蓄，分幾期補回（攤開補，不一期補完）
   habitCycles: 6, // 存花習慣看最近幾個完整發薪週期
   habitIncrease: { minCents: 50000, ratio: 0.2 }, // 分類比平常多花至少 500 元且多 20% 才提醒，免得小波動一直跳
   defaultMaxWeeklyWorkHours: 40, // 工時上限預設＝勞基法每週正常工時（REFERENCE_DATA.twLaborStandards），使用者可改

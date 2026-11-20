@@ -1885,3 +1885,44 @@ test('FIRE算式每行獨立換行，薪資成長率有警示門檻', () => {
   const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   assert.ok(app.includes('SALARY_GROWTH_WARN_RATE') && app.includes('固定支出全停用'), '警示文字要接在畫面上');
 });
+
+test('滾動儲蓄率用累計實得（不是各月比率平均），落後時調高、超前時放鬆、有上下限', () => {
+  const r = (income, expense) => ({ incomeCents: income, expenseCents: expense, savedCents: income - expense });
+  const roll = api.Planning.rollingSavings({ reports: [r(6000000, 4800000), r(3000000, 2700000), r(4500000, 3600000)] });
+  assert.equal(roll.ready, true);
+  assert.equal(roll.avgIncomeCents, 4500000);
+  assert.ok(Math.abs(roll.rollingRate - 2400000 / 13500000) < 1e-9, '累計存下÷累計收入');
+  assert.equal(roll.gapCents, 2400000 - 2700000);
+  assert.equal(roll.adjustedRate, 0.211);
+  const ahead = api.Planning.rollingSavings({ reports: [r(5000000, 1000000), r(5000000, 1000000)] });
+  assert.equal(ahead.adjustedRate, api.PLANNING_RULES.savingsRateBands.low, '超前很多也不低於「偏低」線');
+  const behind = api.Planning.rollingSavings({ reports: [r(5000000, 6000000), r(5000000, 6000000)] });
+  assert.ok(behind.adjustedRate <= api.PLANNING_RULES.savingsRateBands.strong);
+  assert.equal(api.Planning.rollingSavings({ reports: [r(5000000, 4000000)] }).ready, false, '不足兩期用基準');
+  assert.equal(api.Planning.rollingSavings({ reports: [] }).adjustedRate, api.PLANNING_RULES.savingsRateTarget);
+});
+
+test('各期比較滾動平均按天數加權換成每30天，支出＝固定支出＋生活花費', () => {
+  const p = (from, to, days, outflow, fixed) => ({ from, to, days, total: { outflowCents: outflow, fixedOutCents: fixed, livingCents: outflow - fixed, unrecordedCents: 0 } });
+  const list = [p('2026-02-01', '2026-02-21', 20, 300000, 100000), p('2026-01-22', '2026-02-01', 10, 100000, 50000)];
+  const a = Snap.rollingAverage(list, 2, [{ date: '2026-02-21', changeCents: -40000 }, { date: '2026-02-01', changeCents: 10000 }]);
+  assert.equal(a.days, 30);
+  assert.equal(a.outflowPer30Cents, 400000);
+  assert.equal(a.fixedPer30Cents + a.livingPer30Cents, a.outflowPer30Cents);
+  assert.equal(a.assetChangePer30Cents, -30000);
+  assert.equal(Snap.rollingAverage(list, 1).days, 20, '窗口只取最近一期');
+  assert.equal(Snap.rollingAverage([], 3), null);
+});
+
+test('月界線照結薪日：25 日發薪時 24 日與 25 日的帳目落在不同週期，首頁實際收支用該週期', () => {
+  const entries = [{ date: '2026-03-24', type: 'expense', amountCents: -1000, currency: 'TWD', rateToTWD: 1, status: 'posted' }, { date: '2026-03-25', type: 'expense', amountCents: -2000, currency: 'TWD', rateToTWD: 1, status: 'posted' }];
+  const cycles = [api.Planning.payCycle(new Date(2026, 2, 24), 25), api.Planning.payCycle(new Date(2026, 2, 25), 25)];
+  assert.equal(cycles[0].start, '2026-02-25');
+  assert.equal(cycles[1].start, '2026-03-25');
+  const reports = api.Planning.cycleReports({ entries, cycles, livingIds: [], savingIds: [] });
+  assert.deepEqual([reports[0].expenseCents, reports[1].expenseCents], [1000, 2000]);
+  assert.notEqual(reports[0].expenseCents, reports[1].expenseCents);
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const fn = app.slice(app.indexOf('const currentMonthSavingsHealth'), app.indexOf('const recurringSummary'));
+  assert.ok(!/startsWith\(ym\)/.test(fn) && fn.includes('facts.cycle.start') && fn.includes('Planning.rollingSavings'), '首頁用發薪週期而非日曆月');
+});

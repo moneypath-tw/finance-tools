@@ -566,23 +566,27 @@ const App = (() => {
   // 每月計畫的唯一算法：摘要卡、建議分配表都讀這裡的結果
   const currentMonthSavingsHealth = (now = new Date()) => {
     ensureAccountProfiles(); ensureDashboard();
-    const ym = Money.ym(now);
     const plan = monthlyPlan();
     const { recurring, expenses, hasRecurringIncome } = plan;
     const plannedIncome = plan.incomeCents;
+    const fixedExpense = plan.fixedExpenseCents;
+    const balances = getAccountBalances();
+    const emergencyAccountId = config.dashboard.emergencyAccountId;
+    const facts = cycleFacts(now, recurring);
+    // 月界線＝結薪日：本期是 cycle.start（含）到 cycle.next（不含），不是日曆月；實際收支與每日生活費天數都用這一期
     let actualIncome = 0, actualExpense = 0;
     for (const entry of ledger.entries) {
-      if (!entry.date?.startsWith(ym) || entry.status === 'projected') continue;
+      if (!entry.date || entry.date < facts.cycle.start || entry.date >= facts.cycle.next || entry.status === 'projected') continue;
       const amount = Money.entryTWDCents(entry);
       if (amount === null) continue;
       if (entry.type === 'income') actualIncome += Math.max(0, amount);
       else if (entry.type === 'expense') actualExpense += Math.abs(amount);
     }
-    const fixedExpense = plan.fixedExpenseCents;
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const balances = getAccountBalances();
-    const emergencyAccountId = config.dashboard.emergencyAccountId;
-    const facts = cycleFacts(now, recurring);
+    const daysInMonth = facts.cycle.totalDays;
+    // 滾動儲蓄率：最近幾個完整發薪週期的累計實得，算出真正平均收入與建議儲蓄率（不足兩期時用基準與計畫收入）
+    const rolling = Planning.rollingSavings({ reports: Planning.cycleReports({ entries: ledger.entries, items: recurring.items, livingIds: facts.spendAccounts.ids, savingIds: [], cycles: Planning.pastCycles({ entries: ledger.entries, payday: facts.cycle.payday, today: now, count: PLANNING_RULES.habitCycles }) }) });
+    const rateUsed = rolling.ready ? rolling.adjustedRate : PLANNING_RULES.savingsRateTarget;
+    const rateIncome = rolling.ready ? rolling.avgIncomeCents : plannedIncome;
     const spendNeed = spendNeedNow(plan, facts);
     const emergency = emergencyPlan(plan, emergencyAvailableCents(plan, facts));
     const { targetCents: emergencyTargetCents, balanceCents: emergencyBalanceCents, gapCents: emergencyGapCents } = emergency;
@@ -603,7 +607,7 @@ const App = (() => {
     // 帳戶已夠而省下的錢在本期分配表列入一般儲蓄（不是變成可花的錢）；建議儲蓄、儲蓄率與習慣仍用每月結構數字
     const fixedRequestedCents = facts.noData ? fixedExpense : Object.values(facts.fixedStartLackByAccount).reduce((s, c) => s + c, 0);
     const fixedFreedCents = Math.max(0, fixedExpense - fixedRequestedCents);
-    const savingCents = Math.max(sameAccount ? 0 : recurring.fixedSavingCents, Math.ceil(plannedIncome * PLANNING_RULES.savingsRateTarget) - emergencyMonthlyCents - goalMonthlyCents, 0);
+    const savingCents = Math.max(sameAccount ? 0 : recurring.fixedSavingCents, Math.ceil(rateIncome * rateUsed) - emergencyMonthlyCents - goalMonthlyCents, 0);
     const recommendedSavingCents = emergencyMonthlyCents + goalMonthlyCents + savingCents;
     const allocation = Planning.allocateMonthly({
       incomeCents: plannedIncome, livingCents: expenses.livingCents, fixedExpenseCents: fixedRequestedCents,
@@ -612,9 +616,9 @@ const App = (() => {
     });
     // 每日生活費＝分配表給生活費的錢＋分配完沒有用途的錢，跟分配表、生活費狀態是同一個數字
     const spendableCents = (allocation.rows.find(r => r.key === 'living')?.allocatedCents || 0) + allocation.unallocatedCents;
-    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents, spendableCents });
+    const assessed = Planning.assessMonthlySavings({ incomeCents: plannedIncome, fixedExpenseCents: fixedExpense, fixedSavingCents: recurring.fixedSavingCents, actualIncomeCents: actualIncome, actualExpenseCents: actualExpense, daysInMonth, recommendedSavingCents, spendableCents, targetRate: rateUsed });
     return {
-      ...assessed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
+      ...assessed, rolling, rateUsed, incomeCents: plannedIncome, hasRecurringIncome, fixedExpenseCents: fixedExpense, expenses, emergency, emergencyBalanceCents, emergencyGapCents,
       emergencyMonthlyCents, savingCents, savingsAccountId, goals, allocation, plan, facts, fixedRequestedCents, fixedFreedCents,
       // 應儲蓄的下限（與上面 savingCents 同一規則）：緊急預備金＋成本目標＋存到其他帳戶的固定儲蓄；Planning.requiredIncome 用
       savingFloorCents: emergencyMonthlyCents + goalMonthlyCents + (sameAccount ? 0 : recurring.fixedSavingCents),
@@ -857,15 +861,28 @@ const App = (() => {
       plannedSavingCents: health.recommendedSavingCents, actualMonthlyCents: actualMonthly, today
     });
     const pct = (r) => r === null ? '—' : `${(r * 100).toFixed(1)}%`;
+    const rolling = health.rolling;
     const node = el('details', { class: 'compact-settings home-habits', 'data-collapse-id': 'home-habits' }, [
       el('summary', { text: '存花習慣與資產' }),
       reports.length ? null : el('p', { class: 'notice', text: '還沒有完整一期的記帳；記滿一個發薪週期後開始比較。' }),
       ...habits.lines.map(text => el('p', { class: 'notice habit-line', text })),
       reports.length ? el('p', { class: 'notice', text: habits.streak ? `已連續 ${habits.streak} 期存到建議金額 ${fmt(health.recommendedSavingCents)}` : `上期沒存到建議金額 ${fmt(health.recommendedSavingCents)}（存下 ${fmt(reports[0].savedCents)}）` }) : null,
-      reports.length ? el('table', { class: 'habit-table' }, [
+      rolling.cycles ? el('div', { class: 'summary-block highlight habit-rolling' }, [
+        el('h3', { text: `最近 ${rolling.cycles} 期滾動平均（以發薪日為月界線）` }),
+        el('p', { class: 'notice', text: `實得收入平均每期 ${fmt(rolling.avgIncomeCents)}` }),
+        el('p', { class: 'notice', text: `最低 ${fmt(rolling.minIncomeCents)}～最高 ${fmt(rolling.maxIncomeCents)}` }),
+        el('p', { class: 'notice', text: `支出平均 ${fmt(rolling.avgExpenseCents)}（固定＋生活）` }),
+        el('p', { class: 'notice', text: `存下平均 ${fmt(rolling.avgSavedCents)}` }),
+        ...(rolling.ready ? [
+          el('p', { class: 'notice', text: `滾動儲蓄率 ${pct(rolling.rollingRate)}（累計）` }),
+          el('p', { class: 'notice', text: `對照基準 ${pct(rolling.targetRate)}，累計${rolling.gapCents < 0 ? '落後' : '超前'} ${fmt(Math.abs(rolling.gapCents))}` }),
+          el('p', { class: 'notice', text: `建議儲蓄率調為 ${pct(rolling.adjustedRate)}，分 ${PLANNING_RULES.rollingCatchUpCycles} 期補回` })
+        ] : [el('p', { class: 'notice', text: `不足 ${PLANNING_RULES.rollingMinCycles} 期，先用基準 ${pct(rolling.targetRate)}` })])
+      ]) : null,
+      reports.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-habits-cycles' }, [el('summary', { text: `逐期明細（${reports.length} 期）` }), el('table', { class: 'habit-table' }, [
         el('thead', {}, [el('tr', {}, ['期間', '收入', '支出', '存下', '儲蓄率', '轉進儲蓄', '動用存款', '帳面淨資產'].map(text => el('th', { text })))]),
         el('tbody', {}, reports.map(r => el('tr', {}, [`${r.start.slice(5).replace('-', '/')} 起`, fmt(r.incomeCents), fmt(r.expenseCents), fmt(r.savedCents), pct(r.savingsRate), fmt(r.toSavingsCents), fmt(r.withdrawnCents + r.spentFromSavingsCents), fmt(r.netWorthEndCents)].map(text => el('td', { class: 'mono', text })))))
-      ]) : null,
+      ])]) : null,
       ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：近期每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，晚於 ${i.targetMonth}` : ''}` })),
       ...noteLines(['存下＝收入－全部支出。', '帳戶間轉帳不算收支。', '從儲蓄帳戶轉回或直接付款，算動用存款。', '帳面淨資產不含投資市價變動。'])
     ]);
@@ -1254,7 +1271,9 @@ const App = (() => {
         ...noteLines([
           `收入 ${Money.formatTWD(income)} 依序分給下列用途：`,
           '固定支出、生活費、緊急預備金、儲蓄與目標。',
-          `建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}（至少收入的 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）。`,
+          `建議儲蓄 ${Money.formatTWD(savingsHealth.recommendedSavingCents)}。`,
+          `儲蓄率 ${(savingsHealth.rateUsed * 100).toFixed(1)}%。`,
+          savingsHealth.rolling.ready ? `依最近 ${savingsHealth.rolling.cycles} 期累計實得調整。` : '不足兩期，先用基準。',
           '每天可花＝生活費＋未分配的錢 ÷ 本月天數。'
         ]),
       ])
@@ -1359,7 +1378,7 @@ const App = (() => {
     put(resultRoot,
       el('div', { class: 'health-grid' }, [
         // 跟摘要卡「應儲蓄／月度餘裕」不同：這裡是還沒分配儲蓄前，收入扣掉支出最多能存多少
-        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '每月最多可存' }), el('p', { class: `mono big${result.monthlySurplus < 0 ? ' neg' : ''}`, text: Money.formatTWD(result.monthlySurplus) }), el('p', { text: `收入扣固定支出與生活費・占收入 ${pct(result.savingsRate)}（建議至少 ${Math.round(PLANNING_RULES.savingsRateTarget * 100)}%）` }), el('p', { class: 'notice', text: `＝上方應儲蓄 ${Money.formatTWD(allocationNow.recommendedSavingCents)}＋月度餘裕 ${Money.formatTWD(allocationNow.monthlyFlexCents)}` })]),
+        el('div', { class: 'summary-block highlight' }, [el('h3', { text: '每月最多可存' }), el('p', { class: `mono big${result.monthlySurplus < 0 ? ' neg' : ''}`, text: Money.formatTWD(result.monthlySurplus) }), el('p', { text: `收入扣固定支出與生活費・占收入 ${pct(result.savingsRate)}（目前建議 ${(allocationNow.rateUsed * 100).toFixed(1)}%）` }), el('p', { class: 'notice', text: `＝上方應儲蓄 ${Money.formatTWD(allocationNow.recommendedSavingCents)}＋月度餘裕 ${Money.formatTWD(allocationNow.monthlyFlexCents)}` })]),
         el('div', { class: 'summary-block highlight' }, [el('h3', { text: '緊急預備金' }), el('p', { class: 'mono big', text: result.emergencyMonths === null ? '無法計算' : `${result.emergencyMonths.toFixed(1)} 個月` }), el('p', { text: `距 ${result.emergencyTargetMonths} 個月目標差 ${Money.formatTWD(result.emergencyGap)}` })]),
         noGoal ? null : el('div', { class: 'summary-block highlight' }, [el('h3', { text: linkedGoal ? `${linkedGoal.label}・需準備總額` : goalDeadlineLabel }), el('p', { class: 'mono big', text: Money.formatTWD(result.futureGoal) }), el('p', { class: result.monthsToGoal <= 0 ? 'neg' : undefined, text: result.monthsToGoal <= 0 ? `期限 ${effectiveTargetMonth} 已到或已過：要一次備齊 ${Money.formatTWD(result.monthlyGoalContribution)}，請確認完成月份` : `${linkedGoal ? '直接引用成本試算結果' : '由今天的總花費按通膨推算'}・每月至少準備 ${Money.formatTWD(result.monthlyGoalContribution)}` })]),
         noGoal ? el('div', { class: 'summary-block highlight' }, [el('h3', { text: '主要儲蓄目標' }), el('p', { class: 'mono big', text: '未設定' }), el('p', { text: '可在編輯模式的「進階財務健檢與假設」設定；資金分配勾選的成本目標照常計算' })]) : null,
@@ -2018,6 +2037,7 @@ const App = (() => {
   // 兩種記帳方式並存；ledgerDefaultView 決定開啟帳本時先看哪一種，切換只影響這次瀏覽。
   let ledgerView = null;
   let pendingSnapshotDelete = null;
+  let periodWindow = 3; // 各期比較的滾動窗口：最近幾期（0＝全部累計）
   let snapshotMessage = '';
   const localToday = () => Money.ymd(new Date());
   const renderSnapshots = () => {
@@ -2172,7 +2192,19 @@ const App = (() => {
               el('td', { text: x.note })]);
           }))
         ])]);
-          return [periodLines(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodLines(g.rows)])), el('details', { class: 'compact-settings', 'data-collapse-id': 'periods-full-table' }, [el('summary', { text: '完整欄位表' }), periodTable(periods)])];
+          // 預設只看滾動平均：核對日不固定，按天數加權換成每 30 天；支出＝固定支出＋生活花費，兩者都列出
+          const roll = Snapshots.rollingAverage(periods, periodWindow || undefined, assets);
+          const rollView = roll ? el('div', { class: 'summary-block highlight period-rolling' }, [
+            el('label', { class: 'field' }, [document.createTextNode('平均範圍 '), el('select', { onchange: (ev) => { periodWindow = Number(ev.target.value); renderSnapshots(); } },
+              [[2, '最近 2 期'], [3, '最近 3 期'], [6, '最近 6 期'], [0, '全部累計']].map(([v, t]) => el('option', { value: String(v), text: t, selected: periodWindow === v ? 'selected' : undefined })))]),
+            el('p', { class: 'notice', text: `${roll.from} → ${roll.to}，共 ${roll.periods} 期、${roll.days} 天，每 30 天平均：` }),
+            el('p', { class: 'mono big', text: `用掉 ${outflowText(roll.outflowPer30Cents)}` }),
+            el('p', { class: 'notice', text: `固定支出 ${Money.formatTWD(roll.fixedPer30Cents)}` }),
+            el('p', { class: 'notice', text: `＋生活花費 ${outflowText(roll.livingPer30Cents)}` }),
+            el('p', { class: 'notice', text: roll.assetChangePer30Cents === null ? '總資產變化資料不足' : `總資產每 30 天變化 ${Money.formatTWD(roll.assetChangePer30Cents)}` }),
+            roll.unrecordedCents ? el('p', { class: 'notice neg', text: `這段有 ${Money.formatTWD(Math.abs(roll.unrecordedCents))} 對不上帳` }) : null
+          ]) : null;
+          return [rollView, el('details', { class: 'compact-settings', 'data-collapse-id': 'periods-each' }, [el('summary', { text: `逐期明細（${periods.length} 期）` }), periodLines(periodSplit.recent), ...periodSplit.older.map(g => el('details', { class: 'compact-settings', 'data-collapse-id': `periods-older-${g.ym}` }, [el('summary', { text: `${g.ym}（${g.rows.length} 期）` }), periodLines(g.rows)])), el('details', { class: 'compact-settings', 'data-collapse-id': 'periods-full-table' }, [el('summary', { text: '完整欄位表' }), periodTable(periods)])])];
         })(),
         foldNotes('recon-formula-how', '生活花費怎麼算', [
           '生活花費＝推算用掉－固定支出＋浮動收入－浮動支出。',
