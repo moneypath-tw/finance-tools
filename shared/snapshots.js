@@ -159,7 +159,8 @@ const Snapshots = (() => {
       if (cur.start === last.start) break;
       cur = Planning.payCycle(addDays(cur.next, 0), payday);
     }
-    return { ready: true, perCycle, per30Cents: Math.round(pooled * 30), basis: { from: earliest, to: latest.to, days }, negatives };
+    // 每 30 天金額與各期比較的滾動平均同一個算法（rollingAverage），首頁與快照頁不會各算各的
+    return { ready: true, perCycle, per30Cents: rollingAverage(used, null).livingPer30Cents, basis: { from: earliest, to: latest.to, days }, negatives };
   };
   // 各期比較的滾動平均：核對日不固定，所以按天數加權換成每 30 天，而不是把各期的數字直接平均。
   //   periodList＝periods() 輸出（新到舊）；windowN＝最近幾期（null＝全部累計）。回傳最近 windowN 期的平均每 30 天，與涵蓋的起訖日、期數。

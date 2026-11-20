@@ -1244,8 +1244,8 @@ const App = (() => {
     const mmTotal = mmParts.reduce((s, [k]) => s + mm.totals[k], 0);
     const moneyMapView = mm.rows.some(r => r.balanceCents) ? el('div', { class: 'home-money-map' }, [
       el('p', { class: 'home-goal', text: `現有存款 ${Money.formatTWD(mmTotal)}，錢在這些地方` }),
-      el('ul', { class: 'stack-list' }, [
-        ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', { class: k === 'freeCents' ? 'seg-living' : '' }, [
+      el('ul', { class: 'stack-list money-list' }, [
+        ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', {}, [
           el('span', { class: 'stack-name', text: label }), el('span', { class: 'stack-amt mono', text: Money.formatTWD(mm.totals[k]) })])),
         mm.totals.fixedLackCents ? el('li', {}, [el('span', { class: 'stack-name', text: '固定支出還缺（帳戶錢不夠）' }), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.fixedLackCents) })]) : null,
         mm.totals.debtCents ? el('li', {}, [el('span', { class: 'stack-name', text: '負債（信用卡等）' }), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.debtCents) })]) : null
