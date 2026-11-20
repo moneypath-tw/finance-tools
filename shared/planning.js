@@ -582,6 +582,27 @@ const Planning = (() => {
     const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
     return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
   };
+  // 數據對帳檢核（docs/設計架構與計算邏輯.md「數據一致性規範」）：同一件事的兩種算法必須相等，差超過 tolerance（分）就列出。
+  //   純函式、只比對已算好的數字；任何一條不成立代表某處算法漂移，首頁會顯示警示，測試用固定資料鎖住「全部成立」。
+  const crossChecks = ({ health, balances = {}, periods = [], tolerance = 100 }) => {
+    const out = [];
+    const add = (id, label, a, b) => { const diff = Math.round(a - b); out.push({ id, label, ok: Math.abs(diff) <= tolerance, diffCents: diff }); };
+    const sumOf = (list, pick) => list.reduce((s, x) => s + pick(x), 0);
+    // 1. 建議儲蓄＝緊急預備金＋成本目標＋一般儲蓄（三項各自來源，合計不可與總數分家）
+    const goalMonthly = sumOf(health.goals || [], g => g.monthlyRequiredCents || 0);
+    add('saving-sum', '建議儲蓄＝三項合計', health.recommendedSavingCents, health.emergencyMonthlyCents + goalMonthly + health.savingCents);
+    // 2. 月分配：各列加未分配＝收入
+    add('allocation-sum', '分配合計＝收入', health.allocation.totalAllocatedCents + health.allocation.unallocatedCents, health.allocation.incomeCents);
+    // 3. 存款分佈：各部位加總＝帳戶餘額（可動用＋不可動用－信用卡欠款）
+    const t = health.moneyMap.totals, rows = health.moneyMap.rows;
+    const mapParts = t.fixedCents + t.livingCents + t.emergencyCents + t.goalCents + t.freeCents + t.lockedCents - t.debtCents;
+    add('money-map-sum', '存款分佈合計＝帳戶餘額', mapParts, sumOf(rows, r => r.nature === 'credit' ? -r.balanceCents : Math.max(0, r.balanceCents)));
+    // 4. 月度餘裕：收入－固定－生活費預算－建議儲蓄
+    add('flex', '月度餘裕＝收入扣各項', health.monthlyFlexCents, health.incomeCents - health.fixedExpenseCents - health.expenses.livingCents - health.recommendedSavingCents);
+    // 5. 各期：生活費殘差＝流出－固定支出－浮動流出＋浮動流入（只有一條公式，見 Snapshots）
+    periods.forEach((p, i) => add(`period-${i}`, '各期生活費殘差', p.total.livingCents, p.total.outflowCents - p.total.fixedOutCents - (p.total.floatingOutCents || 0) + (p.total.floatingInCents || 0)));
+    return out;
+  };
   // 生活費建議值（首頁「套用為預算」的唯一來源）：三個依據各管一件事
   //   1. 歷史：各期每 30 天生活費，用 Tukey 圍籬把極端期壓到邊界（不剔除、不改成 0），再按天數加權平均
   //   2. 負擔：收入 − 固定支出 − 建議儲蓄＝付得起的上限，歷史超過就要求減少
@@ -708,5 +729,5 @@ const Planning = (() => {
 
     return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, monthlyGoalCapacity, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
-  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, moneyMap, livingGuide, assessMonthlySavings, assess };
+  return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, rollingSavings, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, moneyMap, livingGuide, crossChecks, assessMonthlySavings, assess };
 })();
