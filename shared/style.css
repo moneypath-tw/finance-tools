@@ -278,6 +278,7 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .stack-seg { flex: 1 1 0; min-width: 4px; border-radius: 3px; background: var(--seg); }
 .stack-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 0.875rem; }
 .stack-list li { display: grid; grid-template-columns: 12px minmax(0, 1fr) 3em auto; align-items: center; gap: 8px; }
+.stack-list.money-list li { grid-template-columns: minmax(0, 1fr) auto; }
 .stack-swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--seg); }
 .stack-pct { text-align: right; color: var(--ink-soft); }
 .stack-amt { text-align: right; min-width: 6.5em; font-variant-numeric: tabular-nums; }

@@ -1959,3 +1959,17 @@ test('單一權威審核：首頁存款分佈只讀 Planning.moneyMap，生活�
   assert.ok(/livingCents \+= floatingInCents - floatingOutCents/.test(snap), '殘差公式：再加浮動收入、減浮動支出');
   assert.ok(!/usable = [^;]*livingCents >= 0/.test(snap), '不可只留正期（倖存者偏差）');
 });
+
+test('單一權威：首頁實際生活費每 30 天＝各期比較的滾動平均（同一批期間）', () => {
+  const p = (from, to, days, living) => ({ from, to, days, total: { livingCents: living, fixedOutCents: 0, outflowCents: living } });
+  const list = [p('2026-03-01', '2026-03-10', 9, 400000), p('2026-02-01', '2026-03-01', 28, 2000000), p('2026-01-01', '2026-02-01', 31, -300000)];
+  const a = Snap.livingActual(list, { payday: 1, today: new Date(2026, 2, 12) });
+  assert.equal(a.per30Cents, Snap.rollingAverage(list, null).livingPer30Cents);
+});
+
+test('錢在哪裡清單用兩欄樣式：沿用四欄格線會把名稱擠成一字一行（2026-11-20 線上跑版）', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  assert.ok(/stack-list money-list/.test(app));
+  assert.ok(/\.stack-list\.money-list li \{ grid-template-columns: minmax\(0, 1fr\) auto; \}/.test(css));
+});
