@@ -598,9 +598,11 @@ const Planning = (() => {
     const months = monthsBetween(now, p.goalTargetMonth);
     const futureGoal = futureValue(p.goalAmountTodayCents, p.inflationAnnualRate, months);
     const monthlyGoalContribution = requiredMonthlyContribution(futureGoal, goalStartingAssets, p.nominalReturnAnnualRate, months);
-    const contributionLoad = monthlySurplus > 0 ? monthlyGoalContribution / monthlySurplus : Infinity;
-    const estimatedMonths = monthlySurplus > 0
-      ? monthsToReachGoal(p.goalAmountTodayCents, goalStartingAssets, monthlySurplus, p.inflationAnnualRate, p.nominalReturnAnnualRate)
+    // 月結餘要先補緊急預備金缺口（與首頁分配同一規則），剩下的才是目標能用的錢；否則同一筆錢被算兩次（紅隊 R1）
+    const monthlyGoalCapacity = Math.max(0, monthlySurplus - emergency.monthlyCents);
+    const contributionLoad = monthlyGoalCapacity > 0 ? monthlyGoalContribution / monthlyGoalCapacity : Infinity;
+    const estimatedMonths = monthlyGoalCapacity > 0
+      ? monthsToReachGoal(p.goalAmountTodayCents, goalStartingAssets, monthlyGoalCapacity, p.inflationAnnualRate, p.nominalReturnAnnualRate)
       : null;
     const completion = estimatedMonths === null ? null : addMonths(now.getFullYear(), now.getMonth() + 1, estimatedMonths);
     const realAnnualReturnRate = realRate(p.nominalReturnAnnualRate, p.inflationAnnualRate);
@@ -613,7 +615,8 @@ const Planning = (() => {
       const goal = futureValue(p.goalAmountTodayCents, s.inflation, months);
       const surplus = Math.round(p.monthlyNetIncomeCents * s.incomeFactor) - monthlyExpense;
       const need = requiredMonthlyContribution(goal, goalStartingAssets, s.returnRate, months);
-      return { ...s, futureGoalCents: goal, monthlySurplusCents: surplus, monthlyRequiredCents: need, feasible: surplus >= need && surplus >= 0 };
+      const capacity = Math.max(0, surplus - emergency.monthlyCents);
+      return { ...s, futureGoalCents: goal, monthlySurplusCents: surplus, monthlyCapacityCents: capacity, monthlyRequiredCents: need, feasible: capacity >= need && surplus >= 0 };
     });
 
     const risks = [];
@@ -626,7 +629,7 @@ const Planning = (() => {
     else if (hasGoal && contributionLoad > 0.8) risks.push({ severity: 'medium', code: 'GOAL_TIGHT', text: '目標提撥占月結餘超過 80%，緩衝有限' });
     if (hasGoal && !scenarios.find(s => s.key === 'stress').feasible) risks.push({ severity: 'medium', code: 'INCOME_STRESS', text: '收入下降 20% 且零報酬時，目標無法如期完成' });
 
-    return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
+    return { ok: true, monthlyExpense, monthlySurplus, savingsRate, emergencyMonths, emergencyTargetMonths, emergencyTarget, emergencyReserveCents, emergencyGap, goalStartingAssets, monthsToGoal: months, futureGoal, monthlyGoalContribution, monthlyGoalCapacity, contributionLoad, estimatedMonths, completion, realAnnualReturnRate, scenarios, risks };
   };
   return { monthsBetween, targetMonthFrom, describeTargetMonth, futureValue, realRate, requiredMonthlyContribution, monthsToReachGoal, emergencyFund, isLivingSpend, floatingSummary, fixedEntryMatch, livingSpendCents, livingSpendAccounts, spendingNeedByAccount, cycleIndexOf, fixedReserve, accountFloors, median, pastCycles, cycleReports, habitInsights, goalForecast, requiredIncome, workTarget, minimumWageOn, allocateMonthly, payCycle, allocationStatus, transferPlan, transferOutlook, homeVerdict, poolGoalSavings, assessMonthlySavings, assess };
 })();

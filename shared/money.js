@@ -541,7 +541,7 @@ const Money = (() => {
       `              = ${formatTWD(totalNeededBeforeRetire)}\n` +
       `尚欠總資金缺口 = 退休前總需求資金 － 目前已存 = ${formatTWD(totalFundingGap)}\n` +
       `往後總收入需求 = 尚欠總資金缺口 + 退休前總支出預估 = ${formatTWD(totalIncomeNeeded)}\n` +
-      (totalFundingGap <= 0 ? `目前資產已足夠，無需額外月薪` : `往後應有平均月薪(淨) = 往後總收入需求 ÷ (剩餘工作年數 × 12) = ${formatTWD(requiredAvgMonthlySalaryNet)}`) +
+      (totalFundingGap <= 0 ? `目前資產已足夠，無需額外月薪` : `往後應有平均月薪(淨) = 往後總收入需求 ÷ (剩餘工作年數 × 12) = ${formatTWD(requiredAvgMonthlySalaryNet)}\n`) +
       (scenario.salaryType === 'gross'
         ? `往後應有平均月薪(稅前，含勞健保換算) = ${formatTWD(requiredAvgMonthlySalaryDisplay)}\n`
         : '') +
@@ -955,8 +955,10 @@ const Money = (() => {
     </svg>`;
   };
 
+  // 薪資年成長率超過這個值就提醒（台灣長期約 2～4%；2026-11 實存檔曾因舊預設 20% 把「往後應有月薪」拉到 13 萬）
+  const SALARY_GROWTH_WARN_RATE = 0.08;
   return {
-    toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, splitRecentMonths, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
+    SALARY_GROWTH_WARN_RATE, toCents, toYuan, formatMoney, formatTWD, toTWDCents, entryTWDCents, entryDeltas, ym, ymd, groupSum, splitRecentMonths, calcExpenseAverages, sumItems, tripQuantity, switchTripDestination, inflationRateOf, inflationFactor,
     getScenarioType, toScenarioSummary, grossToNet, netToGross, calcPayroll, INCOME_PAY_BASES, deriveIncome, calcRecurringMonthly, wageSettingsFromIncome, RENT_CYCLES, flowPayCycle, flowDueInMonth, flowDueCents, flowEvents, calcHousing, housingDueInMonth, housingSubsidyInMonth, housingPaymentSchedule, calcWageReverse, calcAchievabilityHint, calcScenario, calcStudentLoanRepayment, studentLoanLeaveRuns, calcStudentLoanPlan, calcBilledStudentLoan, unbilledPeriods, leaveGap, migrateLeaveMarks, calcMortgageRepayment, buildTrendChartSVG
   };
 })();

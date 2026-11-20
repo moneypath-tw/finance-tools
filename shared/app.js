@@ -990,7 +990,7 @@ const App = (() => {
       { value: 'income', label: '收支｜月收入', amountCents: income, note: hasRecurringIncome ? '多份工作勞健保扣除後粗估合計' : '財務健檢收入' },
       { value: 'fixedExpense', label: '收支｜固定支出', amountCents: fixedExpense, note: '每月固定款項合計' },
       // 收入付完固定支出與生活費後不夠存時要講出實際存得到多少，不能只顯示規劃比率
-      { value: 'recommendedSaving', label: '收支｜應儲蓄', amountCents: savingsHealth.recommendedSavingCents, note: `${fundedSavingCents < savingsHealth.recommendedSavingCents ? `收入只夠存 ${Money.formatTWD(fundedSavingCents)}・` : ''}規劃儲蓄率 ${savingsHealth.plannedSavingsRate === null ? '—' : (savingsHealth.plannedSavingsRate * 100).toFixed(1) + '%'}` },
+      { value: 'recommendedSaving', label: '收支｜應儲蓄', amountCents: savingsHealth.recommendedSavingCents, note: `${fundedSavingCents < savingsHealth.recommendedSavingCents ? `收入只夠存 ${Money.formatTWD(fundedSavingCents)}・` : ''}目標儲蓄率（想存的，不是存得到的）${savingsHealth.plannedSavingsRate === null ? '—' : (savingsHealth.plannedSavingsRate * 100).toFixed(1) + '%'}` },
       { value: 'dailyLiving', label: '收支｜每日生活費', amountCents: savingsHealth.dailyLivingCents, note: `${allocation.unallocatedCents > 0 ? `生活費 ${Money.formatTWD(expenses.livingCents)}＋未分配 ${Money.formatTWD(allocation.unallocatedCents)}` : '生活費預算'}，本月計畫平均；實際剩多少看分配狀態` },
       { value: 'monthlyFlex', label: '收支｜月度餘裕', amountCents: monthlyFlex, note: monthlyFlex < 0 ? '收入不夠付完支出與應儲蓄' : '付完支出、存完應儲蓄後還剩' },
       { value: 'actualSaving', label: '收支｜本月實際儲蓄', amountCents: savingsHealth.actualSavingsCents, note: savingsHealth.health.label },
@@ -1332,6 +1332,7 @@ const App = (() => {
       numField('緊急預備金目標（月數）', q.emergencyTargetMonths, (v) => { q.emergencyTargetMonths = Math.max(PLANNING_RULES.emergencyMonths.min, Math.min(PLANNING_RULES.emergencyMonths.max, Math.trunc(v))); IO.markDirty(); renderHealth(); }),
       hasRecurringIncome ? derivedField('每月勞健保扣除後收入粗估', recurringForHealth.incomeCents, '由固定收入自動帶入') : healthMoneyField('每月勞健保扣除後收入粗估（元）', 'monthlyNetIncomeCents'),
       expensesForHealth.derived ? derivedField('每月必要支出', expensesForHealth.essentialCents, '由標為必要的固定支出每月推估自動帶入') : healthMoneyField('每月必要支出（元）', 'monthlyEssentialExpenseCents'),
+      !expensesForHealth.derived && config.recurringCashFlows.some(f => f.type === 'expense') ? el('p', { class: 'notice warn', text: '固定支出全停用，首頁暫用這裡手填的數字。啟用後會自動改用固定支出。' }) : empty(),
       healthMoneyField(expensesForHealth.derived ? '固定支出以外的每月生活開銷（元）' : '每月其他支出（元）', 'monthlyOtherExpenseCents'),
       derivedField('緊急預備金計算基數（不扣補助）', expensesForHealth.emergencyBaseCents, expensesForHealth.derived ? '必要固定支出（租屋補助前）＋每月生活開銷；補助可能停發，不拿來降低預備金' : '每月必要支出'),
       hasAccountAssets ? derivedField('可動用資產', derivedLiquidAssets, '由流動性帳戶餘額自動加總；緊急預備金另看指定帳戶') : healthMoneyField('可動用資產（元）', 'liquidAssetsCents'),
@@ -1366,8 +1367,8 @@ const App = (() => {
       ]),
       noGoal ? empty() : el('h3', { class: 'editor-only', text: '固定情境' }),
       noGoal ? empty() : el('table', { class: 'editor-only' }, [
-        el('thead', {}, [el('tr', {}, [el('th', { text: '情境' }), el('th', { text: '通膨後目標' }), el('th', { text: '月結餘' }), el('th', { text: '每月所需' }), el('th', { text: '結果' })])]),
-        el('tbody', {}, result.scenarios.map(s => el('tr', {}, [el('td', { text: s.label }), el('td', { class: 'mono', text: Money.formatTWD(s.futureGoalCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlySurplusCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlyRequiredCents) }), el('td', { class: s.feasible ? '' : 'neg', text: s.feasible ? '可行' : '無法如期' })])))
+        el('thead', {}, [el('tr', {}, [el('th', { text: '情境' }), el('th', { text: '通膨後目標' }), el('th', { text: '扣緊急預備金後可用' }), el('th', { text: '每月所需' }), el('th', { text: '結果' })])]),
+        el('tbody', {}, result.scenarios.map(s => el('tr', {}, [el('td', { text: s.label }), el('td', { class: 'mono', text: Money.formatTWD(s.futureGoalCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlyCapacityCents) }), el('td', { class: 'mono', text: Money.formatTWD(s.monthlyRequiredCents) }), el('td', { class: s.feasible ? '' : 'neg', text: s.feasible ? '可行' : '無法如期' })])))
       ]),
       el('h3', { text: '主要風險' }),
       result.risks.length ? el('ul', {}, result.risks.map(r => el('li', { class: r.severity === 'high' ? 'neg' : '', text: r.text }))) : el('p', { text: '目前固定檢查未發現高風險；仍須定期更新收入、支出與假設。' })
@@ -2762,7 +2763,7 @@ const App = (() => {
         numField('預期壽命', scenario.deathAge, (v) => { scenario.deathAge = v; IO.markDirty(); renderEstimator(); }),
         linkedMoney('目前月薪', 'currentMonthlySalaryCents', src.salary, '固定收入（勞健保扣除後）'),
         linkedMoney('目前月支出', 'currentMonthlyExpenseCents', src.expense, '固定支出＋每月生活開銷'),
-        numField('退休後月支出（元）', Money.toYuan(scenario.retirementMonthlyExpenseCents), (v) => { scenario.retirementMonthlyExpenseCents = Money.toCents(v); IO.markDirty(); renderEstimator(); }),
+        numField('退休後月支出（元，退休當年的物價）',Money.toYuan(scenario.retirementMonthlyExpenseCents), (v) => { scenario.retirementMonthlyExpenseCents = Money.toCents(v); IO.markDirty(); renderEstimator(); }),
         numField('退休後年化報酬率（小數）', scenario.postRetirementAnnualReturnRate, (v) => { scenario.postRetirementAnnualReturnRate = v; IO.markDirty(); renderEstimator(); }),
         numField('退休後通膨率（小數）', scenario.retirementInflationAnnualRate ?? 0, (v) => { scenario.retirementInflationAnnualRate = Math.max(0, Math.min(0.20, v)); IO.markDirty(); renderEstimator(); }),
         linkedMoney('目前已存總額', 'totalSavedCents', src.saved, '流動性帳戶餘額加總'),
@@ -2770,6 +2771,7 @@ const App = (() => {
         linked ? shown('緊急預備金', Money.formatTWD(scenario.emergencyFundCents || 0), '首頁緊急預備金目標（不扣補助）')
           : numField('緊急預備金（目前月支出 × 月數）', scenario.emergencyFundMonths, (v) => { scenario.emergencyFundMonths = Math.max(0, Math.min(120, v)); IO.markDirty(); renderEstimator(); }),
         numField('假設薪資年成長率（小數）', scenario.assumedSalaryGrowthRate, (v) => { scenario.assumedSalaryGrowthRate = v; IO.markDirty(); renderEstimator(); }),
+        ...(scenario.assumedSalaryGrowthRate > Money.SALARY_GROWTH_WARN_RATE ? [el('p', { class: 'notice warn', text: `年成長 ${(scenario.assumedSalaryGrowthRate * 100).toFixed(0)}% 遠高於長期 2～4%，月薪目標會失真。想填 0.03？` })] : []),
         numField('退休前名目年報酬率（小數）', scenario.preRetirementAnnualReturnRate || 0, (v) => { scenario.preRetirementAnnualReturnRate = v; IO.markDirty(); renderEstimator(); }),
         numField('投保薪資（元，供勞健保換算）', Money.toYuan(scenario.insuredSalaryCents), (v) => { scenario.insuredSalaryCents = Money.toCents(v); IO.markDirty(); renderEstimator(); })
       ]),
