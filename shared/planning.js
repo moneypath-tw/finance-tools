@@ -568,13 +568,15 @@ const Planning = (() => {
     const take = (left, want) => Math.min(left, Math.max(0, Math.round(want || 0)));
     const rows = accounts.map((a) => {
       const bal = Math.round(balances[a.id] || 0);
-      const row = { id: a.id, name: a.name, nature: a.nature, balanceCents: bal, fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, bufferCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0, fixedLackCents: 0 };
+      const row = { id: a.id, name: a.name, nature: a.nature, balanceCents: bal, fixedCents: 0, livingCents: 0, emergencyCents: 0, goalCents: 0, bufferCents: 0, freeCents: 0, lockedCents: 0, debtCents: 0, fixedLackCents: 0, livingLackCents: 0 };
       if (a.nature === 'credit') { row.debtCents = bal; return row; }
       if (!a.liquid) { row.lockedCents = Math.max(0, bal); return row; }
       let left = Math.max(0, bal);
       row.fixedCents = take(left, fixedNeedByAccount[a.id]); left -= row.fixedCents;
       row.fixedLackCents = Math.max(0, Math.round(fixedNeedByAccount[a.id] || 0) - row.fixedCents);
       row.livingCents = take(left, livingNeedByAccount[a.id]); left -= row.livingCents;
+      // 與首頁「扣款帳戶錢不夠」同一份缺額（固定＋生活費需求－餘額）：缺的部分各自列出，不讓生活費缺口在分佈裡消失
+      row.livingLackCents = Math.max(0, Math.round(livingNeedByAccount[a.id] || 0) - row.livingCents);
       if (a.id === emergencyAccountId) { row.emergencyCents = take(left, emergencyTargetCents); left -= row.emergencyCents; }
       row.goalCents = take(left, goalSavedByAccount[a.id]); left -= row.goalCents;
       // 一般儲蓄帳戶：剩下的整筆是緩衝；其他帳戶只留固定支出的緩衝金
@@ -583,7 +585,7 @@ const Planning = (() => {
       return row;
     });
     const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
-    return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), bufferCents: sum('bufferCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents') } };
+    return { rows, totals: { fixedCents: sum('fixedCents'), livingCents: sum('livingCents'), emergencyCents: sum('emergencyCents'), goalCents: sum('goalCents'), bufferCents: sum('bufferCents'), freeCents: sum('freeCents'), lockedCents: sum('lockedCents'), debtCents: sum('debtCents'), fixedLackCents: sum('fixedLackCents'), livingLackCents: sum('livingLackCents') } };
   };
   // 數據對帳檢核（docs/設計架構與計算邏輯.md「數據一致性規範」）：同一件事的兩種算法必須相等，差超過 tolerance（分）就列出。
   //   純函式、只比對已算好的數字；任何一條不成立代表某處算法漂移，首頁會顯示警示，測試用固定資料鎖住「全部成立」。

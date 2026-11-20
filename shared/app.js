@@ -1303,6 +1303,7 @@ const App = (() => {
         ...mmParts.filter(([k]) => mm.totals[k] || k === 'freeCents').map(([k, label]) => el('li', {}, [
           mmName(label, k), el('span', { class: 'stack-amt mono', text: Money.formatTWD(mm.totals[k]) })])),
         mm.totals.fixedLackCents ? el('li', {}, [mmName('固定支出還缺（帳戶錢不夠）', 'fixedLackCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.fixedLackCents) })]) : null,
+        mm.totals.livingLackCents ? el('li', {}, [mmName('生活費還缺（帳戶錢不夠）', 'livingLackCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.livingLackCents) })]) : null,
         mm.totals.debtCents ? el('li', {}, [mmName('負債（信用卡等）', 'debtCents'), el('span', { class: 'stack-amt mono neg', text: Money.formatTWD(mm.totals.debtCents) })]) : null
       ])
     ]) : null;
