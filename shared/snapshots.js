@@ -123,21 +123,22 @@ const Snapshots = (() => {
 
   // 發薪週期對齊的「實際生活費」（docs/設計架構與計算邏輯.md 生活花費推估列）：兩次核對之間的殘差 livingCents 按天數線性分攤，
   // 完整被核對涵蓋的週期標 measured，其餘沿用最近速率標 estimated。periodList 為 periods() 的輸出（新到舊）。
-  // 殘差為負（錢變多，多半漏記收入）的期間不納入，列在 negatives 讓畫面提示
+  // 殘差為負（錢變多，多半漏記收入）的期間也併入合計：只丟負期、留正期會讓數字系統性偏高（倖存者偏差）。
+  // negatives 只列出供提示；合計為負就不估。
   const livingActual = (periodList, { payday, today, minDays = 14, maxDays = 93 } = {}) => {
     const empty = { ready: false, perCycle: [], per30Cents: null, basis: null, negatives: [] };
     const negatives = (periodList || []).filter(p => p.days > 0 && p.total.livingCents < 0)
       .map(p => ({ from: p.from, to: p.to, extraCents: -p.total.livingCents }));
-    const usable = (periodList || []).filter(p => p.days > 0 && p.total.livingCents >= 0);
+    const usable = (periodList || []).filter(p => p.days > 0);
     let days = 0, cents = 0, used = [];
     for (const p of usable) {
       if (days >= maxDays) break;
       days += p.days; cents += p.total.livingCents; used.push(p);
     }
-    if (days < minDays) return { ...empty, negatives };
+    if (days < minDays || cents <= 0) return { ...empty, negatives };
     const pooled = cents / days;
     // 太短的區段（隔兩天就核對）速率太抖，用合併速率；夠長才用自己的
-    const rateOf = (p) => (p.days >= minDays ? p.total.livingCents / p.days : pooled);
+    const rateOf = (p) => Math.max(0, p.days >= minDays ? p.total.livingCents / p.days : pooled);
     const latest = used[0];
     const latestRate = rateOf(latest);
     const dayStr = (d) => Money.ymd(d);

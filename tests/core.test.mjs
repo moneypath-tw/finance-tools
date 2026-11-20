@@ -1418,7 +1418,7 @@ test('核對：實際生活費按天數分攤到發薪週期，完整涵蓋＝�
   assert.equal(r.perCycle[0].kind, 'estimated'); // 1/1 是核對當天，不在涵蓋範圍內
 });
 
-test('核對：實際生活費——天數不足或只有一次核對不估，餘額變多的期間排除並列出', () => {
+test('核對：實際生活費——天數不足或只有一次核對不估，餘額變多的期間併入合計並列出', () => {
   const p = (from, to, days, living) => ({ from, to, days, total: { livingCents: living, fixedOutCents: 0 } });
   const opt = { payday: 1, today: new Date(2026, 2, 10) };
   assert.equal(Snap.livingActual([], opt).ready, false);
@@ -1426,7 +1426,8 @@ test('核對：實際生活費——天數不足或只有一次核對不估，�
   const r = Snap.livingActual([p('2026-02-01', '2026-03-01', 28, 2800000), p('2026-01-01', '2026-02-01', 31, -500000)], opt);
   assert.equal(r.ready, true);
   assert.equal(JSON.stringify(r.negatives), JSON.stringify([{ from: '2026-01-01', to: '2026-02-01', extraCents: 500000 }]));
-  assert.equal(r.per30Cents, 3000000);
+  assert.equal(r.per30Cents, Math.round((2800000 - 500000) / 59 * 30));
+  assert.equal(Snap.livingActual([p('2026-01-01', '2026-02-01', 31, -500000), p('2026-02-01', '2026-03-01', 28, 100000)], opt).ready, false);
 });
 
 test('實際生活費只有一個來源：app 讀 Snapshots.livingActual，不再用逐筆明細或「最低生活費」', () => {
@@ -1925,4 +1926,36 @@ test('月界線照結薪日：25 日發薪時 24 日與 25 日的帳目落在不
   const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
   const fn = app.slice(app.indexOf('const currentMonthSavingsHealth'), app.indexOf('const recurringSummary'));
   assert.ok(!/startsWith\(ym\)/.test(fn) && fn.includes('facts.cycle.start') && fn.includes('Planning.rollingSavings'), '首頁用發薪週期而非日曆月');
+});
+
+test('錢在哪裡：每個帳戶依序保留固定支出、生活費、緊急金、目標，剩下才可自由動用；各部位加總＝餘額', () => {
+  const accounts = [
+    { id: 'a', name: '薪轉', nature: 'checking', liquid: true }, { id: 'b', name: '證券', nature: 'investment', liquid: false },
+    { id: 'c', name: '信用卡', nature: 'credit', liquid: false }, { id: 'd', name: '備用', nature: 'savings', liquid: true }
+  ];
+  const r = api.Planning.moneyMap({
+    accounts, balances: { a: 1000000, b: 500000, c: -30000, d: 20000 },
+    fixedNeedByAccount: { a: 300000, d: 50000 }, livingNeedByAccount: { a: 200000 },
+    emergencyAccountId: 'a', emergencyTargetCents: 400000, goalSavedByAccount: { a: 50000 }
+  });
+  const a = r.rows[0];
+  assert.deepEqual([a.fixedCents, a.livingCents, a.emergencyCents, a.goalCents, a.freeCents], [300000, 200000, 400000, 50000, 50000]);
+  assert.equal(r.rows[1].lockedCents, 500000);
+  assert.equal(r.rows[2].debtCents, -30000);
+  const d = r.rows[3];
+  assert.deepEqual([d.fixedCents, d.fixedLackCents, d.freeCents], [20000, 30000, 0]);
+  for (const x of r.rows.filter(x => x.nature !== 'credit')) {
+    assert.equal(x.fixedCents + x.livingCents + x.emergencyCents + x.goalCents + x.freeCents + x.lockedCents, Math.max(0, x.balanceCents), '各部位加總必須等於餘額');
+  }
+});
+
+test('單一權威審核：首頁存款分佈只讀 Planning.moneyMap，生活費殘差只有 Snapshots 一處，不在 app 重算', () => {
+  const src = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(/Planning\.moneyMap\(/.test(src));
+  assert.ok(!/home-money-map[\s\S]{0,200}getAccountBalances/.test(src), '分佈畫面不可另讀餘額');
+  assert.equal((src.match(/livingCents\s*=\s*[^;]*outflowCents/g) || []).length, 0, '生活費殘差公式只能在 snapshots.js');
+  const snap = fs.readFileSync(path.join(root, 'shared/snapshots.js'), 'utf8');
+  assert.ok(/total\.livingCents = total\.outflowCents - total\.fixedOutCents/.test(snap), '殘差公式：生活費＝總流出－固定支出');
+  assert.ok(/livingCents \+= floatingInCents - floatingOutCents/.test(snap), '殘差公式：再加浮動收入、減浮動支出');
+  assert.ok(!/usable = [^;]*livingCents >= 0/.test(snap), '不可只留正期（倖存者偏差）');
 });
