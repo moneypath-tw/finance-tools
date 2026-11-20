@@ -79,6 +79,14 @@ const REFERENCE_DATA = {
     lawUrl: 'https://law.moj.gov.tw/LawClass/LawSingle.aspx?pcode=N0030001&flno=32',
     retrievedAt: '2026-10-22'
   },
+  // 主計總處家庭收支調查：每人年消費支出與居住類占比，只當「常見水準」對照，不是個人目標
+  twPerCapitaConsumption: {
+    year: 114, annualPerPersonCents: 34200000, housingShare: 0.241,
+    source: '行政院主計總處「114 年家庭收支調查報告」第 16 頁：平均每人消費支出 34.2 萬元；住宅服務、水電瓦斯及其他燃料占家庭消費 24.1%',
+    sourceUrl: 'https://ws.dgbas.gov.tw/001/Upload/466/ebook/ebook_383961/pdf/full.pdf',
+    retrievedAt: '2026-11-20',
+    note: '每月與扣除居住類的數字為推算；全台平均不含個人差異，一人租屋與家庭同住差很多。'
+  },
   twMortgage: {
     referenceAnnualRate: 0.0337, referenceTermYears: 30,
     source: '臺灣銀行消費者貸款適用利率一覽表（利率指數 1.751%，115 年 9 月 21 日起）及中央銀行不動產貸款規定',

@@ -14,7 +14,7 @@ for (const rel of ['shared/reference-data.js','shared/config.js','shared/validat
 const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,PLANNING_RULES,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
 
 // 外部數字只能來自官方機關網域，且要記錄取得日期，過期時才知道該重查
-const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw|mol\.gov\.tw|ey\.gov\.tw)\//;
+const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw|mol\.gov\.tw|ey\.gov\.tw|ws\.dgbas\.gov\.tw)\//;
 test('外部參考數字皆有官方來源網址與取得日期', () => {
   const entries = [...Object.entries(api.REFERENCE_DATA.inflation).map(([k, v]) => [`inflation.${k}`, v]),
     ...Object.entries(api.REFERENCE_DATA).filter(([k]) => k !== 'inflation')];
@@ -1972,4 +1972,38 @@ test('錢在哪裡清單用兩欄樣式：沿用四欄格線會把名稱擠成�
   const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
   assert.ok(/stack-list money-list/.test(app));
   assert.ok(/\.stack-list\.money-list li \{ grid-template-columns: minmax\(0, 1fr\) auto; \}/.test(css));
+});
+
+test('livingGuide：極端期壓到邊界、付不起就要求減少、過低視為漏記', () => {
+  const P = api.Planning;
+  const mk = (rates) => rates.map(r => ({ days: 30, livingCents: r * 100 }));
+  // 一期 100 萬的極端值不會把常態拉走（圍籬壓住），原始平均則被拉高
+  const g = P.livingGuide({ periods: mk([20000, 21000, 19000, 20500, 1000000]), incomeCents: 6000000, fixedExpenseCents: 1500000, savingCents: 500000 });
+  assert.equal(g.clipped, 1);
+  assert.ok(g.rawPer30Cents > 300000 * 100 / 100 && g.typicalPer30Cents < 2500000, JSON.stringify(g));
+  assert.equal(g.verdict, 'ok');
+  // 付得起的上限低於常態：建議降到上限，並回報要少花多少
+  const cut = P.livingGuide({ periods: mk([30000, 31000, 29000, 30500]), incomeCents: 5000000, fixedExpenseCents: 1500000, savingCents: 1000000 });
+  assert.equal(cut.verdict, 'cut');
+  assert.equal(cut.recommendedCents, 2500000);
+  assert.equal(cut.cutCents, cut.typicalPer30Cents - 2500000);
+  // 收入連固定支出加儲蓄都不夠：不給建議值
+  const bad = P.livingGuide({ periods: mk([20000, 20000, 20000, 20000]), incomeCents: 3000000, fixedExpenseCents: 2000000, savingCents: 1500000 });
+  assert.equal(bad.verdict, 'unaffordable');
+  assert.equal(bad.recommendedCents, null);
+  // 遠低於人均（不含居住）多半漏記：不建議縮減
+  const low = P.livingGuide({ periods: mk([2000, 2500, 1500, 2200]), incomeCents: 6000000, fixedExpenseCents: 1500000, savingCents: 500000 });
+  assert.equal(low.verdict, 'lowCheck');
+  // 不足 4 期不套圍籬；沒有期間就未就緒
+  assert.equal(P.livingGuide({ periods: mk([20000, 90000]), incomeCents: 9000000 }).clipped, 0);
+  assert.equal(P.livingGuide({ periods: [], incomeCents: 1 }).ready, false);
+  // 人均對照：34.2 萬／年、扣居住 24.1% → 約 21,632／月
+  assert.equal(g.refCents, 2163150);
+});
+
+test('生活費建議值只有 Planning.livingGuide 一個來源，首頁經 livingEstimate 取用', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(app, /Planning\.livingGuide\(/);
+  assert.equal((app.match(/Planning\.livingGuide\(/g) || []).length, 1);
+  assert.match(app, /savingsHealth\.facts\.cycle\.payday, savingsHealth\)/);
 });

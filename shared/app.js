@@ -489,19 +489,34 @@ const App = (() => {
   };
   // 實際生活費的唯一來源（首頁、預算頁都讀這裡）：帳戶核對之間的殘差按天數分攤（Snapshots.livingActual），
   // 不用逐筆明細加總（只記特別花費的人，明細加總不是生活費）。核對不足時 source 為 null，不建議預算
-  const livingEstimate = (recurring, spendIds, payday) => {
+  const livingEstimate = (recurring, spendIds, payday, health = null) => {
     const now = new Date();
     // 近 93 天同一筆固定收支記了兩次（排程帳目已確認＋另外手記）：帳戶餘額會少算，首頁提醒刪掉一筆
     const duplicates = Planning.fixedEntryMatch({ entries: ledger.entries, items: recurring.items, from: Money.ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 93)), to: Money.ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)) }).duplicates;
     // entries 讓推算扣掉浮動收支（接案入帳不會把花費算少、大筆偶發支出不會把花費算多）
-    const actual = Snapshots.livingActual(Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries), { payday, today: now });
+    const periodList = Snapshots.periods(ledger.snapshots, recurring.items, ledger.entries);
+    const actual = Snapshots.livingActual(periodList, { payday, today: now });
     const roundUp = (cents) => Math.ceil(cents / 10000) * 10000;
     const md = (ymd) => ymd.slice(5).replace('-', '/');
     // 提示文字不顯示資料品質細節（近幾天、未納入、疑似未記收入）：存花習慣即時更新就好（使用者 2026-11-17）
     // 核對不足＝不能建議把預算改成 0
-    if (!actual.ready) return { source: null, actual, monthlyCents: null, suggestedCents: null, text: null, hint: `還不能估實際生活費，再核對一次更準`, duplicates };
+    if (!actual.ready) return { source: null, actual, monthlyCents: null, suggestedCents: null, text: null, hint: `還不能估實際生活費，再核對一次更準`, duplicates, guide: null, guideLines: [] };
     const monthlyCents = actual.per30Cents;
-    return { source: 'snapshot', actual, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `實際生活費每 30 天約 ${Money.formatTWD(monthlyCents)}`, hint: null, duplicates };
+    const plain = { source: 'snapshot', actual, monthlyCents, suggestedCents: roundUp(monthlyCents), text: `實際生活費每 30 天約 ${Money.formatTWD(monthlyCents)}`, hint: null, duplicates, guide: null, guideLines: [] };
+    if (!health) return plain;
+    // 建議值＝歷史常態（極端期壓到邊界）與付得起的上限取小；依據與判斷全在 Planning.livingGuide
+    const guide = Planning.livingGuide({ periods: periodList.slice(0, 12).map(p => ({ days: p.days, livingCents: p.total.livingCents })), incomeCents: health.incomeCents, fixedExpenseCents: health.fixedExpenseCents, savingCents: health.recommendedSavingCents });
+    if (!guide.ready) return plain;
+    const fmt = Money.formatTWD;
+    const lines = [];
+    if (guide.clipped) lines.push(`有 ${guide.clipped} 期特別高或低，已壓到常態範圍再平均`);
+    if (guide.verdict === 'cut') lines.push(`收入扣固定支出與儲蓄後只剩 ${fmt(guide.affordableCents)}，生活費要比常態少 ${fmt(guide.cutCents)}`);
+    else if (guide.verdict === 'unaffordable') lines.push('收入扣固定支出與建議儲蓄已不夠生活費，先調儲蓄目標或固定支出');
+    else if (guide.verdict === 'lowCheck') lines.push(`比台灣人均（不含居住）約 ${fmt(guide.refCents)} 低很多，可能漏記，先核對`);
+    else lines.push(`台灣人均（不含居住）約 ${fmt(guide.refCents)}，僅供對照`);
+    const down = (cents) => Math.floor(cents / 10000) * 10000;
+    const suggestedCents = guide.recommendedCents === null ? null : (guide.verdict === 'cut' ? down(guide.recommendedCents) : roundUp(guide.recommendedCents));
+    return { ...plain, monthlyCents: guide.typicalPer30Cents, suggestedCents, text: `生活費常態每 30 天約 ${fmt(guide.typicalPer30Cents)}`, guide, guideLines: lines };
   };
   // 本期還要付的支出依帳戶（Planning.spendingNeedByAccount）；livingBudgetCents 沒給時用生活費預算
   const spendNeedNow = (plan, facts, livingBudgetCents = plan.expenses.livingCents) => Planning.spendingNeedByAccount({
@@ -1197,7 +1212,7 @@ const App = (() => {
       progress.transfers.stayCents > 0 ? `留 ${Money.formatTWD(progress.transfers.stayCents)} 在${sourceName || '薪資入帳帳戶'}` : null
     ].filter(Boolean);
     // 生活費建議值（livingEstimate：核對推算優先，否則逐筆帳目中位數），按下才寫入預算
-    const living = livingEstimate(recurring, spendAccounts.ids, savingsHealth.facts.cycle.payday);
+    const living = livingEstimate(recurring, spendAccounts.ids, savingsHealth.facts.cycle.payday, savingsHealth);
     // 各固定支出扣款帳戶的最低餘額（每月預存＋緩衝），與轉帳指示、分配表同一份 Planning.fixedReserve
     const floors = fixedFloorsNow(recurring);
     const floorsView = floors.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-floors' }, [
@@ -1301,6 +1316,7 @@ const App = (() => {
         el('progress', { max: String(em.targetMonths), value: String(Math.min(em.months, em.targetMonths)) })
       ]),
       living.hint ? el('p', { class: 'home-goal', text: living.hint }) : null,
+      ...living.guideLines.map(text => el('p', { class: 'home-goal', text })),
       living.duplicates.length ? el('p', { class: 'notice neg', text: `可能重複記帳：${living.duplicates.map(d => `${d.date.slice(5).replace('-', '/')} ${Money.formatTWD(d.cents)}`).join('、')}，與已確認固定帳同額，餘額會重複計算；請刪其中一筆。` }) : null,
       goalLine ? el('p', { class: 'home-goal', text: goalLine }) : null,
       habitsView.node,
