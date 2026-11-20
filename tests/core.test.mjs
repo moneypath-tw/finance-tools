@@ -1844,3 +1844,44 @@ test("摺疊卡片的 summary 標題不在卡片內容裡再放同名 h3（浮�
   assert.ok(titles.length >= 2, "找不到摺疊卡片，測試的正規式失效");
   for (const t of titles) assert.ok(!src.includes(`el('h3', { text: '${t}' })`), `「${t}」摺疊卡片內又有同名 h3`);
 });
+
+test('目標可行性先扣緊急預備金補足額（同一筆月結餘不能同時補預備金又付目標）', () => {
+  const now = new Date('2026-08-07T00:00:00Z');
+  const mk = (emergencyBaseCents) => {
+    const p = structuredClone(api.DEFAULT_CONFIG.quickPlan);
+    Object.assign(p, { liquidAssetsCents: 0, emergencyReserveCents: 0, emergencyTargetMonths: 6, emergencyBaseCents, goalAmountTodayCents: 20000000 });
+    return api.Planning.assess(p, now);
+  };
+  const free = mk(0);
+  assert.ok(free.ok && free.monthlyGoalContribution > 0 && free.monthlySurplus > free.monthlyGoalContribution, '前提：沒有預備金缺口時月結餘付得起目標');
+  assert.equal(free.monthlyGoalCapacity, free.monthlySurplus);
+  assert.ok(!free.risks.some(x => x.code === 'GOAL_INFEASIBLE'));
+  // 缺口每月補足額剛好吃掉目標所需之外的所有餘裕再多 1 元 → 付不起目標
+  const base = 2 * (free.monthlySurplus - free.monthlyGoalContribution + 1);
+  const r = mk(base);
+  assert.equal(r.monthlyGoalCapacity, r.monthlyGoalContribution - 1);
+  assert.ok(r.contributionLoad > 1);
+  assert.ok(r.risks.some(x => x.code === 'GOAL_INFEASIBLE'));
+  assert.equal(r.scenarios.find(s => s.key === 'base').feasible, false);
+  assert.ok(r.scenarios.every(s => s.monthlyCapacityCents <= Math.max(0, s.monthlySurplusCents)));
+});
+
+test('月結餘全部被緊急預備金補足額吃掉時，目標不可行且不除以零', () => {
+  const p = structuredClone(api.DEFAULT_CONFIG.quickPlan);
+  Object.assign(p, { liquidAssetsCents: 0, emergencyReserveCents: 0, emergencyTargetMonths: 18, emergencyBaseCents: 50000000 });
+  const r = api.Planning.assess(p, new Date('2026-08-07T00:00:00Z'));
+  assert.equal(r.monthlyGoalCapacity, 0);
+  assert.equal(r.contributionLoad, Infinity);
+  assert.equal(r.estimatedMonths, null);
+});
+
+test('FIRE算式每行獨立換行，薪資成長率有警示門檻', () => {
+  const c = structuredClone(api.DEFAULT_CONFIG);
+  const s = structuredClone(api.SCENARIO_FIRE);
+  s.salaryType = 'gross';
+  const r = api.Money.calcScenario(s, c);
+  assert.ok(!/元往後應有平均月薪\(稅前/.test(r.formulaText.replace(/\n/g, '')) || /\n往後應有平均月薪\(稅前/.test(r.formulaText), '淨額行與稅前行之間要換行');
+  assert.ok(api.Money.SALARY_GROWTH_WARN_RATE >= api.SCENARIO_FIRE.assumedSalaryGrowthRate && api.Money.SALARY_GROWTH_WARN_RATE < 0.2);
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.ok(app.includes('SALARY_GROWTH_WARN_RATE') && app.includes('固定支出全停用'), '警示文字要接在畫面上');
+});
