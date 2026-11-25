@@ -13,6 +13,13 @@ for (const rel of ['shared/reference-data.js','shared/config.js','shared/validat
 }
 const api = vm.runInContext('({REFERENCE_DATA,DEFAULT_CONFIG,SCENARIO_FIRE,PLANNING_RULES,Validation,Planning,Money,DEFAULT_LEDGER,DEFAULT_SCENARIOS,ALLOCATION_PURPOSES})', ctx);
 
+// 分配用途的畫面名稱：saving 這一列的錢在「錢在哪裡」叫緩衝預備金，兩處用同一個名稱（使用者 2026-11-25）
+test('分配用途 saving 的名稱是緩衝預備金，鍵不變', () => {
+  const row = api.ALLOCATION_PURPOSES.find(p => p.key === 'saving');
+  assert.equal(row.label, '緩衝預備金');
+  assert.equal(row.field, 'savingAccountId');
+});
+
 // 外部數字只能來自官方機關網域，且要記錄取得日期，過期時才知道該重查
 const OFFICIAL_HOSTS = /^https:\/\/(www\.)?(cbc\.gov\.tw|boj\.or\.jp|ecb\.europa\.eu|bli\.gov\.tw|nhi\.gov\.tw|law\.moj\.gov\.tw|edu\.law\.moe\.gov\.tw|bot\.com\.tw|mol\.gov\.tw|ey\.gov\.tw|ws\.dgbas\.gov\.tw)\//;
 test('外部參考數字皆有官方來源網址與取得日期', () => {
@@ -1198,12 +1205,12 @@ test('轉帳指示：依帳戶合併、加總等於已分配收入；同帳戶�
     { key: 'fixed', label: '固定支出', allocatedCents: 1000000, accountId: 'salary' },
     { key: 'living', label: '生活費', allocatedCents: 1200000, accountId: 'spend' },
     { key: 'emergency', label: '緊急預備金', allocatedCents: 300000, accountId: 'save' },
-    { key: 'saving', label: '一般儲蓄', allocatedCents: 200000, accountId: 'save' },
+    { key: 'saving', label: '緩衝預備金', allocatedCents: 200000, accountId: 'save' },
     { key: 'trip', label: '旅遊', allocatedCents: 0, accountId: 'save' }
   ];
   const plan = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { spend: { balanceCents: 200000 }, save: { balanceCents: 900000, movedInCents: 100000, projectedInCents: 150000 } }, spendingNeed: { salary: 600000, spend: 1200000 } });
   const save = plan.transfers.find(t => t.accountId === 'save');
-  assert.deepEqual(Array.from(save.purposes), ['緊急預備金', '一般儲蓄']);
+  assert.deepEqual(Array.from(save.purposes), ['緊急預備金', '緩衝預備金']);
   assert.equal(plan.transfers.filter(t => !t.stay).reduce((s, t) => s + t.plannedCents, 0) + plan.stayCents, 2700000);
   // 已轉入 1,000 先給緊急預備金，固定儲蓄預計 1,500 再補：3,000+2,000－1,000－1,500＝2,500
   assert.equal(save.remainingCents, 250000);
@@ -1217,10 +1224,10 @@ test('轉帳指示：依帳戶合併、加總等於已分配收入；同帳戶�
   const s2 = P.transferPlan({ rows: shared, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 1500000, movedInCents: 1500000 } }, spendingNeed: { save: 1200000 } });
   assert.deepEqual({ ...s2.rowFacts.emergency }, { movedInCents: 300000, projectedInCents: 0 });
   assert.equal(s2.transfers.find(t => t.accountId === 'save').spendLackCents, 0);
-  assert.equal(s2.transfers.find(t => t.accountId === 'save').remainingCents, 200000); // 只差一般儲蓄 2,000
+  assert.equal(s2.transfers.find(t => t.accountId === 'save').remainingCents, 200000); // 只差緩衝預備金 2,000
   // 主次：同帳戶的生活費缺額（主，先轉）與儲蓄（次）分開，合計仍是 remainingCents；薪資帳戶只有主
   const s3 = P.transferPlan({ rows: shared, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 500000 } }, spendingNeed: { save: 1200000 } }).transfers.find(t => t.accountId === 'save');
-  assert.deepEqual([s3.mustCents, [...s3.mustPurposes], s3.saveCents, [...s3.savePurposes]], [700000, ['生活費'], 500000, ['緊急預備金', '一般儲蓄']]);
+  assert.deepEqual([s3.mustCents, [...s3.mustPurposes], s3.saveCents, [...s3.savePurposes]], [700000, ['生活費'], 500000, ['緊急預備金', '緩衝預備金']]);
   assert.equal(s3.mustCents + s3.saveCents, s3.remainingCents);
   assert.deepEqual([short.mustCents, short.saveCents], [200000, 0]);
   // 只放儲蓄的帳戶也有固定扣款：扣款缺額仍是主（先前因為沒有支出列而整筆消失）
@@ -1599,9 +1606,9 @@ test('轉入後展望：說明用途、離目標還差多少、再幾個月達�
   // 目標期限：含本期共 6 期、期限 12 個月內趕得上；期限 4 個月來不及
   assert.match(o({ gapCents: 3000000, inflowCents: 500000, deadlineMonths: 12 }), /趕得上期限/);
   assert.match(o({ gapCents: 3000000, inflowCents: 500000, deadlineMonths: 4 }), /比期限（4 個月內）晚/);
-  // 沒分配額不能除以 0；一般儲蓄沒有目標金額
+  // 沒分配額不能除以 0；緩衝預備金沒有目標金額
   assert.match(o({ gapCents: 3000000, inflowCents: 0, monthlyCents: 0 }), /無法估算/);
-  assert.match(P.transferOutlook({ label: '一般儲蓄', gapCents: null, inflowCents: 100 }), /沒有目標金額/);
+  assert.match(P.transferOutlook({ label: '緩衝預備金', gapCents: null, inflowCents: 100 }), /沒有目標金額/);
   // transferPlan 帶出每個儲蓄用途的轉入額，狀態列用同一份數字（待轉入時附展望一行）
   const rows = [{ key: 'emergency', label: '緊急預備金', allocatedCents: 500000, requestedCents: 500000, shortfallCents: 0, accountId: 'save' }];
   const t = P.transferPlan({ rows, stayAccountIds: ['salary'], accounts: { save: { balanceCents: 0 } }, spendingNeed: { save: 100000 } }).transfers[0];
@@ -2127,7 +2134,7 @@ test('結論模式只留 5 塊；說明、習慣、收入目標、明細表都�
   assert.match(plan, /lackCents: t \? t\.spendLackCents : 0, purposes: t \? t\.mustPurposes : \[\]/);
 });
 
-test('錢在哪裡：一般儲蓄帳戶的剩餘與固定支出緩衝金屬緩衝預備金，不算可自由動用', () => {
+test('錢在哪裡：緩衝預備金帳戶的剩餘與固定支出緩衝金屬緩衝預備金，不算可自由動用', () => {
   const accounts = [
     { id: 'a', name: '薪轉', nature: 'checking', liquid: true }, { id: 's', name: '儲蓄', nature: 'savings', liquid: true }
   ];

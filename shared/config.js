@@ -95,7 +95,7 @@ const ALLOCATION_PURPOSES = [
   { key: 'fixed', label: '固定支出', field: 'fixedExpenseAccountId' },
   { key: 'living', label: '生活費', field: 'livingAccountId' },
   { key: 'emergency', label: '緊急預備金', field: 'emergencyAccountId' },
-  { key: 'saving', label: '一般儲蓄', field: 'savingAccountId', fallback: 'emergencyAccountId' }
+  { key: 'saving', label: '緩衝預備金', field: 'savingAccountId', fallback: 'emergencyAccountId' }
 ];
 
 // 買房費用情境：項目金額為起始範例；通膨依目標月份與 inflationRates 複利換算

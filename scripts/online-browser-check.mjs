@@ -243,11 +243,11 @@ try {
   const worstRow = statusCard.rows.reduce((w, r) => (rank[r.level] > rank[w] ? r.level : w), 'ok');
   const flaggedRows = statusCard.rows.filter((r) => r.level !== 'ok');
   check('summary card 分配狀態 added to legacy saved cards and matches the worst table row', statusCard.value === { ok: '正常', watch: '留意', short: '不足' }[worstRow] && flaggedRows.every((r) => statusCard.note.includes(r.label)) && (worstRow !== 'short' || statusCard.cls.includes('negative-card')), JSON.stringify(statusCard));
-  // every allocation purpose (incl. 一般儲蓄) gets its own account picker under 必備分配帳戶, and the choice is saved
+  // every allocation purpose (incl. 緩衝預備金) gets its own account picker under 必備分配帳戶, and the choice is saved
   const pickers = await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); return d ? [...d.querySelectorAll('label')].map(l => l.firstChild.textContent.trim()) : []; })()`);
-  await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '一般儲蓄').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await evaluate(`(() => { const d = [...document.querySelectorAll('#allocation-dashboard details')].find(x => x.querySelector('summary')?.textContent === '必備分配帳戶'); const s = [...d.querySelectorAll('label')].find(l => l.firstChild.textContent.trim() === '緩衝預備金').querySelector('select'); s.value = 'probe-1'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   const savingPick = await evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).config.dashboard.savingAccountId`);
-  check('必備分配帳戶 lists every purpose incl. 一般儲蓄, and the pick is saved', ['固定支出', '生活費', '緊急預備金', '一般儲蓄'].every(x => pickers.includes(x)) && savingPick === 'probe-1', JSON.stringify({ pickers, savingPick }));
+  check('必備分配帳戶 lists every purpose incl. 緩衝預備金, and the pick is saved', ['固定支出', '生活費', '緊急預備金', '緩衝預備金'].every(x => pickers.includes(x)) && savingPick === 'probe-1', JSON.stringify({ pickers, savingPick }));
   // turning a fixed item off mid-month removes its projected entry for this month; turning it back on restores it
   const toggleFixed = () => evaluate(`(() => { document.querySelectorAll('#personal-settings details').forEach(d => d.open = true); const card = [...document.querySelectorAll('#personal-settings .flow-card')][4]; const box = [...card.querySelectorAll('label')].find(l => l.textContent.trim() === '啟用').querySelector('input'); box.click(); return true; })()`);
   const hasFixedEntry = () => evaluate(`JSON.parse(localStorage.getItem('finance-tools.workspace.v1')).ledger.entries.some(e => e.id === ${JSON.stringify(`recurring-${fixedFlow?.id}-${nowYm}`)})`);
@@ -358,9 +358,9 @@ try {
   const spendView = () => evaluate(`(() => { const o = document.querySelector('.home-overview'); return { actions: [...(o?.querySelectorAll('.home-actions:not(.home-transfer-must):not(.home-transfer-save) li') || [])].map(li => li.textContent), must: [...(o?.querySelectorAll('.home-transfer-must li') || [])].map(li => li.textContent), save: [...(o?.querySelectorAll('.home-transfer-save li') || [])].map(li => li.textContent), suggest: o?.querySelector('.home-suggest')?.textContent, button: o?.querySelector('.home-suggest button')?.textContent, slider: o?.querySelector('.home-slider input')?.value, how: [...(o?.querySelectorAll('details .notice') || [])].map(p => p.textContent).join(' | ') }; })()`);
   const sv = await spendView();
   const toSave = sv.save.filter(a => a.includes('到儲蓄'));
-  check('savings purposes sharing an account get one merged transfer line from the salary account', toSave.length === 1 && toSave[0].startsWith('從薪轉轉') && toSave[0].includes('緊急預備金、一般儲蓄') && ![...sv.must, ...sv.save].some(a => a.includes('餘額不夠')), JSON.stringify(sv));
+  check('savings purposes sharing an account get one merged transfer line from the salary account', toSave.length === 1 && toSave[0].startsWith('從薪轉轉') && toSave[0].includes('緊急預備金、緩衝預備金') && ![...sv.must, ...sv.save].some(a => a.includes('餘額不夠')), JSON.stringify(sv));
   // primary vs secondary: savings never sit in the must-transfer list, and transfers do not use up the top-3 action slots
-  check('home transfers split payments (must) from savings (save)', !sv.must.some(a => /緊急預備金|一般儲蓄/.test(a)) && !sv.actions.some(a => /^從.*轉 .*到/.test(a)), JSON.stringify(sv));
+  check('home transfers split payments (must) from savings (save)', !sv.must.some(a => /緊急預備金|緩衝預備金/.test(a)) && !sv.actions.some(a => /^從.*轉 .*到/.test(a)), JSON.stringify(sv));
   const planned = sv.how.match(/每期發薪後從薪轉：(.+?)，合計 ([\d,]+)元/);
   const plannedSum = planned ? [...planned[1].matchAll(/(?:轉|留) ([\d,]+)元/g)].reduce((s, m) => s + Number(m[1].replace(/,/g, '')), 0) : -1;
   check('standing transfer plan adds up to the allocated total', planned && plannedSum === Number(planned[2].replace(/,/g, '')), sv.how.slice(0, 300));
