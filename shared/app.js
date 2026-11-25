@@ -916,10 +916,10 @@ const App = (() => {
           el('p', { class: 'notice', text: `建議儲蓄率調為 ${pct(rolling.adjustedRate)}，分 ${PLANNING_RULES.rollingCatchUpCycles} 期補回` })
         ] : [el('p', { class: 'notice', text: `不足 ${PLANNING_RULES.rollingMinCycles} 期，先用基準 ${pct(rolling.targetRate)}` })])
       ]) : null,
-      reports.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-habits-cycles' }, [el('summary', { text: `逐期明細（${reports.length} 期）` }), el('table', { class: 'habit-table' }, [
+      reports.length ? el('details', { class: 'compact-settings', 'data-collapse-id': 'home-habits-cycles' }, [el('summary', { text: `逐期明細（${reports.length} 期）` }), el('div', { class: 'table-scroll' }, [el('table', { class: 'habit-table' }, [
         el('thead', {}, [el('tr', {}, ['期間', '收入', '支出', '存下', '儲蓄率', '轉進儲蓄', '動用存款', '帳面淨資產'].map(text => el('th', { text })))]),
         el('tbody', {}, reports.map(r => el('tr', {}, [`${r.start.slice(5).replace('-', '/')} 起`, fmt(r.incomeCents), fmt(r.expenseCents), fmt(r.savedCents), pct(r.savingsRate), fmt(r.toSavingsCents), fmt(r.withdrawnCents + r.spentFromSavingsCents), fmt(r.netWorthEndCents)].map(text => el('td', { class: 'mono', text })))))
-      ])]) : null,
+      ])])]) : null,
       ...forecast.map(i => el('p', { class: 'notice forecast-line', text: i.months === null ? `${i.label}：照近期實際存錢速度存不到（還差 ${fmt(i.gapCents)}）` : `${i.label}：近期每月約 ${fmt(i.paceCents)}，預計 ${i.doneMonth} 達成${i.late ? `，晚於 ${i.targetMonth}` : ''}` })),
       ...noteLines(['存下＝收入－全部支出。', '帳戶間轉帳不算收支。', '從儲蓄帳戶轉回或直接付款，算動用存款。', '帳面淨資產不含投資市價變動。'])
     ]);
@@ -956,18 +956,18 @@ const App = (() => {
       el('summary', { text: '收入目標（工時／時薪）' }),
       el('p', { class: `notice income-verdict${gap > 0 ? ' negative' : ''}`, text: gap > 0 ? `每月淨收入差 ${fmt(gap)}` : '目前收入足夠支應計畫' }),
       meterRows(tiers.map(([label, cents]) => ({ label: label.split('（')[0], value: cents, text: fmt(cents) }))),
-      el('table', { class: 'income-target-table' }, [
+      el('div', { class: 'table-scroll' }, [el('table', { class: 'income-target-table' }, [
         el('thead', {}, [el('tr', {}, ['', '每月淨收入', `照目前時薪 ${flow.hourlyRateCents ? fmt(flow.hourlyRateCents) : '—'}：每週工時`, `照目前每週 ${weekly(flow.monthlyWorkHours || 0)} 小時：時薪`].map(text => el('th', { text })))]),
         el('tbody', {}, tiers.map(([label, need]) => {
           const t = target(need);
           const hoursText = t.hoursAtRate === null ? '—' : `${weekly(t.hoursAtRate)} 小時${t.overMax ? `（超過上限 ${weeklyMax}，時薪需 ${fmt(t.wageAtMaxCents)}）` : ''}`;
           return el('tr', {}, [label, fmt(need), hoursText, t.wageAtHoursCents === null ? '—' : fmt(t.wageAtHoursCents)].map(text => el('td', { class: 'mono', text })));
         }))
-      ]),
-      goalLines.length ? el('table', { class: 'income-target-table' }, [
+      ])]),
+      goalLines.length ? el('div', { class: 'table-scroll' }, [el('table', { class: 'income-target-table' }, [
         el('thead', {}, [el('tr', {}, ['目標（期限）', '每月多', '每週多工時', '或時薪多'].map(text => el('th', { text })))]),
         el('tbody', {}, goalLines.map(cells => el('tr', {}, cells.map(text => el('td', { class: 'mono', text })))))
-      ]) : null,
+      ])]) : null,
       wage.current ? el('p', { class: `notice${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? ' negative' : ''}`, text: `法定基本工資時薪 ${fmt(wage.current.hourlyCents)}（${wage.current.effectiveFrom} 起）${wage.next ? `；${wage.next.effectiveFrom} 起 ${fmt(wage.next.hourlyCents)}` : ''}${flow.hourlyRateCents && flow.hourlyRateCents < minimumHourlyCents ? '。你的時薪低於基本工資，可向雇主或勞工局反映' : ''}` }) : null,
       el('label', { class: 'field' }, [document.createTextNode('每週可工作時數上限 '), el('input', { type: 'number', min: '1', max: '84', value: String(weeklyMax), onchange: e => { config.personalBaseline.maxWeeklyWorkHours = Math.max(1, Math.min(84, Number(e.target.value) || PLANNING_RULES.defaultMaxWeeklyWorkHours)); IO.markDirty(); renderAllocationDashboard(); } })]),
       el('div', {}, noteLines([`調整的是「${flow.name}」，其他收入照舊。`, '淨額換稅前用這份收入目前的比例（勞健保大致隨薪資）。', `上限預設為勞基法每週正常工時 ${REFERENCE_DATA.twLaborStandards.weeklyNormalHours} 小時。`]))

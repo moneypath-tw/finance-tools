@@ -36,3 +36,13 @@ test('手機寬度分頁按鈕折成 2 欄（4 個分頁 2×2），不橫向捲�
   assert.match(rule, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   assert.doesNotMatch(rule, /overflow-x/);
 });
+
+test('多欄寬表（逐期明細、收入目標）必須包在 .table-scroll：html 設了 overflow-x:hidden，沒包會在 390px 被靜默截掉右側欄位', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  for (const cls of ['habit-table', 'income-target-table']) {
+    const uses = app.split(`el('table', { class: '${cls}' }`).length - 1;
+    const wrapped = app.split(`el('div', { class: 'table-scroll' }, [el('table', { class: '${cls}' }`).length - 1;
+    assert.ok(uses > 0, `找不到 ${cls}`);
+    assert.equal(wrapped, uses, `${cls} 有未包 .table-scroll 的用法`);
+  }
+});
