@@ -46,3 +46,10 @@ test('多欄寬表（逐期明細、收入目標）必須包在 .table-scroll：
     assert.equal(wrapped, uses, `${cls} 有未包 .table-scroll 的用法`);
   }
 });
+
+test('style.css has a prefers-reduced-motion rule that turns off transitions and animations', () => {
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  const block = css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/)?.[0] || '';
+  assert.match(block, /transition:\s*none/);
+  assert.match(block, /animation:\s*none/);
+});

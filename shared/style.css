@@ -626,3 +626,6 @@ details.card.compact-settings { padding: 12px 20px; }
 .stack-accounts { display: block; font-size: 0.75rem; color: var(--ink-soft); overflow-wrap: anywhere; }
 .ref-toggle { display: flex; gap: 0.4rem; margin: 0.25rem 0 0; }
 .ref-toggle .btn.active { background: var(--ink); color: var(--paper); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
