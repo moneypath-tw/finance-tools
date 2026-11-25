@@ -2166,3 +2166,24 @@ test('首頁編輯模式：扣款檢核、最低餘額、存款明細併成一�
   assert.doesNotMatch(app, /const (debitCheckView|floorsView|mmDetails) =/, '舊的三張表不可再各自存在');
   assert.match(app, /foldNotes\('home-money-map-how'/);
 });
+
+test('「到帳本確認入帳」：只有分配狀態標籤是「待確認入帳」才出現；已確認入帳的合成情境不出現', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  assert.match(app, /statusRows\.some\(s => s\.status\.tag === '待確認入帳'\) \? el\('p', \{\}, \[el\('button'[^\n]*到帳本確認入帳/);
+  const cycle = { elapsedDays: 10, totalDays: 30, daysLeft: 21, ratio: 1 / 3 };
+  const pending = api.Planning.allocationStatus({ key: 'fixed', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { dueTotalCents: 1200000, paidCents: 0, unconfirmedCents: 1200000, balanceCents: 5000000, accountName: '主要銀行' });
+  const confirmed = api.Planning.allocationStatus({ key: 'fixed', allocatedCents: 1200000, shortfallCents: 0 }, cycle, { dueTotalCents: 1200000, paidCents: 1200000, unconfirmedCents: 0, balanceCents: 5000000, accountName: '主要銀行' });
+  assert.equal(pending.tag, '待確認入帳');
+  assert.notEqual(confirmed.tag, '待確認入帳');
+});
+
+test('浮動收支說明：旅遊算進帳戶餘額與核對、不算生活花費，且每行不超過一句', () => {
+  const app = fs.readFileSync(path.join(root, 'shared/app.js'), 'utf8');
+  const m = app.match(/foldNotes\('ledger-floating-how', '[^']+', \[([^\]]*)\]/);
+  assert.ok(m, '找不到浮動收支說明');
+  const lines = [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1]);
+  assert.ok(lines[0].includes('旅遊'));
+  assert.ok(lines.some((l) => l.includes('帳戶餘額') && l.includes('帳戶核對')));
+  assert.ok(lines.some((l) => l.includes('不算') && l.includes('生活花費')));
+  assert.ok(lines.length <= 6 && lines.every((l) => (l.match(/。/g) || []).length <= 1));
+});
