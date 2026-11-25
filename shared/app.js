@@ -170,7 +170,7 @@ const App = (() => {
     const valid = (id) => config.accountProfiles.some(a => a.id === id);
     for (const { key, field, fallback } of ALLOCATION_PURPOSES) {
       if (valid(config.dashboard[field])) continue;
-      // 一般儲蓄沿用改版前的預設：有固定儲蓄就用它轉入的帳戶，否則跟緊急預備金同帳戶
+      // 緩衝預備金沿用改版前的預設：有固定儲蓄就用它轉入的帳戶，否則跟緊急預備金同帳戶
       const fromFlow = key === 'saving' ? config.recurringCashFlows.find(f => f.type === 'saving' && f.active !== false)?.accountId : null;
       config.dashboard[field] = [fromFlow, fallback && config.dashboard[fallback]].find(valid) || first;
     }
@@ -404,7 +404,7 @@ const App = (() => {
     const invalid = summary.status === 'invalid' || overdue;
     return { key: s.scenarioId, label: s.label, accountId, targetMonth, months, targetCents: invalid ? 0 : summary.targetCents, invalid, overdue, error: overdue ? '目標月份已過' : (summary.error || null) };
   });
-  // 帳戶用途：支出（生活費、固定支出、薪資入帳）與儲蓄（緊急預備金、一般儲蓄、成本目標）
+  // 帳戶用途：支出（生活費、固定支出、薪資入帳）與儲蓄（緊急預備金、緩衝預備金、成本目標）
   const accountRoles = (recurring = recurringSummary()) => {
     const d = config.dashboard;
     return {
@@ -536,7 +536,7 @@ const App = (() => {
     return Money.ymd(d).slice(5).replace('-', '/');
   };
   // 轉入後展望一行（首頁「本期轉帳」與分配表狀態共用 Planning.transferOutlook）：目標缺口、目標金額、期限依用途取自同一份分配結果
-  //   緊急預備金＝health.emergency；成本目標＝分配列自帶（gapCents／targetCents／months）；一般儲蓄沒有目標金額
+  //   緊急預備金＝health.emergency；成本目標＝分配列自帶（gapCents／targetCents／months）；緩衝預備金沒有目標金額
   const transferOutlookText = (health, row, inflowCents) => {
     const isEmergency = row.key === 'emergency';
     const hasTarget = isEmergency || Number.isFinite(row.gapCents);
@@ -606,7 +606,7 @@ const App = (() => {
     const { targetCents: emergencyTargetCents, balanceCents: emergencyBalanceCents, gapCents: emergencyGapCents } = emergency;
     // 差額顯示目前實況；本期建議提撥固定用期初餘額算（同樣先留本期支出，花掉的錢與需要同步減少，整期穩定）
     const rawEmergencyMonthly = emergencyPlan(plan, balanceAtCycleStart(emergencyAccountId, facts.cycle, balances, { items: recurring.items }) - (spendNeed[emergencyAccountId] || 0)).monthlyCents;
-    // 固定儲蓄轉入緊急預備金帳戶時算進緊急預備金；一般儲蓄的搭配帳戶在「必備分配帳戶」自選
+    // 固定儲蓄轉入緊急預備金帳戶時算進緊急預備金；緩衝預備金的搭配帳戶在「必備分配帳戶」自選
     const savingsFlow = recurring.items.find(f => f.type === 'saving');
     const sameAccount = (savingsFlow?.accountId || emergencyAccountId) === emergencyAccountId;
     const savingsAccountId = config.dashboard.savingAccountId || emergencyAccountId;
@@ -616,9 +616,9 @@ const App = (() => {
     reserved[emergencyAccountId] = (reserved[emergencyAccountId] || 0) + emergencyTargetCents;
     const goals = Planning.poolGoalSavings(selectedGoals(now), balances, reserved);
     const goalMonthlyCents = goals.reduce((s, g) => s + g.monthlyRequiredCents, 0);
-    // 應儲蓄＝緊急預備金＋成本目標＋一般儲蓄，合計至少達儲蓄率基準；固定儲蓄轉到其他帳戶時，一般儲蓄至少是那筆金額
+    // 應儲蓄＝緊急預備金＋成本目標＋緩衝預備金，合計至少達儲蓄率基準；固定儲蓄轉到其他帳戶時，緩衝預備金至少是那筆金額
     // 固定支出只補扣款帳戶不足的部分（本期全部要扣的＋本期結束應預存的－本期開始時的餘額）；還沒記帳時照每月固定支出。
-    // 帳戶已夠而省下的錢在本期分配表列入一般儲蓄（不是變成可花的錢）；建議儲蓄、儲蓄率與習慣仍用每月結構數字
+    // 帳戶已夠而省下的錢在本期分配表列入緩衝預備金（不是變成可花的錢）；建議儲蓄、儲蓄率與習慣仍用每月結構數字
     const fixedRequestedCents = facts.noData ? fixedExpense : Object.values(facts.fixedStartLackByAccount).reduce((s, c) => s + c, 0);
     const fixedFreedCents = Math.max(0, fixedExpense - fixedRequestedCents);
     const savingCents = Math.max(sameAccount ? 0 : recurring.fixedSavingCents, Math.ceil(rateIncome * rateUsed) - emergencyMonthlyCents - goalMonthlyCents, 0);

@@ -100,7 +100,7 @@ const Planning = (() => {
   };
   // 哪些帳戶的支出算生活花費：使用者有勾選就照勾選；沒勾選時自動判斷——
   //   算：生活費、固定支出、薪資入帳帳戶，信用卡（刷卡就是花費），其他可動用帳戶（例如現金）
-  //   不算：只搭配儲蓄用途的帳戶（緊急預備金、一般儲蓄、成本目標；在那裡付款多半是動用存款）、投資等不算可動用的帳戶
+  //   不算：只搭配儲蓄用途的帳戶（緊急預備金、緩衝預備金、成本目標；在那裡付款多半是動用存款）、投資等不算可動用的帳戶
   //   accounts：[{ id, nature, liquid }]
   const livingSpendAccounts = ({ accounts, chosenIds = [], spendIds = [], savingIds = [] }) => {
     const chosen = chosenIds.filter(id => accounts.some(a => a.id === id));
@@ -478,7 +478,7 @@ const Planning = (() => {
       const spendAlloc = spendRows.reduce((s, r) => s + r.allocatedCents, 0);
       let movedSave = Math.max(0, Math.round(a.movedInCents || 0) - spendAlloc);
       let projected = Math.max(0, Math.round(a.projectedInCents || 0));
-      // A savings-only account can still have fixed debits (2026-11-03: an account holding 一般儲蓄 with a near-empty balance before a
+      // A savings-only account can still have fixed debits (2026-11-03: an account holding 緩衝預備金 with a near-empty balance before a
       // debit lost its shortfall because only spend rows were checked)
       const spendLackCents = spendRows.length || spendingNeed[accountId] > 0 ? Math.max(0, (spendingNeed[accountId] || 0) - Math.max(0, Math.round(a.balanceCents || 0) - movedSave)) : 0;
       let remainingCents = spendLackCents;
@@ -511,7 +511,7 @@ const Planning = (() => {
     return { transfers, stayCents, rowFacts, checks };
   };
   // 轉入後的展望（首頁「本期轉帳」與分配表狀態共用，同一句話）：這次轉入（含預計入帳）後離目標還差多少、照每月分配額再幾個月達成
-  //   gapCents＝目前離目標還差（沒有目標金額的一般儲蓄傳 null）；monthlyCents＝每月分配額；deadlineMonths＝目標期限剩幾個月（可省略）
+  //   gapCents＝目前離目標還差（沒有目標金額的緩衝預備金傳 null）；monthlyCents＝每月分配額；deadlineMonths＝目標期限剩幾個月（可省略）
   const transferOutlook = ({ label, inflowCents, gapCents, monthlyCents, targetCents, deadlineMonths }) => {
     if (gapCents === null || gapCents === undefined || !Number.isFinite(gapCents)) return `${label}：沒有目標金額，每期固定存入`;
     const head = targetCents > 0 ? `${label}（目標 ${fmt(targetCents)}）` : label;
@@ -560,7 +560,7 @@ const Planning = (() => {
   };
   // 「錢在哪裡」的唯一算法（首頁存款分佈讀這裡）：每個帳戶的餘額依序切成
   //   本期還要付的固定支出 → 本期還要付的生活費 → 緊急預備金（必備）→ 目標已存 → 緩衝預備金 → 可自由動用；
-  // 緩衝預備金＝一般儲蓄帳戶的剩餘＋各固定支出扣款帳戶的緩衝金，都屬預備金、不算可自由動用（使用者 2026-11-20）；
+  // 緩衝預備金＝緩衝預備金帳戶的剩餘＋各固定支出扣款帳戶的緩衝金，都屬預備金、不算可自由動用（使用者 2026-11-20）；
   // 順序與 currentMonthSavingsHealth 的保留順序相同，同一筆錢只算一次。
   // 不算可動用的帳戶（投資、定存、保險、退休金、不動產）整筆列「不可動用」，負債列負債。
   // fixedNeedByAccount＝cycleFacts 的固定支出需求；livingNeedByAccount＝spendingNeedByAccount 扣掉固定部分；goalSavedByAccount＝poolGoalSavings 的已存
@@ -579,7 +579,7 @@ const Planning = (() => {
       row.livingLackCents = Math.max(0, Math.round(livingNeedByAccount[a.id] || 0) - row.livingCents);
       if (a.id === emergencyAccountId) { row.emergencyCents = take(left, emergencyTargetCents); left -= row.emergencyCents; }
       row.goalCents = take(left, goalSavedByAccount[a.id]); left -= row.goalCents;
-      // 一般儲蓄帳戶：剩下的整筆是緩衝；其他帳戶只留固定支出的緩衝金
+      // 緩衝預備金帳戶：剩下的整筆是緩衝；其他帳戶只留固定支出的緩衝金
       row.bufferCents = a.id === savingAccountId ? left : take(left, bufferNeedByAccount[a.id]); left -= row.bufferCents;
       row.freeCents = left;
       return row;
@@ -593,7 +593,7 @@ const Planning = (() => {
     const out = [];
     const add = (id, label, a, b) => { const diff = Math.round(a - b); out.push({ id, label, ok: Math.abs(diff) <= tolerance, diffCents: diff }); };
     const sumOf = (list, pick) => list.reduce((s, x) => s + pick(x), 0);
-    // 1. 建議儲蓄＝緊急預備金＋成本目標＋一般儲蓄（三項各自來源，合計不可與總數分家）
+    // 1. 建議儲蓄＝緊急預備金＋成本目標＋緩衝預備金（三項各自來源，合計不可與總數分家）
     const goalMonthly = sumOf(health.goals || [], g => g.monthlyRequiredCents || 0);
     add('saving-sum', '建議儲蓄＝三項合計', health.recommendedSavingCents, health.emergencyMonthlyCents + goalMonthly + health.savingCents);
     // 2. 月分配：各列加未分配＝收入
