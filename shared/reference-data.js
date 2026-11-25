@@ -98,6 +98,6 @@ const REFERENCE_DATA = {
     sourceUrl: 'https://www.bot.com.tw/Images/File/GetFileId/8ecae4b0-7567-4ebc-951b-ec8c77524c3c',
     regulationUrl: 'https://www.cbc.gov.tw/tw/lp-6299-1.html',
     retrievedAt: '2026-10-21',
-    note: '3.37% 僅為一般房屋購置貸款公開參考下限，不代表個人核貸；實際利率、成數、年限與寬限期以銀行契約為準。'
+    note: '3.37% 僅為一般房屋購置貸款公開參考下限，不代表個人核貸；央行公布 115 年 10 月五大銀行各類新承做放款加權平均 2.254%（含週轉金，非房貸專屬），個人實際利率可能低於此預設，請以銀行報價覆寫；實際利率、成數、年限與寬限期以銀行契約為準。'
   }
 };
