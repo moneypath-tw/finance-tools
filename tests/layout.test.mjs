@@ -53,3 +53,11 @@ test('style.css has a prefers-reduced-motion rule that turns off transitions and
   assert.match(block, /transition:\s*none/);
   assert.match(block, /animation:\s*none/);
 });
+
+test('style.css uses only two font weights (regular and bold)', () => {
+  const css = fs.readFileSync(path.join(root, 'shared/style.css'), 'utf8');
+  const norm = (w) => (w === 'bold' ? '700' : w === 'normal' ? '400' : w);
+  const weights = new Set([...css.matchAll(/font-weight:\s*([0-9a-z]+)/g)].map((m) => norm(m[1])));
+  assert.ok(weights.size > 0, 'no font-weight declarations found');
+  assert.deepEqual([...weights].sort(), ['400', '700']);
+});

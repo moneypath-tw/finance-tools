@@ -150,7 +150,7 @@ nav.tabs {
 .tab-btn.active {
   background: var(--accent);
   color: #fff;
-  font-weight: 650;
+  font-weight: 700;
   box-shadow: 0 4px 12px rgba(39, 107, 82, 0.18);
 }
 
@@ -210,7 +210,7 @@ main, .tab-panel, .card, #allocation-dashboard { min-width: 0; }
 
 table { width: 100%; border-collapse: collapse; margin-top: 10px; }
 th, td { padding: 10px 9px; border-bottom: 1px solid var(--rule); text-align: left; font-size: 0.875rem; }
-th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--rule); }
+th { color: var(--ink-soft); font-weight: 700; border-bottom: 1px solid var(--rule); }
 
 .mono { font-family: var(--mono); }
 .mono.big { font-size: 1.25rem; }
@@ -234,7 +234,7 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .summary-card-setting-row { display: grid; grid-template-columns: auto minmax(140px, 1fr) minmax(170px, 1.2fr) auto; gap: 8px; align-items: center; margin: 8px 0; }
 .summary-card-setting-row input[type="text"], .summary-card-setting-row select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; color: var(--ink); }
 .compact-settings { border-top: 1px solid var(--rule); padding: 10px 0; }
-.compact-settings summary { cursor: pointer; color: var(--accent); font-weight: 650; }
+.compact-settings summary { cursor: pointer; color: var(--accent); font-weight: 700; }
 .goal-picker { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(130px, 180px) minmax(130px, 170px); gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--rule); }
 .goal-picker select, .goal-picker input[type="month"], .compact-settings select { min-height: 38px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 9px; background: #fff; font-family: var(--serif); }
 .badge { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 0.75rem; }
@@ -244,19 +244,19 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .allocation-row.level-watch td:first-child { border-left-color: var(--over-limit); }
 .allocation-row.level-short td:first-child { border-left-color: var(--negative); }
 .allocation-row.level-short { background: rgba(161, 62, 69, 0.05); }
-.allocation-label { font-weight: 600; }
+.allocation-label { font-weight: 700; }
 .allocation-account { margin-top: 2px; font-size: 0.75rem; color: var(--ink-soft); }
 .allocation-amount { white-space: nowrap; }
 .allocation-status { font-size: 0.875rem; line-height: 1.5; }
 /* 原因類別：跟 .badge 同形狀，顏色依狀態 */
-.status-tag { display: inline-block; margin-right: 6px; padding: 0 7px; border-radius: 10px; font-size: 0.75rem; font-weight: 500; vertical-align: 1px; }
+.status-tag { display: inline-block; margin-right: 6px; padding: 0 7px; border-radius: 10px; font-size: 0.75rem; font-weight: 400; vertical-align: 1px; }
 .status-tag.tag-watch { background: #FCF1EA; color: var(--over-limit); }
 .status-tag.tag-short { background: #FCF0F2; color: var(--negative); }
 .allocation-status.status-short { color: var(--negative); }
 .allocation-status.status-watch { color: var(--over-limit); }
 .allocation-status.status-none { color: var(--ink-soft); }
 /* 結論一行粗體，原因與參考數字小字灰色，一眼分出主旨與因果 */
-.allocation-status .status-headline { font-weight: 600; }
+.allocation-status .status-headline { font-weight: 700; }
 .allocation-status .status-detail { font-size: 0.75rem; color: var(--ink-soft); }
 /* 目標時間：填法選單與數值並排 */
 .target-time { display: flex; gap: 6px; }
@@ -297,7 +297,7 @@ th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--ru
 .home-slider input, .home-progress progress { width: 100%; accent-color: var(--accent); }
 .home-actions { margin: 0; padding-left: 1.3em; }
 .home-actions li { margin: 4px 0; }
-.home-transfer-head { margin: 8px 0 2px; font-weight: 600; }
+.home-transfer-head { margin: 8px 0 2px; font-weight: 700; }
 .home-transfer-note { display: block; font-size: 0.875em; color: var(--muted, inherit); font-weight: 400; }
 .home-ok { color: var(--accent); }
 body[data-view-mode="detailed"] .simple-only { display: none !important; }
@@ -336,7 +336,7 @@ body[data-view-mode="detailed"] .simple-only { display: none !important; }
 .period-block h4 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .period-block h4 > input { flex: 1 1 180px; }
 .student-loan-plan { margin-top: 18px; background: #F8FBF9; }
-.student-loan-plan a { color: var(--accent); font-weight: 650; }
+.student-loan-plan a { color: var(--accent); font-weight: 700; }
 .student-loan-summary { margin: 14px 0; }
 .student-loan-summary .summary-block { margin-bottom: 0; }
 .loan-overview-home { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 12px; background: var(--accent-soft); }
@@ -376,13 +376,13 @@ body[data-view-mode="detailed"] .simple-only { display: none !important; }
 .section-heading .notice { margin: 0 0 12px; }
 .source-field { min-width: min(360px, 100%); }
 .linked-note { margin: 4px 0 16px; padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.875rem; }
-details > summary { cursor: pointer; padding: 5px 0; font-weight: 600; }
+details > summary { cursor: pointer; padding: 5px 0; font-weight: 700; }
 
 /* 固定項目卡片：收合時一行看懂（名稱・方式・每月金額・下次繳款），展開才編輯 */
 .flow-card { padding: 0; }
 .flow-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 14px 18px; list-style-position: inside; }
 .flow-name { font-weight: 700; }
-.flow-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.75rem; font-weight: 600; }
+.flow-tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.75rem; font-weight: 700; }
 .flow-tag.warn { background: #FBE9E7; color: var(--over-limit); }
 .flow-amount { margin-left: auto; font-weight: 700; }
 .flow-amount.negative { color: var(--negative); }
@@ -562,7 +562,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .xfer-rows { list-style: none; margin: 0; padding: 0; }
 .xfer-rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 6px 0; border-bottom: 1px solid var(--rule); }
 .xfer-rows li:last-child { border-bottom: 0; }
-.xfer-to { font-weight: 600; overflow-wrap: anywhere; }
+.xfer-to { font-weight: 700; overflow-wrap: anywhere; }
 .xfer-amt { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-weight: 700; white-space: nowrap; }
 .xfer-chips { color: var(--ink-soft); font-size: 0.875rem; }
 /* 各期比較：一期一列細線（沿用分配圖的 alloc-track／alloc-fill） */
